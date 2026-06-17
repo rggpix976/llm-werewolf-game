@@ -42,6 +42,8 @@ node scripts/sample-play.mjs
 - `src/gameEngine.mjs`
   - `GameState` と `PlayerState` を作成、管理します。
   - フェーズ、投票、処刑、占い、襲撃、勝敗判定をコード側で処理します。
+  - UIからの操作入口として `dispatchPlayerAction(action)` を提供します。
+  - 表示用の公開状態として `getPublicSnapshot()` を提供します。
 - `src/responseGenerator.mjs`
   - 疑似LLM応答生成器です。
   - 将来はこの `generateNpcResponse(npc, gameState, playerInput)` をLLM接続に差し替えます。
@@ -55,3 +57,25 @@ node scripts/sample-play.mjs
 LLMにゲーム状態は変更させません。役職、生死、投票、占い結果、襲撃結果、勝敗判定は `WerewolfGame` が管理します。
 
 応答生成器は発言文、参照した根拠、将来LLMへ渡す想定のプロンプトプレビューだけを返します。開発者ログでは `knownInfo`、`hiddenInfo`、`suspicionScores`、投票理由、占い対象、襲撃対象、応答生成時の根拠を確認できます。
+
+## UI非依存アクションAPI
+
+CLIや将来のブラウザUIは、次のように共通の入口からゲームを操作します。
+
+```js
+game.dispatchPlayerAction({
+  type: "ask_npc",
+  target: "npc1",
+  input: "Chikaの発言は怪しくない？",
+  logCursor: 0
+});
+```
+
+現在のアクション種別:
+
+- `ask_npc`
+- `advance_vote`
+- `run_night`
+- `get_state`
+
+戻り値には、処理結果、表示用の `publicSnapshot`、新規プレイヤーログ、次の `logCursor` が含まれます。

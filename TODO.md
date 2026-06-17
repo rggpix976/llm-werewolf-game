@@ -2,10 +2,10 @@
 
 ## Next
 
-- [ ] Add a UI-independent action API.
+- [x] Add a UI-independent action API.
 - [ ] Add automated tests for the core game engine.
 - [ ] Define a response provider interface for future LLM integration.
-- [ ] Add public snapshot helpers for browser UI use.
+- [x] Add public snapshot helpers for browser UI use.
 
 ## Soon
 
@@ -24,6 +24,6 @@
 
 ## Operational
 
-- [ ] Create a private GitHub repository named `llm-werewolf-game`.
-- [ ] Add the GitHub remote URL locally.
-- [ ] Push the initial commit to GitHub.
+- [x] Create a private GitHub repository named `llm-werewolf-game`.
+- [x] Add the GitHub remote URL locally.
+- [x] Push the initial commit to GitHub.

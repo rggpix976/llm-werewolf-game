@@ -157,6 +157,37 @@ export class WerewolfGame {
     });
   }
 
+  dispatchPlayerAction(action = {}) {
+    const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
+    let result;
+
+    switch (action.type) {
+      case "ask_npc":
+        result = this.handlePlayerQuestion(action.targetId ?? action.target ?? action.npcId, action.input ?? action.question);
+        break;
+      case "advance_vote":
+        result = this.runVote();
+        break;
+      case "run_night":
+        result = this.runNight();
+        break;
+      case "get_state":
+        result = null;
+        break;
+      default:
+        throw new Error(`Unknown player action type: ${action.type}`);
+    }
+
+    return {
+      ok: true,
+      actionType: action.type,
+      result,
+      publicSnapshot: this.getPublicSnapshot(),
+      playerLogEntries: this.state.playerLog.slice(logCursor),
+      nextLogCursor: this.state.playerLog.length
+    };
+  }
+
   handlePlayerQuestion(targetIdOrName, playerInput) {
     if (this.state.winner) {
       return {
@@ -626,6 +657,54 @@ export class WerewolfGame {
         voteHistory: player.voteHistory,
         conversationPolicy: player.conversationPolicy
       }))
+    };
+  }
+
+  getDeveloperSnapshot() {
+    return this.createDeveloperSnapshot();
+  }
+
+  getPublicSnapshot() {
+    return {
+      day: this.state.day,
+      phase: this.state.phase,
+      alivePlayers: [...this.state.alivePlayers],
+      deadPlayers: [...this.state.deadPlayers],
+      winner: this.state.winner,
+      players: this.state.players.map((player) => ({
+        id: player.id,
+        name: player.name,
+        aliases: [...(player.aliases ?? [])],
+        alive: player.alive,
+        personality: player.personality,
+        speechStyle: player.speechStyle,
+        publicClaims: player.publicClaims.map((claim) => ({
+          day: claim.day,
+          actorId: claim.actorId,
+          actorName: claim.actorName,
+          role: claim.role,
+          results: claim.results
+        })),
+        voteHistory: player.voteHistory.map((vote) => ({
+          day: vote.day,
+          targetId: vote.targetId,
+          reasonPublic: vote.reasonPublic
+        }))
+      })),
+      publicInfo: this.state.publicInfo.map((info) => ({ ...info })),
+      voteHistory: this.state.voteHistory.map((round) => ({
+        day: round.day,
+        votes: round.votes.map((vote) => ({
+          voterId: vote.voterId,
+          voterName: vote.voterName,
+          targetId: vote.targetId,
+          targetName: vote.targetName,
+          reasonPublic: vote.reasonPublic
+        })),
+        executedId: round.executedId,
+        tie: round.tie
+      })),
+      playerLog: this.state.playerLog.map((entry) => ({ ...entry }))
     };
   }
 

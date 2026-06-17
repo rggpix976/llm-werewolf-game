@@ -2,6 +2,10 @@
 
 ## 2026-06-17
 
+- Added `dispatchPlayerAction(action)` as a UI-independent game action API.
+- Added `getPublicSnapshot()` for browser/CLI-safe state reads.
+- Updated CLI and sample play to use the action API.
+- Updated development status to reflect GitHub private repository setup and initial push.
 - Added development continuity documents:
   - `DEVELOPMENT_STATUS.md`
   - `ROADMAP.md`

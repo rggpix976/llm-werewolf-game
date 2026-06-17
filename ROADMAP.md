@@ -3,8 +3,8 @@
 ## Phase 1: Stabilize Core Logic
 
 - Formalize `GameState` and `PlayerState` shape.
-- Add a UI-independent action interface.
-- Separate public snapshots from internal developer snapshots.
+- Add a UI-independent action interface. Done for the current prototype.
+- Separate public snapshots from internal developer snapshots. Done for the current prototype.
 - Make save/load possible with JSON-serializable state.
 
 ## Phase 2: Add Automated Tests
@@ -37,4 +37,4 @@
 
 ## Current Priority
 
-The next milestone is a testable, UI-independent core API.
+The next milestone is automated tests for the UI-independent core API.

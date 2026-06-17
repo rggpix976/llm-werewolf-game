@@ -57,19 +57,30 @@ while (true) {
         continue;
       }
 
-      game.handlePlayerQuestion(target, question);
+      game.dispatchPlayerAction({
+        type: "ask_npc",
+        target,
+        input: question,
+        logCursor: printedLogIndex
+      });
       printNewPlayerLog();
       maybePrintDevTail();
       continue;
     }
 
     if (command === "vote") {
-      game.runVote();
+      game.dispatchPlayerAction({
+        type: "advance_vote",
+        logCursor: printedLogIndex
+      });
       printNewPlayerLog();
       maybePrintDevTail();
 
       if (!game.state.winner) {
-        game.runNight();
+        game.dispatchPlayerAction({
+          type: "run_night",
+          logCursor: printedLogIndex
+        });
         printNewPlayerLog();
         maybePrintDevTail();
       }
@@ -110,14 +121,15 @@ function printHelp() {
 }
 
 function printPublicState() {
-  console.log(`Day ${game.state.day} / phase=${game.state.phase} / winner=${game.state.winner ?? "none"}`);
-  printAliveNpcs();
-  const dead = game.getDeadPlayers().map((player) => player.name);
+  const snapshot = game.dispatchPlayerAction({ type: "get_state" }).publicSnapshot;
+  console.log(`Day ${snapshot.day} / phase=${snapshot.phase} / winner=${snapshot.winner ?? "none"}`);
+  printAliveNpcs(snapshot);
+  const dead = snapshot.players.filter((player) => !player.alive).map((player) => player.name);
   console.log(`Dead: ${dead.length ? dead.join(", ") : "none"}`);
 }
 
-function printAliveNpcs() {
-  const alive = game.getAlivePlayers().map((player) => {
+function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
+  const alive = snapshot.players.filter((player) => player.alive).map((player) => {
     return `${player.id}:${player.name}(${(player.aliases ?? []).slice(0, 2).join("/")})`;
   });
   console.log(`Alive NPCs: ${alive.join(", ")}`);
