@@ -1,0 +1,13 @@
+{
+  "name": "llm-werewolf-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/cli.mjs",
+    "sample": "node scripts/sample-play.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
