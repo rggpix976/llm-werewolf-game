@@ -47,3 +47,9 @@ They receive a frozen, cloned request instead of the live game state. Their acce
 Provider exceptions, empty text, and invalid return values do not end the game and do not trigger a pseudo-response fallback.
 
 The current NPC response is skipped, the failure is recorded in the developer log, the phase returns to `day_discussion`, and the player may ask another question or proceed to voting.
+
+## D-009: Game Sessions Are Not Persisted
+
+Game state exists only in memory for the current process or browser session.
+
+Closing the CLI, refreshing the browser, or closing the application discards the current game. The prototype does not use save files, `localStorage`, IndexedDB, or server-side persistence. A new session always starts a new game.

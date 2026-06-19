@@ -26,9 +26,9 @@ Last updated: 2026-06-19
 
 ## Next Recommended Task
 
-1. Add save/load support for JSON-serializable game state.
-2. Prepare a browser UI adapter after the core API is stable.
-3. Add a real LLM provider after provider-level validation and configuration are designed.
+1. Prepare a browser UI adapter using the asynchronous action API and public snapshots.
+2. Add a real LLM provider after provider-level validation and configuration are designed.
+3. Improve natural language intent parsing and suspicion updates.
 
 ## Read This First Next Time
 
@@ -49,6 +49,7 @@ Last updated: 2026-06-19
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
 - Local `master` contains the automated-test commit that has not been pushed yet.
+- Game state is intentionally kept in memory only; save/load is not planned.
 
 ## Working Rule
 

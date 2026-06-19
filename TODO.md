@@ -9,7 +9,6 @@
 
 ## Soon
 
-- [ ] Add save/load support for JSON-serializable game state.
 - [ ] Improve natural language intent parsing.
 - [ ] Improve suspicion score updates from player questions and NPC responses.
 - [ ] Add better validation for generated NPC utterances.

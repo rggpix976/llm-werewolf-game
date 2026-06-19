@@ -2,6 +2,8 @@
 
 ## 2026-06-19
 
+- Decided that game sessions are memory-only and will not support save/load persistence.
+- Updated the next milestone to browser UI adapter preparation.
 - Added an injectable asynchronous NPC response provider interface.
 - Added `PseudoResponseProvider` as the default implementation.
 - Separated response-request construction and code-controlled claim decisions from utterance generation.

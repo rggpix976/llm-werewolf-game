@@ -5,7 +5,6 @@
 - Formalize `GameState` and `PlayerState` shape.
 - Add a UI-independent action interface. Done for the current prototype.
 - Separate public snapshots from internal developer snapshots. Done for the current prototype.
-- Make save/load possible with JSON-serializable state.
 
 ## Phase 2: Add Automated Tests
 
@@ -37,4 +36,4 @@
 
 ## Current Priority
 
-The next milestone is save/load support for JSON-serializable game state.
+The next milestone is preparation for a browser UI adapter.
