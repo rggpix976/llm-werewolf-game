@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-19
+
+- Added 10 automated core game tests using Node.js `node:test`.
+- Covered role setup, action API responses, public snapshot privacy, NPC speech rules, voting, execution, seer privacy and claims, attacks, and win checks.
+- Added `npm.cmd test` as the standard automated test command.
+- Updated development status and roadmap; the next milestone is the LLM response provider interface.
+
 ## 2026-06-17
 
 - Added `dispatchPlayerAction(action)` as a UI-independent game action API.

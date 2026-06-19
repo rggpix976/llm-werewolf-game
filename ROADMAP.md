@@ -9,10 +9,10 @@
 
 ## Phase 2: Add Automated Tests
 
-- Test death, voting, execution, seer action, werewolf attack, and win checks.
-- Test that dead NPCs cannot speak.
-- Test that seer results stay private until explicitly claimed.
-- Test that werewolves cannot attack themselves.
+- Test death, voting, execution, seer action, werewolf attack, and win checks. Done.
+- Test that dead NPCs cannot speak. Done.
+- Test that seer results stay private until explicitly claimed. Done.
+- Test that werewolves cannot attack themselves. Done.
 
 ## Phase 3: Prepare LLM Integration
 
@@ -37,4 +37,4 @@
 
 ## Current Priority
 
-The next milestone is automated tests for the UI-independent core API.
+The next milestone is a response provider interface for future LLM integration.

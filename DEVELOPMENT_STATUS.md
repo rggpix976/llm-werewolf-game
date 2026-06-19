@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-06-17
+Last updated: 2026-06-19
 
 ## Current State
 
@@ -12,19 +12,22 @@ Last updated: 2026-06-17
 - UI-independent action API is available through `dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - Player-facing logs and developer logs are separated.
+- Core game invariants are covered by 10 automated tests using Node.js `node:test`.
 
 ## Last Verified
 
-- Date: 2026-06-17
-- Command: `npm.cmd run sample`
-- Result: sample play completed and audit checks were all OK.
+- Date: 2026-06-19
+- Commands:
+  - `npm.cmd test`
+  - `npm.cmd run sample`
+  - `git diff --check`
+- Result: all 10 automated tests passed, sample play audit checks were all OK, and no whitespace errors were found.
 
 ## Next Recommended Task
 
-1. Add automated tests for core game invariants.
-2. Define the LLM response provider interface.
-3. Add save/load support for JSON-serializable game state.
-4. Prepare a browser UI adapter after the core API is stable.
+1. Define the LLM response provider interface.
+2. Add save/load support for JSON-serializable game state.
+3. Prepare a browser UI adapter after the core API is stable.
 
 ## Read This First Next Time
 
@@ -35,6 +38,7 @@ Last updated: 2026-06-17
 5. `TODO.md`
 6. `src/gameEngine.mjs`
 7. `src/responseGenerator.mjs`
+8. `tests/gameEngine.test.mjs`
 
 ## Current Git/GitHub State
 
@@ -42,7 +46,7 @@ Last updated: 2026-06-17
 - GitHub private repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- Initial prototype commit has been pushed.
+- The UI-independent action API commit has been pushed.
 
 ## Working Rule
 

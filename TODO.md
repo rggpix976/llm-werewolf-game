@@ -3,7 +3,7 @@
 ## Next
 
 - [x] Add a UI-independent action API.
-- [ ] Add automated tests for the core game engine.
+- [x] Add automated tests for the core game engine.
 - [ ] Define a response provider interface for future LLM integration.
 - [x] Add public snapshot helpers for browser UI use.
 

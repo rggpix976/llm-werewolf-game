@@ -37,6 +37,12 @@ npm run sample
 node scripts/sample-play.mjs
 ```
 
+自動テスト:
+
+```powershell
+npm.cmd test
+```
+
 ## 構成
 
 - `src/gameEngine.mjs`
