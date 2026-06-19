@@ -34,7 +34,7 @@ while (true) {
     }
 
     if (command === "state") {
-      printPublicState();
+      await printPublicState();
       continue;
     }
 
@@ -57,7 +57,7 @@ while (true) {
         continue;
       }
 
-      game.dispatchPlayerAction({
+      await game.dispatchPlayerAction({
         type: "ask_npc",
         target,
         input: question,
@@ -69,7 +69,7 @@ while (true) {
     }
 
     if (command === "vote") {
-      game.dispatchPlayerAction({
+      await game.dispatchPlayerAction({
         type: "advance_vote",
         logCursor: printedLogIndex
       });
@@ -77,7 +77,7 @@ while (true) {
       maybePrintDevTail();
 
       if (!game.state.winner) {
-        game.dispatchPlayerAction({
+        await game.dispatchPlayerAction({
           type: "run_night",
           logCursor: printedLogIndex
         });
@@ -120,8 +120,8 @@ function printHelp() {
   printAliveNpcs();
 }
 
-function printPublicState() {
-  const snapshot = game.dispatchPlayerAction({ type: "get_state" }).publicSnapshot;
+async function printPublicState() {
+  const snapshot = (await game.dispatchPlayerAction({ type: "get_state" })).publicSnapshot;
   console.log(`Day ${snapshot.day} / phase=${snapshot.phase} / winner=${snapshot.winner ?? "none"}`);
   printAliveNpcs(snapshot);
   const dead = snapshot.players.filter((player) => !player.alive).map((player) => player.name);

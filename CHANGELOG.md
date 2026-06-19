@@ -2,6 +2,12 @@
 
 ## 2026-06-19
 
+- Added an injectable asynchronous NPC response provider interface.
+- Added `PseudoResponseProvider` as the default implementation.
+- Separated response-request construction and code-controlled claim decisions from utterance generation.
+- Added provider response validation and question-level failure recovery.
+- Converted the UI-independent action API, CLI, sample play, and tests to async usage.
+- Expanded automated coverage from 10 to 15 tests.
 - Added 10 automated core game tests using Node.js `node:test`.
 - Covered role setup, action API responses, public snapshot privacy, NPC speech rules, voting, execution, seer privacy and claims, attacks, and win checks.
 - Added `npm.cmd test` as the standard automated test command.

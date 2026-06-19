@@ -16,9 +16,9 @@
 
 ## Phase 3: Prepare LLM Integration
 
-- Define a response provider interface that can swap pseudo responses for real LLM calls.
-- Build prompts from only the information each NPC is allowed to know.
-- Validate LLM output before adding it to logs.
+- Define a response provider interface that can swap pseudo responses for real LLM calls. Done for the provider boundary.
+- Build prompts from only the information each NPC is allowed to know. Done for the current prototype.
+- Validate provider output before adding it to logs. Done for the current provider contract.
 - Keep all state mutations in code, never in LLM output.
 
 ## Phase 4: Browser UI
@@ -37,4 +37,4 @@
 
 ## Current Priority
 
-The next milestone is a response provider interface for future LLM integration.
+The next milestone is save/load support for JSON-serializable game state.

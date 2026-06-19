@@ -1,17 +1,9 @@
 import { ROLES, publicRoleName } from "./constants.mjs";
 import { containsAny, extractMentionedPlayerIds, formatList } from "./textUtils.mjs";
 
-export function generateNpcResponse(npc, gameState, playerInput) {
+export function buildNpcResponseRequest(npc, gameState, playerInput) {
   if (!npc.alive) {
-    return {
-      responded: false,
-      text: "",
-      evidenceUsed: [],
-      promptPreview: "",
-      publicClaim: null,
-      disclosedHiddenInfo: false,
-      notes: ["dead_npc_cannot_speak"]
-    };
+    throw new Error("Cannot build a response request for a dead NPC");
   }
 
   const mentionedIds = extractMentionedPlayerIds(playerInput, gameState.players)
@@ -68,7 +60,6 @@ export function generateNpcResponse(npc, gameState, playerInput) {
     text = addSuspectSentence("今出ている材料だけだと、まだ断定はできません。", npc, topSuspect);
   }
 
-  const styledText = applySpeechStyle(npc, text);
   const promptPreview = buildPromptPreview({
     npc,
     gameState,
@@ -79,15 +70,58 @@ export function generateNpcResponse(npc, gameState, playerInput) {
     intent
   });
 
-  return {
-    responded: true,
-    text: styledText,
+  const request = deepFreeze(structuredClone({
+    npc: {
+      id: npc.id,
+      name: npc.name,
+      personality: npc.personality,
+      speechStyle: npc.speechStyle,
+      conversationPolicy: npc.conversationPolicy
+    },
+    playerInput,
+    context: {
+      day: gameState.day,
+      phase: gameState.phase,
+      publicEvidence,
+      shareableKnownEvidence,
+      privateStanceEvidence: privateKnownEvidence,
+      publicClaims: npc.publicClaims,
+      intent,
+      topSuspect: topSuspect
+        ? {
+            id: topSuspect.id,
+            name: topSuspect.player.name,
+            score: topSuspect.score
+          }
+        : null
+    },
+    policyDecision: {
+      publicClaimAllowed: Boolean(publicClaim),
+      publicClaim: publicClaim ? structuredClone(publicClaim) : null,
+      disclosedHiddenInfo
+    },
+    responsePlan: {
+      baseText: text,
+      speechStyle: npc.speechStyle
+    },
     evidenceUsed,
+    prompt: promptPreview
+  }));
+
+  return {
+    request,
+    evidenceUsed: [...evidenceUsed],
     promptPreview,
     publicClaim,
-    disclosedHiddenInfo,
-    notes: []
+    disclosedHiddenInfo
   };
+}
+
+export function generatePseudoResponseText(request) {
+  return applySpeechStyle(
+    { speechStyle: request.responsePlan.speechStyle },
+    request.responsePlan.baseText
+  );
 }
 
 function classifyIntent(input) {
@@ -300,4 +334,16 @@ function buildPromptPreview({
     `PUBLIC_CLAIMS: ${formatList(npc.publicClaims.map((claim) => `${claim.role} claim on day ${claim.day}`))}`,
     "OUTPUT: one short Japanese utterance only."
   ].join("\n");
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+
+  Object.freeze(value);
+  for (const child of Object.values(value)) {
+    deepFreeze(child);
+  }
+  return value;
 }

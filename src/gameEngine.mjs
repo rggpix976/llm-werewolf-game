@@ -1,4 +1,9 @@
-import { generateNpcResponse } from "./responseGenerator.mjs";
+import { buildNpcResponseRequest } from "./responseGenerator.mjs";
+import {
+  getProviderName,
+  PseudoResponseProvider,
+  validateProviderResponse
+} from "./responseProvider.mjs";
 import { PHASES, ROLES, TEAMS, publicRoleName, publicTeamName, teamForRole } from "./constants.mjs";
 import { SeededRandom } from "./seededRandom.mjs";
 import { containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
@@ -86,7 +91,10 @@ export class WerewolfGame {
       }
     };
 
-    const game = new WerewolfGame(state);
+    const game = new WerewolfGame(
+      state,
+      options.responseProvider ?? new PseudoResponseProvider()
+    );
     game.addPublicInfo({
       type: "setup",
       text: "公開情報: 5人村。内訳は人狼1、占い師1、市民3。役職欠けなし。"
@@ -104,8 +112,9 @@ export class WerewolfGame {
     return game;
   }
 
-  constructor(state) {
+  constructor(state, responseProvider = new PseudoResponseProvider()) {
     this.state = state;
+    this.responseProvider = responseProvider;
   }
 
   getPlayer(idOrName) {
@@ -157,13 +166,16 @@ export class WerewolfGame {
     });
   }
 
-  dispatchPlayerAction(action = {}) {
+  async dispatchPlayerAction(action = {}) {
     const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
     let result;
 
     switch (action.type) {
       case "ask_npc":
-        result = this.handlePlayerQuestion(action.targetId ?? action.target ?? action.npcId, action.input ?? action.question);
+        result = await this.handlePlayerQuestion(
+          action.targetId ?? action.target ?? action.npcId,
+          action.input ?? action.question
+        );
         break;
       case "advance_vote":
         result = this.runVote();
@@ -188,7 +200,7 @@ export class WerewolfGame {
     };
   }
 
-  handlePlayerQuestion(targetIdOrName, playerInput) {
+  async handlePlayerQuestion(targetIdOrName, playerInput) {
     if (this.state.winner) {
       return {
         responded: false,
@@ -226,7 +238,50 @@ export class WerewolfGame {
       };
     }
 
-    const result = generateNpcResponse(npc, this.state, questionText);
+    const prepared = buildNpcResponseRequest(npc, this.state, questionText);
+    const providerName = getProviderName(this.responseProvider);
+    let providerResult;
+
+    try {
+      if (typeof this.responseProvider?.generateResponse !== "function") {
+        throw new TypeError("Response provider must implement generateResponse(request)");
+      }
+      const rawProviderResult = await this.responseProvider.generateResponse(prepared.request);
+      providerResult = validateProviderResponse(rawProviderResult, providerName);
+    } catch (error) {
+      this.addPlayerLog(`${npc.name}から回答を得られませんでした。`);
+      this.addPublicInfo({
+        type: "npc_response_error",
+        actorId: npc.id,
+        actorName: npc.name,
+        text: `${npc.name}から回答を得られませんでした。`
+      });
+      this.addDeveloperLog("npc_response_provider_error", {
+        npcId: npc.id,
+        npcName: npc.name,
+        playerInput: questionText,
+        providerName,
+        errorType: error?.name ?? "Error",
+        message: error?.message ?? String(error),
+        evidenceUsed: prepared.evidenceUsed,
+        promptPreview: prepared.promptPreview
+      });
+      this.setPhase("day_discussion");
+      return {
+        responded: false,
+        reason: "response_provider_error"
+      };
+    }
+
+    const result = {
+      responded: true,
+      text: providerResult.text,
+      evidenceUsed: prepared.evidenceUsed,
+      promptPreview: prepared.promptPreview,
+      publicClaim: prepared.publicClaim,
+      disclosedHiddenInfo: prepared.disclosedHiddenInfo,
+      provider: providerResult
+    };
     this.addPlayerLog(`${npc.name}: ${result.text}`);
     this.addPublicInfo({
       type: "npc_response",
@@ -260,7 +315,8 @@ export class WerewolfGame {
       response: result.text,
       evidenceUsed: result.evidenceUsed,
       disclosedHiddenInfo: result.disclosedHiddenInfo,
-      promptPreview: result.promptPreview
+      promptPreview: result.promptPreview,
+      provider: result.provider
     });
 
     return result;

@@ -48,11 +48,13 @@ npm.cmd test
 - `src/gameEngine.mjs`
   - `GameState` と `PlayerState` を作成、管理します。
   - フェーズ、投票、処刑、占い、襲撃、勝敗判定をコード側で処理します。
-  - UIからの操作入口として `dispatchPlayerAction(action)` を提供します。
+  - UIからの非同期操作入口として `dispatchPlayerAction(action)` を提供します。
   - 表示用の公開状態として `getPublicSnapshot()` を提供します。
 - `src/responseGenerator.mjs`
-  - 疑似LLM応答生成器です。
-  - 将来はこの `generateNpcResponse(npc, gameState, playerInput)` をLLM接続に差し替えます。
+  - NPCに許可された情報から、応答要求とプロンプトを組み立てます。
+- `src/responseProvider.mjs`
+  - `generateResponse(request)` を持つ応答プロバイダーの既定実装を提供します。
+  - 現在は `PseudoResponseProvider` を使用し、将来は実LLMプロバイダーへ差し替えられます。
 - `src/audit.mjs`
   - サンプルプレイ後の最低限の検証を行います。
 - `scripts/sample-play.mjs`
@@ -62,14 +64,14 @@ npm.cmd test
 
 LLMにゲーム状態は変更させません。役職、生死、投票、占い結果、襲撃結果、勝敗判定は `WerewolfGame` が管理します。
 
-応答生成器は発言文、参照した根拠、将来LLMへ渡す想定のプロンプトプレビューだけを返します。開発者ログでは `knownInfo`、`hiddenInfo`、`suspicionScores`、投票理由、占い対象、襲撃対象、応答生成時の根拠を確認できます。
+応答プロバイダーは発言文と診断用メタデータだけを返します。役職COの許可、公開情報、記憶更新は `WerewolfGame` が処理します。開発者ログでは `knownInfo`、`hiddenInfo`、`suspicionScores`、投票理由、占い対象、襲撃対象、応答生成時の根拠を確認できます。
 
 ## UI非依存アクションAPI
 
 CLIや将来のブラウザUIは、次のように共通の入口からゲームを操作します。
 
 ```js
-game.dispatchPlayerAction({
+await game.dispatchPlayerAction({
   type: "ask_npc",
   target: "npc1",
   input: "Chikaの発言は怪しくない？",
@@ -85,3 +87,24 @@ game.dispatchPlayerAction({
 - `get_state`
 
 戻り値には、処理結果、表示用の `publicSnapshot`、新規プレイヤーログ、次の `logCursor` が含まれます。
+
+## 応答プロバイダー
+
+```js
+const responseProvider = {
+  name: "custom-provider",
+  async generateResponse(request) {
+    return {
+      text: "NPCの発言文",
+      providerName: "custom-provider",
+      model: "model-name",
+      usage: null,
+      notes: []
+    };
+  }
+};
+
+const game = WerewolfGame.create({ responseProvider });
+```
+
+プロバイダーにはゲーム状態そのものではなく、読み取り専用の応答要求だけが渡されます。例外、空応答、不正な戻り値が発生した場合、その質問への回答だけを中止し、ゲームは継続します。

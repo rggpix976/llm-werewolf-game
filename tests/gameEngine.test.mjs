@@ -46,11 +46,11 @@ test("initializes a five-player village with the expected role counts", () => {
   assert.equal(game.state.winner, null);
 });
 
-test("dispatchPlayerAction returns a public snapshot and incremental player logs", () => {
+test("dispatchPlayerAction returns a public snapshot and incremental player logs", async () => {
   const game = createSampleGame();
   const logCursor = game.state.playerLog.length;
 
-  const action = game.dispatchPlayerAction({
+  const action = await game.dispatchPlayerAction({
     type: "ask_npc",
     target: "npc2",
     input: "What do you think?",
@@ -87,9 +87,9 @@ test("public snapshots do not expose private player state", () => {
   }
 });
 
-test("living NPCs respond while dead NPCs are blocked", () => {
+test("living NPCs respond while dead NPCs are blocked", async () => {
   const game = createSampleGame();
-  const livingResponse = game.dispatchPlayerAction({
+  const livingResponse = await game.dispatchPlayerAction({
     type: "ask_npc",
     target: "npc2",
     input: "Are you alive?"
@@ -97,13 +97,13 @@ test("living NPCs respond while dead NPCs are blocked", () => {
 
   assert.equal(livingResponse.result.responded, true);
 
-  const vote = game.dispatchPlayerAction({ type: "advance_vote" });
+  const vote = await game.dispatchPlayerAction({ type: "advance_vote" });
   const executedId = vote.result.executedId;
   const responseLogCount = game.state.developerLog.filter(
     (entry) => entry.kind === "npc_response_generated" && entry.detail.npcId === executedId
   ).length;
 
-  const deadResponse = game.dispatchPlayerAction({
+  const deadResponse = await game.dispatchPlayerAction({
     type: "ask_npc",
     target: executedId,
     input: "Can you still speak?"
@@ -127,9 +127,9 @@ test("living NPCs respond while dead NPCs are blocked", () => {
   );
 });
 
-test("werewolf identity questions are denied and response evidence is logged", () => {
+test("werewolf identity questions are denied and response evidence is logged", async () => {
   const game = createSampleGame();
-  const action = game.dispatchPlayerAction({
+  const action = await game.dispatchPlayerAction({
     type: "ask_npc",
     target: "npc3",
     input: "Are you a werewolf?"
@@ -149,10 +149,158 @@ test("werewolf identity questions are denied and response evidence is logged", (
   assert.match(responseLog.detail.promptPreview, /never confess/i);
 });
 
-test("votes target living opponents and execution updates life state", () => {
+test("an injected async response provider supplies only the NPC utterance", async () => {
+  let receivedRequest;
+  const responseProvider = {
+    name: "test-provider",
+    async generateResponse(request) {
+      receivedRequest = request;
+      return {
+        text: "Custom provider response",
+        providerName: "test-provider",
+        model: "test-model",
+        usage: { inputTokens: 12, outputTokens: 3 },
+        notes: ["test"]
+      };
+    }
+  };
+  const game = WerewolfGame.create({
+    seed: 20260613,
+    scenario: "sample",
+    shuffleRoles: false,
+    responseProvider
+  });
+
+  const action = await game.dispatchPlayerAction({
+    type: "ask_npc",
+    target: "npc2",
+    input: "Question for the provider"
+  });
+
+  assert.equal(action.result.text, "Custom provider response");
+  assert.equal(action.result.provider.providerName, "test-provider");
+  assert.equal(action.result.provider.model, "test-model");
+  assert.deepEqual(action.result.provider.usage, {
+    inputTokens: 12,
+    outputTokens: 3
+  });
+  assert.ok(receivedRequest);
+  assert.equal(Object.isFrozen(receivedRequest), true);
+  assert.equal(Object.isFrozen(receivedRequest.npc), true);
+  assert.equal("state" in receivedRequest, false);
+  assert.equal("gameState" in receivedRequest, false);
+  assert.equal("players" in receivedRequest, false);
+  assert.equal(receivedRequest.npc.id, "npc2");
+  assert.equal(receivedRequest.playerInput, "Question for the provider");
+});
+
+test("provider output cannot directly mutate game state or register claims", async () => {
+  const responseProvider = {
+    name: "untrusted-provider",
+    async generateResponse() {
+      return {
+        text: "Harmless visible text",
+        providerName: "untrusted-provider",
+        role: ROLES.WEREWOLF,
+        alive: false,
+        winner: TEAMS.WEREWOLF,
+        publicClaim: {
+          role: ROLES.SEER,
+          results: [{ targetId: "npc3", result: "werewolf" }]
+        }
+      };
+    }
+  };
+  const game = WerewolfGame.create({
+    seed: 20260613,
+    scenario: "sample",
+    shuffleRoles: false,
+    responseProvider
+  });
+  const npc = game.getPlayer("npc2");
+  const originalRole = npc.role;
+
+  const action = await game.dispatchPlayerAction({
+    type: "ask_npc",
+    target: npc.id,
+    input: "Tell me something"
+  });
+
+  assert.equal(action.result.responded, true);
+  assert.equal(action.result.publicClaim, null);
+  assert.equal(npc.role, originalRole);
+  assert.equal(npc.alive, true);
+  assert.equal(game.state.winner, null);
+  assert.deepEqual(npc.publicClaims, []);
+  assert.equal(
+    game.state.publicInfo.some((info) => info.type === "public_claim"),
+    false
+  );
+});
+
+for (const providerFailure of [
+  {
+    name: "throws",
+    generateResponse: async () => {
+      throw new Error("provider unavailable");
+    }
+  },
+  {
+    name: "empty",
+    generateResponse: async () => ({ text: "   " })
+  },
+  {
+    name: "invalid",
+    generateResponse: async () => "not an object"
+  }
+]) {
+  test(`provider failure '${providerFailure.name}' cancels only the response`, async () => {
+    const game = WerewolfGame.create({
+      seed: 20260613,
+      scenario: "sample",
+      shuffleRoles: false,
+      responseProvider: providerFailure
+    });
+    const npc = game.getPlayer("npc1");
+    const memoryCount = npc.privateMemory.length;
+    const claimCount = npc.publicClaims.length;
+
+    const action = await game.dispatchPlayerAction({
+      type: "ask_npc",
+      target: npc.id,
+      input: "Please answer"
+    });
+
+    assert.deepEqual(action.result, {
+      responded: false,
+      reason: "response_provider_error"
+    });
+    assert.equal(game.state.phase, "day_discussion");
+    assert.equal(npc.privateMemory.length, memoryCount);
+    assert.equal(npc.publicClaims.length, claimCount);
+    assert.equal(
+      game.state.publicInfo.some(
+        (info) => info.type === "npc_response" && info.actorId === npc.id
+      ),
+      false
+    );
+    assert.equal(
+      game.state.developerLog.some(
+        (entry) => entry.kind === "npc_response_provider_error"
+          && entry.detail.providerName === providerFailure.name
+      ),
+      true
+    );
+
+    const vote = await game.dispatchPlayerAction({ type: "advance_vote" });
+    assert.ok(vote.result.executedId);
+  });
+}
+
+test("votes target living opponents and execution updates life state", async () => {
   const game = createSampleGame();
   const aliveBeforeVote = new Set(game.state.alivePlayers);
-  const action = game.dispatchPlayerAction({ type: "advance_vote" });
+  const action = await game.dispatchPlayerAction({ type: "advance_vote" });
   const { votes, executedId } = action.result;
 
   assert.equal(votes.length, aliveBeforeVote.size);
@@ -168,11 +316,11 @@ test("votes target living opponents and execution updates life state", () => {
   assert.equal(game.state.voteHistory.at(-1).executedId, executedId);
 });
 
-test("seer results remain private until the seer explicitly claims", () => {
+test("seer results remain private until the seer explicitly claims", async () => {
   const game = createSampleGame();
 
-  game.dispatchPlayerAction({ type: "advance_vote" });
-  const night = game.dispatchPlayerAction({ type: "run_night" });
+  await game.dispatchPlayerAction({ type: "advance_vote" });
+  const night = await game.dispatchPlayerAction({ type: "run_night" });
   const seer = game.state.players.find((player) => player.role === ROLES.SEER);
   const privateResult = seer.knownInfo.find((info) => info.type === "seer_result");
 
@@ -187,7 +335,7 @@ test("seer results remain private until the seer explicitly claims", () => {
     false
   );
 
-  const claim = game.dispatchPlayerAction({
+  const claim = await game.dispatchPlayerAction({
     type: "ask_npc",
     target: seer.id,
     input: "占い師ならCOしてください"
@@ -204,13 +352,13 @@ test("seer results remain private until the seer explicitly claims", () => {
   );
 });
 
-test("werewolf attacks only a living non-werewolf target", () => {
+test("werewolf attacks only a living non-werewolf target", async () => {
   const game = createSampleGame();
 
-  game.dispatchPlayerAction({ type: "advance_vote" });
+  await game.dispatchPlayerAction({ type: "advance_vote" });
   const aliveBeforeNight = new Set(game.state.alivePlayers);
   const werewolf = game.state.players.find((player) => player.role === ROLES.WEREWOLF);
-  const night = game.dispatchPlayerAction({ type: "run_night" });
+  const night = await game.dispatchPlayerAction({ type: "run_night" });
   const attack = night.result.attackResult;
 
   assert.ok(attack);
@@ -237,7 +385,7 @@ test("win checks recognize village and werewolf victories", () => {
   assert.equal(werewolfGame.state.winner, TEAMS.WEREWOLF);
 });
 
-test("finished games reject further vote and night progression", () => {
+test("finished games reject further vote and night progression", async () => {
   const game = createSampleGame();
   game.killPlayer("npc3", "test");
   game.checkWin("test");
@@ -251,8 +399,8 @@ test("finished games reject further vote and night progression", () => {
     playerLogs: game.state.playerLog.length
   };
 
-  const vote = game.dispatchPlayerAction({ type: "advance_vote" });
-  const night = game.dispatchPlayerAction({ type: "run_night" });
+  const vote = await game.dispatchPlayerAction({ type: "advance_vote" });
+  const night = await game.dispatchPlayerAction({ type: "run_night" });
 
   assert.equal(vote.result, null);
   assert.deepEqual(night.result, {

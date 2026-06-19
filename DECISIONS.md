@@ -35,3 +35,15 @@ NPC responses must be grounded in `publicInfo` and that NPC's own `knownInfo`.
 The remote GitHub repository should be private during early development.
 
 This allows internal design notes, prompt previews, and developer logs to be committed safely while the design is still changing.
+
+## D-007: NPC Response Providers Are Asynchronous and Text-Only
+
+Response providers implement `async generateResponse(request)`.
+
+They receive a frozen, cloned request instead of the live game state. Their accepted output is limited to utterance text and diagnostic metadata. Claims, memory updates, public information, roles, life/death, votes, and win state remain controlled by the game engine.
+
+## D-008: Provider Failure Cancels Only the Current Response
+
+Provider exceptions, empty text, and invalid return values do not end the game and do not trigger a pseudo-response fallback.
+
+The current NPC response is skipped, the failure is recorded in the developer log, the phase returns to `day_discussion`, and the player may ask another question or proceed to voting.
