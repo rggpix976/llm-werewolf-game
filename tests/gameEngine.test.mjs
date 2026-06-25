@@ -87,6 +87,48 @@ test("public snapshots do not expose private player state", () => {
   }
 });
 
+test("accusatory player questions raise living NPC suspicion for mentioned targets", async () => {
+  const game = createSampleGame();
+  const targetId = "npc3";
+  const initialScores = Object.fromEntries(
+    game.state.players.map((player) => [player.id, player.suspicionScores[targetId]])
+  );
+
+  await game.dispatchPlayerAction({
+    type: "ask_npc",
+    target: "npc2",
+    input: "What do you think about Chika?"
+  });
+
+  for (const player of game.state.players) {
+    assert.equal(player.suspicionScores[targetId], initialScores[player.id]);
+  }
+
+  game.killPlayer("npc5", "test");
+  const beforeAccusation = Object.fromEntries(
+    game.state.players.map((player) => [player.id, player.suspicionScores[targetId]])
+  );
+
+  await game.dispatchPlayerAction({
+    type: "ask_npc",
+    target: "npc2",
+    input: "I suspect Chika is a werewolf"
+  });
+
+  for (const player of game.state.players) {
+    if (player.id === targetId || player.id === "npc5") {
+      assert.equal(player.suspicionScores[targetId], beforeAccusation[player.id]);
+    } else {
+      assert.equal(player.suspicionScores[targetId], beforeAccusation[player.id] + 1);
+    }
+  }
+  assert.equal(Object.hasOwn(game.getPlayer(targetId).suspicionScores, targetId), false);
+  assert.equal(
+    game.state.developerLog.some((entry) => entry.kind === "question_pressure_applied"),
+    true
+  );
+});
+
 test("living NPCs respond while dead NPCs are blocked", async () => {
   const game = createSampleGame();
   const livingResponse = await game.dispatchPlayerAction({

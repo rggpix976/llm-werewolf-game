@@ -62,6 +62,20 @@ const SAMPLE_SUSPICION = {
   npc5: { npc1: 0, npc2: 0, npc3: 3, npc4: 2 }
 };
 
+const ACCUSATORY_QUESTION_KEYWORDS = [
+  "怪しい",
+  "疑",
+  "人狼",
+  "矛盾",
+  "おかしい",
+  "黒",
+  "suspicious",
+  "suspect",
+  "werewolf",
+  "wolf",
+  "black"
+];
+
 export class WerewolfGame {
   static create(options = {}) {
     const rng = new SeededRandom(options.seed ?? Date.now());
@@ -328,7 +342,7 @@ export class WerewolfGame {
       return;
     }
 
-    const isAccusatory = containsAny(questionText, ["怪しい", "疑", "人狼", "矛盾", "おかしい", "黒"]);
+    const isAccusatory = containsAny(questionText, ACCUSATORY_QUESTION_KEYWORDS);
     if (!isAccusatory) {
       return;
     }

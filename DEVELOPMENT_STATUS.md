@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-06-19
+Last updated: 2026-06-25
 
 ## Current State
 
@@ -13,22 +13,23 @@ Last updated: 2026-06-19
 - UI-independent asynchronous action API is available through `await dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - Player-facing logs and developer logs are separated.
-- Core game and response-provider invariants are covered by 15 automated tests using Node.js `node:test`.
+- Minimal suspicion updates from accusatory player questions are implemented.
+- Core game and response-provider invariants are covered by 16 automated tests using Node.js `node:test`.
 
 ## Last Verified
 
-- Date: 2026-06-19
+- Date: 2026-06-25
 - Commands:
   - `npm.cmd test`
   - `npm.cmd run sample`
   - `git diff --check`
-- Result: all 15 automated tests passed, sample play audit checks were all OK, and no whitespace errors were found.
+- Result: all 16 automated tests passed, sample play audit checks were all OK, and no whitespace errors were found.
 
 ## Next Recommended Task
 
-1. Prepare a browser UI adapter using the asynchronous action API and public snapshots.
+1. Start implementing the browser UI adapter using the asynchronous action API and public snapshots.
 2. Add a real LLM provider after provider-level validation and configuration are designed.
-3. Improve natural language intent parsing and suspicion updates.
+3. Improve natural language intent parsing and NPC-response-driven suspicion updates.
 
 ## Read This First Next Time
 
@@ -48,7 +49,7 @@ Last updated: 2026-06-19
 - GitHub private repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- Local `master` contains the automated-test commit that has not been pushed yet.
+- Local `master` is synchronized with `origin/master` before this session's new changes.
 - Game state is intentionally kept in memory only; save/load is not planned.
 
 ## Working Rule

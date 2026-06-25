@@ -6,11 +6,13 @@
 - [x] Add automated tests for the core game engine.
 - [x] Define a response provider interface for future LLM integration.
 - [x] Add public snapshot helpers for browser UI use.
+- [x] Add minimal suspicion score updates from accusatory player questions.
+- [ ] Build the first browser UI adapter around `dispatchPlayerAction(action)` and `getPublicSnapshot()`.
 
 ## Soon
 
 - [ ] Improve natural language intent parsing.
-- [ ] Improve suspicion score updates from player questions and NPC responses.
+- [ ] Improve suspicion score updates from nuanced player questions and NPC responses.
 - [ ] Add better validation for generated NPC utterances.
 
 ## Later

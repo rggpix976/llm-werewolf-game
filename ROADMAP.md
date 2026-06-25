@@ -12,6 +12,7 @@
 - Test that dead NPCs cannot speak. Done.
 - Test that seer results stay private until explicitly claimed. Done.
 - Test that werewolves cannot attack themselves. Done.
+- Test minimal suspicion updates from accusatory player questions. Done.
 
 ## Phase 3: Prepare LLM Integration
 
@@ -36,4 +37,4 @@
 
 ## Current Priority
 
-The next milestone is preparation for a browser UI adapter.
+The next milestone is implementing the first browser UI adapter.

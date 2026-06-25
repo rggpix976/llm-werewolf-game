@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-25
+
+- Added minimal suspicion updates from accusatory player questions.
+- Added automated coverage for question-driven suspicion updates.
+- Updated development status, TODOs, and roadmap for browser UI adapter implementation.
+- Corrected the recorded Git state now that local `master` is synchronized with `origin/master`.
+
 ## 2026-06-19
 
 - Decided that game sessions are memory-only and will not support save/load persistence.
