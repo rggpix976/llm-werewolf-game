@@ -24,8 +24,8 @@
 ## Phase 4: Browser UI
 
 - Keep the CLI as a temporary adapter.
-- Add a browser adapter that sends player actions to the core game engine.
-- Display public state, conversation history, alive/dead players, voting results, and win result.
+- Add a browser adapter that sends player actions to the core game engine. Done for the first public UI.
+- Display public state, conversation history, alive/dead players, voting results, and win result. Done for the first public UI.
 - Add developer mode for roles, known info, hidden info, prompts, and evidence logs.
 
 ## Phase 5: Game Expansion
@@ -37,4 +37,4 @@
 
 ## Current Priority
 
-The next milestone is implementing the first browser UI adapter.
+The next milestone is adding browser developer mode.

@@ -43,6 +43,14 @@ node scripts/sample-play.mjs
 npm.cmd test
 ```
 
+Browser UI:
+
+```powershell
+npm.cmd run web
+```
+
+Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory session from the CLI. Reloading the page or starting a new game resets that session.
+
 ## 構成
 
 - `src/gameEngine.mjs`

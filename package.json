@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node src/cli.mjs",
+    "web": "node src/webServer.mjs",
     "sample": "node scripts/sample-play.mjs",
     "test": "node --test"
   },

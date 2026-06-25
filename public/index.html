@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Werewolf</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>LLM Werewolf</h1>
+          <div class="status-line" id="statusLine">Day 1 / Loading</div>
+        </div>
+        <button class="secondary-button" id="newGameButton" type="button">New Game</button>
+      </header>
+
+      <section class="table-layout" aria-label="Game table">
+        <div class="players-panel">
+          <div class="section-heading">Players</div>
+          <div class="player-grid" id="playerGrid"></div>
+        </div>
+
+        <div class="action-panel">
+          <form class="ask-form" id="askForm">
+            <label for="targetSelect">NPC</label>
+            <select id="targetSelect" name="target"></select>
+
+            <label for="questionInput">Question</label>
+            <textarea id="questionInput" name="question" rows="4" maxlength="240"></textarea>
+
+            <div class="button-row">
+              <button class="primary-button" id="askButton" type="submit">Ask</button>
+              <button class="secondary-button" id="voteButton" type="button">Vote</button>
+              <button class="secondary-button" id="nightButton" type="button">Night</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="info-layout" aria-label="Public information">
+        <div>
+          <div class="section-heading">Log</div>
+          <div class="log-list" id="logList"></div>
+        </div>
+
+        <div>
+          <div class="section-heading">Votes</div>
+          <div class="vote-list" id="voteList"></div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./browserApp.mjs"></script>
+  </body>
+</html>

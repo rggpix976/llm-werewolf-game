@@ -2,6 +2,10 @@
 
 ## 2026-06-25
 
+- Added a first browser UI adapter using the public action API and public snapshots.
+- Added a local static server and `npm.cmd run web` startup script.
+- Added browser controls for NPC questions, voting, night progression, and new in-memory games.
+- Updated documentation for browser UI startup and the next developer-mode milestone.
 - Added minimal suspicion updates from accusatory player questions.
 - Added automated coverage for question-driven suspicion updates.
 - Updated development status, TODOs, and roadmap for browser UI adapter implementation.
