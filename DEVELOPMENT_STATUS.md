@@ -17,7 +17,7 @@ Last updated: 2026-06-26
 - `getDeveloperDiagnostics()` provides a read-only, structured view of the internal game state.
 - Player-facing logs and developer logs are separated.
 - Minimal suspicion updates from accusatory player questions are implemented.
-- Core game, response-provider invariants, and developer diagnostics are covered by 21 automated tests using Node.js `node:test`.
+- Core game, response-provider invariants, and developer diagnostics are covered by 24 automated tests using Node.js `node:test`.
 
 ## Last Verified
 
@@ -27,7 +27,7 @@ Last updated: 2026-06-26
   - `npm run sample`
   - `npm run web`
   - `git diff --check`
-- Result: all 21 automated tests passed, sample play audit checks were all OK, browser UI Developer Mode manual checks passed, and no whitespace errors were found.
+- Result: all 24 automated tests passed, sample play audit checks were all OK, browser UI Developer Mode manual checks passed, and no whitespace errors were found.
 
 ## Next Recommended Task
 

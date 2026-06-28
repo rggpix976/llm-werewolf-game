@@ -6,7 +6,7 @@
 - Implemented read-only `getDeveloperDiagnostics()` API in `WerewolfGame` using `structuredClone`.
 - Added granular diagnostics for NPC internal states, developer logs, and LLM provider metadata (prompts, evidence, usage).
 - Added Developer Mode UI with log filtering by NPC and kind.
-- Expanded automated test suite from 16 to 21 tests to cover developer diagnostics.
+- Expanded automated test suite from 16 to 24 tests to cover developer diagnostics.
 - Added `AGENTS.md` with persistent repository instructions.
 - Updated documentation for Developer Mode usage and security.
 
