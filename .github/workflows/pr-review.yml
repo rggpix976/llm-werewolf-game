@@ -44,6 +44,7 @@ jobs:
         shell: bash
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -52,12 +53,11 @@ jobs:
 
           mkdir -p review-bundle
 
-          git fetch --no-tags origin \
-            "$BASE_REF:refs/remotes/origin/$BASE_REF"
-
           BASE_COMMIT="$(
-            git merge-base "origin/$BASE_REF" HEAD
+            git merge-base "$BASE_SHA" HEAD
           )"
+
+          git cat-file -e "$BASE_COMMIT^{commit}"
 
           git diff \
             --binary \
