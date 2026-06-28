@@ -4,7 +4,6 @@
 export class HttpResponseProvider {
   constructor(options = {}) {
     this.name = "http-provider";
-    this.model = options.model || "unknown";
     this.sessionManager = options.sessionManager;
   }
 
@@ -29,6 +28,7 @@ export class HttpResponseProvider {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const error = new Error(errorData.error || `HTTP ${response.status}`);
+        error.name = "ResponseProviderError";
         error.status = response.status;
         error.type = errorData.type;
         error.diagnostics = errorData.diagnostics;
@@ -36,12 +36,6 @@ export class HttpResponseProvider {
       }
 
       return await response.json();
-    } catch (error) {
-      if (error.name === "AbortError") {
-        // Silently fail if aborted (e.g. by New Game)
-        return new Promise(() => {}); // Never resolve
-      }
-      throw error;
     } finally {
       if (this.sessionManager) {
         this.sessionManager.unregisterRequest(controller);

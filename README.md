@@ -92,7 +92,7 @@ LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 - `OPENAI_MAX_REQUESTS_PER_MINUTE`: 1分間あたりの最大リクエスト数 (デフォルト: `10`)
 - `OPENAI_FALLBACK_TO_PSEUDO`: 一時的なエラー時に `pseudo` モードへ切り替えるか (デフォルト: `true`)
 
-**注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは実APIを呼び出さず、モックを使用します。実APIの確認は利用者が明示的に設定を行ってから実施してください。
+**注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックを使用します。実APIの確認は利用者が明示的に設定を行ってから実施してください。
 
 ### Developer Mode
 

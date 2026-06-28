@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseConfig, getRuntimeConfig } from "./config.mjs";
 import { OpenAIResponseProvider } from "./openaiProvider.mjs";
 import { PseudoResponseProvider } from "./responseProvider.mjs";
+import { validateNpcResponseRequest } from "./validator.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -40,7 +41,7 @@ export function createRequestHandler(options = {}) {
       }
 
       if (pathname === "/api/npc-response" && request.method === "POST") {
-        return handleNpcResponse(request, response, provider, rateLimiter);
+        return await handleNpcResponse(request, response, provider, rateLimiter);
       }
 
       // Method not allowed for API
@@ -78,9 +79,8 @@ export function createRequestHandler(options = {}) {
         return;
       }
 
-      console.error("Server error:", error);
-      response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("Internal server error");
+      // Outer catch for any unexpected async failures
+      sendError(response, error.status || 500, error.message || "Internal server error", error.type, error.diagnostics);
     }
   };
 }
@@ -97,77 +97,116 @@ function handleRuntimeConfig(response, config) {
 async function handleNpcResponse(request, response, provider, rateLimiter) {
   // Check rate limit
   if (!rateLimiter.allow()) {
-    response.writeHead(429, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: "Too many requests" }));
-    return;
+    return sendError(response, 429, "Too many requests", "rate_limit");
   }
 
   // Content-Type validation
-  if (request.headers["content-type"] !== "application/json") {
-    response.writeHead(415, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: "Unsupported Content-Type. Use application/json" }));
-    return;
+  const contentType = request.headers["content-type"] || "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    return sendError(response, 415, "Unsupported Content-Type. Use application/json", "bad_request");
   }
 
   let body;
   try {
     body = await readJsonBody(request, 64 * 1024); // 64 KiB limit
   } catch (error) {
-    const status = error.status || 400;
-    response.writeHead(status, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: error.message }));
-    return;
+    return sendError(response, error.status || 400, error.message, "bad_request");
   }
 
   try {
-    validateNpcRequest(body);
-    const result = await provider.generateResponse(body);
+    const validatedRequest = validateNpcResponseRequest(body);
+
+    // Propagate client disconnect to the provider
+    const controller = new AbortController();
+    request.on("close", () => controller.abort());
+
+    const result = await provider.generateResponse(validatedRequest, { signal: controller.signal });
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(result));
   } catch (error) {
     const status = error.status || 500;
     const type = error.type || "server_error";
-    // Generalize error message for security
-    const message = status === 500 ? "Internal server error" : error.message;
+    // Sanitize message: Do not return raw OpenAI error messages to the browser
+    const safeMessage = getSafeErrorMessage(type, error.message, status);
 
-    response.writeHead(status, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({
-      error: message,
-      type,
-      diagnostics: error.type ? {
-        status: error.status,
-        requestId: error.requestId,
-        code: error.code,
-        responseId: error.responseId
-      } : undefined
-    }));
+    sendError(response, status, safeMessage, type, error.diagnostics || {
+       httpStatus: status,
+       code: error.code,
+       requestId: error.requestId,
+       responseId: error.responseId,
+       retryable: error.retryable,
+       retryCount: error.retryCount
+    });
   }
 }
 
-function validateNpcRequest(body) {
-  if (!body || typeof body !== "object") throw createHttpError(400, "Invalid request body");
-  if (!body.npc || typeof body.npc.id !== "string") throw createHttpError(400, "Missing npc.id");
-  if (typeof body.playerInput !== "string") throw createHttpError(400, "Missing playerInput");
-  // Basic sanity check on size/nesting if needed, but 64KiB limit already helps.
+function getSafeErrorMessage(type, originalMessage, status) {
+  if (status === 400 && type === "bad_request") return originalMessage; // Validation errors are safe
+
+  const messages = {
+    "timeout": "The request timed out. Please try again.",
+    "network_error": "A network error occurred. Please check your connection.",
+    "authentication_error": "Provider authentication failed. Please contact the administrator.",
+    "permission_error": "Provider permission denied. Please contact the administrator.",
+    "rate_limit": "Rate limit exceeded. Please wait a moment before trying again.",
+    "bad_request": "The request was invalid.",
+    "provider_server_error": "The response provider encountered an error. Please try again later.",
+    "invalid_provider_response": "The provider returned an invalid response."
+  };
+  return messages[type] || "An unexpected error occurred.";
+}
+
+function sendError(response, status, message, type, diagnostics) {
+  if (response.writableEnded) return;
+  response.writeHead(status, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({
+    error: message,
+    type: type || "server_error",
+    diagnostics: diagnostics
+  }));
 }
 
 async function readJsonBody(request, limit) {
   return new Promise((resolve, reject) => {
-    let data = "";
-    request.on("data", (chunk) => {
-      data += chunk;
-      if (data.length > limit) {
+    let data = [];
+    let currentLength = 0;
+    let settled = false;
+
+    const onData = (chunk) => {
+      if (settled) return;
+      data.push(chunk);
+      currentLength += chunk.length;
+      if (currentLength > limit) {
+        settled = true;
+        request.removeListener("data", onData);
+        request.removeListener("end", onEnd);
+        request.removeListener("error", onError);
+        // Drain the request to prevent hanging
+        request.resume();
         reject(createHttpError(413, "Request body too large"));
       }
-    });
-    request.on("end", () => {
+    };
+
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
       try {
-        resolve(JSON.parse(data));
+        const fullBody = Buffer.concat(data).toString("utf-8");
+        resolve(JSON.parse(fullBody));
       } catch (error) {
         reject(createHttpError(400, "Invalid JSON"));
       }
-    });
-    request.on("error", reject);
+    };
+
+    const onError = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+
+    request.on("data", onData);
+    request.on("end", onEnd);
+    request.on("error", onError);
   });
 }
 

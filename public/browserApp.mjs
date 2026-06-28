@@ -107,15 +107,10 @@ elements.nightButton.addEventListener("click", async () => {
 function startNewGame() {
   currentGameId = sessionManager.startNewGame();
 
-  let responseProvider;
-  if (runtimeConfig.provider === "openai") {
-    responseProvider = new HttpResponseProvider({
-      model: runtimeConfig.model,
-      sessionManager
-    });
-  } else {
-    responseProvider = new PseudoResponseProvider();
-  }
+  // Always use HttpResponseProvider, delegate selection to server
+  const responseProvider = new HttpResponseProvider({
+    sessionManager
+  });
 
   game = WerewolfGame.create({
     seed: Date.now(),

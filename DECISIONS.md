@@ -42,11 +42,13 @@ Response providers implement `async generateResponse(request)`.
 
 They receive a frozen, cloned request instead of the live game state. Their accepted output is limited to utterance text and diagnostic metadata. Claims, memory updates, public information, roles, life/death, votes, and win state remain controlled by the game engine.
 
-## D-008: Provider Failure Cancels Only the Current Response
+## D-008: Provider Failure Handling and Fallback
 
-Provider exceptions, empty text, and invalid return values do not end the game and do not trigger a pseudo-response fallback.
+Provider exceptions, empty text, and invalid return values do not end the game.
 
-The current NPC response is skipped, the failure is recorded in the developer log, the phase returns to `day_discussion`, and the player may ask another question or proceed to voting.
+For transient errors (timeout, network error, rate limit, provider server error), if `OPENAI_FALLBACK_TO_PSEUDO` is enabled, the system falls back to `PseudoResponseProvider` to ensure game continuity.
+
+For non-transient errors (authentication, permission, bad request), the current NPC response is skipped, the failure is recorded in the developer log, the phase returns to `day_discussion`, and the player may ask another question or proceed to voting.
 
 ## D-009: Game Sessions Are Not Persisted
 

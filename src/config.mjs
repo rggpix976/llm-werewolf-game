@@ -16,30 +16,20 @@ export function parseConfig(env = process.env) {
   };
 
   if (provider === "openai") {
-    const apiKey = env.OPENAI_API_KEY;
+    const apiKey = (env.OPENAI_API_KEY || "").trim();
     if (!apiKey) {
-      throw new Error("OPENAI_API_KEY is required when LLM_PROVIDER is 'openai'.");
+      throw new Error("OPENAI_API_KEY is required and cannot be whitespace only when LLM_PROVIDER is 'openai'.");
     }
 
     config.openai = {
       apiKey,
       model: env.OPENAI_MODEL || "gpt-5.4-mini",
-      timeoutMs: parsePositiveInt(env.OPENAI_TIMEOUT_MS, 15000, "OPENAI_TIMEOUT_MS"),
-      maxRetries: parseNonNegativeInt(env.OPENAI_MAX_RETRIES, 1, "OPENAI_MAX_RETRIES"),
-      maxOutputTokens: parsePositiveInt(env.OPENAI_MAX_OUTPUT_TOKENS, 220, "OPENAI_MAX_OUTPUT_TOKENS"),
-      maxRequestsPerMinute: parsePositiveInt(env.OPENAI_MAX_REQUESTS_PER_MINUTE, 10, "OPENAI_MAX_REQUESTS_PER_MINUTE"),
+      timeoutMs: parseStrictInt(env.OPENAI_TIMEOUT_MS, 15000, "OPENAI_TIMEOUT_MS", 1, 60000),
+      maxRetries: parseStrictInt(env.OPENAI_MAX_RETRIES, 1, "OPENAI_MAX_RETRIES", 0, 5),
+      maxOutputTokens: parseStrictInt(env.OPENAI_MAX_OUTPUT_TOKENS, 220, "OPENAI_MAX_OUTPUT_TOKENS", 1, 4096),
+      maxRequestsPerMinute: parseStrictInt(env.OPENAI_MAX_REQUESTS_PER_MINUTE, 10, "OPENAI_MAX_REQUESTS_PER_MINUTE", 1, 60),
       fallbackToPseudo: parseBoolean(env.OPENAI_FALLBACK_TO_PSEUDO, true, "OPENAI_FALLBACK_TO_PSEUDO")
     };
-
-    // Additional validation for maxOutputTokens
-    if (config.openai.maxOutputTokens < 1 || config.openai.maxOutputTokens > 4096) {
-      throw new Error(`OPENAI_MAX_OUTPUT_TOKENS must be between 1 and 4096. Got: ${config.openai.maxOutputTokens}`);
-    }
-
-    // Small integer check for retries
-    if (config.openai.maxRetries > 5) {
-       throw new Error(`OPENAI_MAX_RETRIES is too high. Max allowed is 5. Got: ${config.openai.maxRetries}`);
-    }
   }
 
   return Object.freeze(config);
@@ -61,21 +51,23 @@ export function getRuntimeConfig(config) {
   return result;
 }
 
-function parsePositiveInt(value, defaultValue, name) {
+function parseStrictInt(value, defaultValue, name, min, max) {
   if (value === undefined || value === "") return defaultValue;
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer. Got: ${value}`);
-  }
-  return parsed;
-}
 
-function parseNonNegativeInt(value, defaultValue, name) {
-  if (value === undefined || value === "") return defaultValue;
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    throw new Error(`${name} must be a non-negative integer. Got: ${value}`);
+  // Reject if it contains anything other than digits
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${name} must be a positive integer without units or decimals. Got: ${value}`);
   }
+
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} is not a safe integer. Got: ${value}`);
+  }
+
+  if (parsed < min || parsed > max) {
+    throw new Error(`${name} must be between ${min} and ${max}. Got: ${parsed}`);
+  }
+
   return parsed;
 }
 

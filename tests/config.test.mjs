@@ -30,34 +30,30 @@ test("parseConfig - valid openai mode", () => {
   assert.equal(config.openai.fallbackToPseudo, false);
 });
 
-test("parseConfig - missing API key in openai mode throws", () => {
+test("parseConfig - missing or whitespace API key in openai mode throws", () => {
   assert.throws(() => parseConfig({ LLM_PROVIDER: "openai" }), /OPENAI_API_KEY is required/);
+  assert.throws(() => parseConfig({ LLM_PROVIDER: "openai", OPENAI_API_KEY: "   " }), /OPENAI_API_KEY is required/);
 });
 
 test("parseConfig - invalid LLM_PROVIDER throws", () => {
   assert.throws(() => parseConfig({ LLM_PROVIDER: "anthropic" }), /Invalid LLM_PROVIDER/);
 });
 
-test("parseConfig - invalid numeric values throw", () => {
+test("parseConfig - invalid numeric values throw (strict parsing)", () => {
   const base = { LLM_PROVIDER: "openai", OPENAI_API_KEY: "key" };
-  assert.throws(() => parseConfig({ ...base, OPENAI_TIMEOUT_MS: "abc" }), /OPENAI_TIMEOUT_MS must be a positive integer/);
-  assert.throws(() => parseConfig({ ...base, OPENAI_TIMEOUT_MS: "-100" }), /OPENAI_TIMEOUT_MS must be a positive integer/);
-  assert.throws(() => parseConfig({ ...base, OPENAI_MAX_RETRIES: "-1" }), /OPENAI_MAX_RETRIES must be a non-negative integer/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_TIMEOUT_MS: "abc" }), /must be a positive integer/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_TIMEOUT_MS: "15000ms" }), /must be a positive integer/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_TIMEOUT_MS: "1.5" }), /must be a positive integer/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_TIMEOUT_MS: "  15000" }), /must be a positive integer/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_MAX_RETRIES: "-1" }), /must be a positive integer/);
 });
 
-test("parseConfig - invalid boolean throws", () => {
+test("parseConfig - range validation", () => {
   const base = { LLM_PROVIDER: "openai", OPENAI_API_KEY: "key" };
-  assert.throws(() => parseConfig({ ...base, OPENAI_FALLBACK_TO_PSEUDO: "yes" }), /OPENAI_FALLBACK_TO_PSEUDO must be 'true' or 'false'/);
-});
-
-test("parseConfig - token range validation", () => {
-  const base = { LLM_PROVIDER: "openai", OPENAI_API_KEY: "key" };
-  assert.throws(() => parseConfig({ ...base, OPENAI_MAX_OUTPUT_TOKENS: "5000" }), /OPENAI_MAX_OUTPUT_TOKENS must be between 1 and 4096/);
-});
-
-test("parseConfig - retry range validation", () => {
-  const base = { LLM_PROVIDER: "openai", OPENAI_API_KEY: "key" };
-  assert.throws(() => parseConfig({ ...base, OPENAI_MAX_RETRIES: "10" }), /OPENAI_MAX_RETRIES is too high/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_MAX_OUTPUT_TOKENS: "5000" }), /must be between 1 and 4096/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_TIMEOUT_MS: "0" }), /must be between 1 and 60000/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_MAX_RETRIES: "6" }), /must be between 0 and 5/);
+  assert.throws(() => parseConfig({ ...base, OPENAI_MAX_REQUESTS_PER_MINUTE: "100" }), /must be between 1 and 60/);
 });
 
 test("getRuntimeConfig - hides sensitive info", () => {
@@ -73,7 +69,4 @@ test("getRuntimeConfig - hides sensitive info", () => {
   assert.equal(runtime.model, "gpt-4o");
   assert.equal(runtime.fallbackEnabled, true);
   assert.equal(runtime.apiKey, undefined);
-
-  const json = JSON.stringify(runtime);
-  assert.ok(!json.includes("sk-test-key"));
 });

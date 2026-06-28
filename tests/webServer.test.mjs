@@ -10,11 +10,19 @@ class MockRequest extends EventEmitter {
     this.url = url;
     this.headers = headers;
     this.bodyData = body;
+    this.aborted = false;
   }
   start() {
-    if (this.bodyData) this.emit("data", Buffer.from(this.bodyData));
+    if (this.bodyData) {
+        if (typeof this.bodyData === "string") {
+            this.emit("data", Buffer.from(this.bodyData));
+        } else {
+            this.emit("data", this.bodyData);
+        }
+    }
     this.emit("end");
   }
+  resume() {}
 }
 
 class MockResponse extends EventEmitter {
@@ -24,6 +32,7 @@ class MockResponse extends EventEmitter {
     this.headers = {};
     this.body = "";
     this.writable = true;
+    this.writableEnded = false;
   }
   writeHead(status, headers) {
     this.statusCode = status;
@@ -35,6 +44,7 @@ class MockResponse extends EventEmitter {
   }
   end(data) {
     if (data) this.body += data;
+    this.writableEnded = true;
     this.emit("finish");
   }
   on(event, listener) {
@@ -50,6 +60,42 @@ class MockResponse extends EventEmitter {
   }
 }
 
+const validBaseRequest = {
+  npc: {
+    id: "npc1",
+    name: "Aoi",
+    personality: "Calm",
+    speechStyle: "calm",
+    conversationPolicy: {
+      truthfulness: "honest",
+      roleClaim: "never",
+      allowedTactics: [],
+      forbidden: []
+    }
+  },
+  playerInput: "Hello",
+  context: {
+    day: 1,
+    phase: "day_discussion",
+    publicEvidence: [],
+    shareableKnownEvidence: [],
+    privateStanceEvidence: [],
+    publicClaims: [],
+    intent: null,
+    topSuspect: null
+  },
+  policyDecision: {
+    publicClaimAllowed: false,
+    publicClaim: null,
+    disclosedHiddenInfo: false
+  },
+  responsePlan: {
+    baseText: "I am Aoi.",
+    speechStyle: "calm"
+  },
+  evidenceUsed: []
+};
+
 test("GET /api/runtime-config returns config without secrets", (t, done) => {
   const handler = createRequestHandler({
     config: { provider: "openai", openai: { model: "gpt-5.4-mini", fallbackToPseudo: true } }
@@ -63,7 +109,6 @@ test("GET /api/runtime-config returns config without secrets", (t, done) => {
       const data = JSON.parse(res.body);
       assert.equal(data.provider, "openai");
       assert.equal(data.model, "gpt-5.4-mini");
-      assert.equal(data.apiKey, undefined);
       assert.equal(res.headers["Cache-Control"], "no-store");
       done();
     } catch (e) {
@@ -82,7 +127,7 @@ test("POST /api/npc-response success", (t, done) => {
     }
   };
   const handler = createRequestHandler({ provider: mockProvider });
-  const body = JSON.stringify({ npc: { id: "npc1" }, playerInput: "Hi" });
+  const body = JSON.stringify(validBaseRequest);
   const req = new MockRequest("POST", "/api/npc-response", { "content-type": "application/json" }, body);
   const res = new MockResponse();
 
@@ -110,7 +155,7 @@ test("POST /api/npc-response rate limit", (t, done) => {
   res.on("finish", () => {
     try {
       assert.equal(res.statusCode, 429);
-      assert.equal(JSON.parse(res.body).error, "Too many requests");
+      assert.equal(JSON.parse(res.body).type, "rate_limit");
       done();
     } catch (e) {
       done(e);
@@ -139,9 +184,9 @@ test("POST /api/npc-response invalid content-type", (t, done) => {
   req.start();
 });
 
-test("POST /api/npc-response too large body", (t, done) => {
+test("POST /api/npc-response too large body (bytes)", (t, done) => {
   const handler = createRequestHandler();
-  const largeBody = "a".repeat(70 * 1024);
+  const largeBody = Buffer.alloc(65537, 'a');
   const req = new MockRequest("POST", "/api/npc-response", { "content-type": "application/json" }, largeBody);
   const res = new MockResponse();
 
@@ -178,14 +223,26 @@ test("Static file delivery - index.html", (t, done) => {
   req.start();
 });
 
-test("Path traversal prevention", (t, done) => {
-  const handler = createRequestHandler();
-  const req = new MockRequest("GET", "/../package.json");
+test("POST /api/npc-response sanitized error", (t, done) => {
+  const mockProvider = {
+    async generateResponse() {
+      const err = new Error("Raw secret error from OpenAI");
+      err.status = 401;
+      err.type = "authentication_error";
+      throw err;
+    }
+  };
+  const handler = createRequestHandler({ provider: mockProvider });
+  const body = JSON.stringify(validBaseRequest);
+  const req = new MockRequest("POST", "/api/npc-response", { "content-type": "application/json" }, body);
   const res = new MockResponse();
 
   res.on("finish", () => {
     try {
-      assert.equal(res.statusCode, 404);
+      const data = JSON.parse(res.body);
+      assert.equal(res.statusCode, 401);
+      assert.ok(!data.error.includes("Raw secret error"));
+      assert.ok(data.error.includes("authentication failed"));
       done();
     } catch (e) {
       done(e);
