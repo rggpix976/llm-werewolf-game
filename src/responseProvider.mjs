@@ -33,7 +33,8 @@ export function validateProviderResponse(value, fallbackProviderName = "unknown"
     usage: isPlainObject(value.usage) ? structuredClone(value.usage) : null,
     notes: Array.isArray(value.notes)
       ? value.notes.filter((note) => typeof note === "string")
-      : []
+      : [],
+    diagnostics: isPlainObject(value.diagnostics) ? structuredClone(value.diagnostics) : undefined
   };
 }
 

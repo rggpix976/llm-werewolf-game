@@ -51,6 +51,49 @@ npm.cmd run web
 
 Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory session from the CLI. Reloading the page or starting a new game resets that session.
 
+### LLM Providers
+
+現在は2つのモードをサポートしています。
+
+#### 1. pseudoモード (デフォルト)
+
+- APIキー不要
+- 決定論的な応答を生成します
+- 開発やテストに使用します
+
+#### 2. openaiモード
+
+- OpenAI Responses APIをサーバー経由で呼び出します
+- 環境変数で有効化し、APIキーが必要です
+- APIキーはブラウザへ送信されず、サーバー側で安全に管理されます
+
+起動例 (PowerShell):
+
+```powershell
+$env:LLM_PROVIDER="openai"
+$env:OPENAI_API_KEY="sk-..."
+npm.cmd run web
+```
+
+起動例 (macOS/Linux):
+
+```bash
+LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
+```
+
+#### 設定項目 (環境変数)
+
+- `LLM_PROVIDER`: `pseudo` または `openai` (デフォルト: `pseudo`)
+- `OPENAI_API_KEY`: OpenAI APIキー (`openai` モードで必須)
+- `OPENAI_MODEL`: 使用するモデル (デフォルト: `gpt-5.4-mini`)
+- `OPENAI_TIMEOUT_MS`: タイムアウト時間 (ms) (デフォルト: `15000`)
+- `OPENAI_MAX_RETRIES`: 失敗時の再試行回数 (デフォルト: `1`)
+- `OPENAI_MAX_OUTPUT_TOKENS`: 最大出力トークン数 (デフォルト: `220`)
+- `OPENAI_MAX_REQUESTS_PER_MINUTE`: 1分間あたりの最大リクエスト数 (デフォルト: `10`)
+- `OPENAI_FALLBACK_TO_PSEUDO`: 一時的なエラー時に `pseudo` モードへ切り替えるか (デフォルト: `true`)
+
+**注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは実APIを呼び出さず、モックを使用します。実APIの確認は利用者が明示的に設定を行ってから実施してください。
+
 ### Developer Mode
 
 ブラウザUIには「Developer Mode」が搭載されています。画面上部のトグルボタンで切り替えることができます。

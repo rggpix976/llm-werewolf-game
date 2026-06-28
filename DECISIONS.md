@@ -53,3 +53,9 @@ The current NPC response is skipped, the failure is recorded in the developer lo
 Game state exists only in memory for the current process or browser session.
 
 Closing the CLI, refreshing the browser, or closing the application discards the current game. The prototype does not use save files, `localStorage`, IndexedDB, or server-side persistence. A new session always starts a new game.
+
+## D-010: Secure Server-Side LLM Integration
+
+OpenAI API keys must never be exposed to the browser.
+
+All LLM calls are handled by the Node.js server. The browser communicates with the server via a local API endpoint (`/api/npc-response`). This ensures that API keys remain secure in the server's environment and allows for centralized rate limiting and auditing.

@@ -17,6 +17,7 @@
 ## Phase 3: Prepare LLM Integration
 
 - Define a response provider interface that can swap pseudo responses for real LLM calls. Done for the provider boundary.
+- Add a secure server-side OpenAI response provider. Done.
 - Build prompts from only the information each NPC is allowed to know. Done for the current prototype.
 - Validate provider output before adding it to logs. Done for the current provider contract.
 - Keep all state mutations in code, never in LLM output.

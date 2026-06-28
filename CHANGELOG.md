@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-27
+
+- Added a secure server-side OpenAI response provider.
+- Implemented `OpenAIResponseProvider` using OpenAI Responses API.
+- Added environment variable configuration (`LLM_PROVIDER`, `OPENAI_API_KEY`, etc.).
+- Refactored `src/webServer.mjs` to support API endpoints and better testability.
+- Added `GET /api/runtime-config` and `POST /api/npc-response` endpoints.
+- Implemented browser-side `HttpResponseProvider` and `SessionManager` for stale response handling.
+- Added support for transient error fallback to `PseudoResponseProvider`.
+- Added comprehensive unit tests for configuration, OpenAI provider, and API endpoints.
+
 ## 2026-06-26
 
 - Added Developer Mode to the browser UI.

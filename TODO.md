@@ -11,6 +11,7 @@
 
 ## Soon
 
+- [x] Add secure server-side OpenAI response provider.
 - [ ] Improve natural language intent parsing.
 - [ ] Improve suspicion score updates from nuanced player questions and NPC responses.
 - [ ] Add better validation for generated NPC utterances.
