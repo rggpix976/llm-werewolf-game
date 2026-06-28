@@ -461,3 +461,122 @@ test("finished games reject further vote and night progression", async () => {
     stateBefore
   );
 });
+
+test("getDeveloperDiagnostics returns a structured, read-only clone of the state and logs", async () => {
+  const game = createSampleGame();
+  const initialLogCount = game.state.developerLog.length;
+
+  const diagnostics = game.getDeveloperDiagnostics();
+  assert.ok(diagnostics.snapshot);
+  assert.ok(Array.isArray(diagnostics.developerLogEntries));
+  assert.equal(diagnostics.developerLogEntries.length, initialLogCount);
+  assert.equal(diagnostics.nextLogCursor, initialLogCount);
+
+  // Read-only check: snapshot
+  diagnostics.snapshot.day = 999;
+  assert.equal(game.state.day, 1);
+
+  // Read-only check: nested player state
+  diagnostics.snapshot.players[0].role = "MUTATED";
+  assert.notEqual(game.state.players[0].role, "MUTATED");
+
+  // Read-only check: log entries
+  diagnostics.developerLogEntries[0].kind = "MUTATED";
+  assert.notEqual(game.state.developerLog[0].kind, "MUTATED");
+
+  // Incremental fetch check
+  await game.dispatchPlayerAction({
+    type: "ask_npc",
+    target: "npc2",
+    input: "Hello"
+  });
+
+  const incremental = game.getDeveloperDiagnostics({ logCursor: diagnostics.nextLogCursor });
+  assert.equal(incremental.developerLogEntries.length > 0, true);
+  assert.equal(incremental.nextLogCursor > diagnostics.nextLogCursor, true);
+  assert.equal(incremental.developerLogEntries[0].kind, "phase_change");
+});
+
+test("developer log contains promptPreview, evidenceUsed, and provider metadata", async () => {
+  const responseProvider = {
+    name: "test-provider",
+    async generateResponse() {
+      return {
+        text: "Response text",
+        providerName: "test-provider",
+        model: "test-model",
+        usage: { inputTokens: 10, outputTokens: 5 },
+        notes: ["note1"]
+      };
+    }
+  };
+  const game = WerewolfGame.create({ responseProvider });
+
+  await game.dispatchPlayerAction({
+    type: "ask_npc",
+    target: "npc1",
+    input: "Tell me your role"
+  });
+
+  const log = game.state.developerLog.find(e => e.kind === "npc_response_generated");
+  assert.ok(log);
+  assert.ok(log.detail.promptPreview);
+  assert.ok(Array.isArray(log.detail.evidenceUsed));
+  assert.equal(log.detail.provider.providerName, "test-provider");
+  assert.equal(log.detail.provider.model, "test-model");
+  assert.deepEqual(log.detail.provider.usage, { inputTokens: 10, outputTokens: 5 });
+});
+
+test("provider failure log contains error details and evidence", async () => {
+  const game = WerewolfGame.create({
+    responseProvider: {
+      name: "failing-provider",
+      generateResponse: () => { throw new Error("intentional failure"); }
+    }
+  });
+
+  await game.dispatchPlayerAction({
+    type: "ask_npc",
+    target: "npc1",
+    input: "Fail now"
+  });
+
+  const log = game.state.developerLog.find(e => e.kind === "npc_response_provider_error");
+  assert.ok(log);
+  assert.equal(log.detail.providerName, "failing-provider");
+  assert.equal(log.detail.errorType, "Error");
+  assert.equal(log.detail.message, "intentional failure");
+  assert.ok(log.detail.promptPreview);
+  assert.ok(Array.isArray(log.detail.evidenceUsed));
+});
+
+test("public snapshot continues to hide sensitive information after changes", () => {
+  const game = createSampleGame();
+  const snapshot = game.getPublicSnapshot();
+
+  const sensitiveKeys = [
+    "role", "team", "knownInfo", "hiddenInfo",
+    "suspicionScores", "privateMemory", "conversationPolicy",
+    "developerLog", "developerLogEntries", "snapshot"
+  ];
+
+  function check(obj) {
+    if (!obj || typeof obj !== "object") return;
+    for (const key of Object.keys(obj)) {
+      assert.equal(sensitiveKeys.includes(key), false, `Sensitive key '${key}' leaked in public snapshot`);
+      check(obj[key]);
+    }
+  }
+
+  check(snapshot);
+});
+
+test("getDeveloperDiagnostics has no side effects on game state", () => {
+  const game = createSampleGame();
+  const stateBefore = JSON.stringify(game.state);
+
+  game.getDeveloperDiagnostics();
+  game.getDeveloperDiagnostics({ logCursor: 5 });
+
+  assert.equal(JSON.stringify(game.state), stateBefore);
+});

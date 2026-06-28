@@ -266,6 +266,121 @@ textarea {
   color: var(--muted);
 }
 
+/* Developer Mode */
+.header-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.developer-panel {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background-color: #fef2f2;
+  border: 2px solid #ef4444;
+  border-radius: 8px;
+}
+
+.developer-panel[hidden] {
+  display: none;
+}
+
+.dev-section {
+  margin-bottom: 2rem;
+}
+
+.dev-section-title {
+  font-size: 1.25rem;
+  font-weight: bold;
+  color: #b91c1c;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #fecaca;
+  padding-bottom: 0.25rem;
+}
+
+.dev-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.dev-card {
+  background-color: #ffffff;
+  padding: 1rem;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+}
+
+.dev-card-title {
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+}
+
+.dev-label {
+  font-size: 0.8rem;
+  color: #7f1d1d;
+  font-weight: bold;
+  margin-top: 0.5rem;
+}
+
+.dev-value {
+  font-family: monospace;
+  font-size: 0.85rem;
+  background-color: #fef2f2;
+  padding: 0.2rem 0.4rem;
+  border-radius: 2px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.dev-log-filters {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  align-items: center;
+}
+
+.dev-log-table-container {
+  overflow-x: auto;
+}
+
+.dev-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.dev-log-table th, .dev-log-table td {
+  border: 1px solid #fecaca;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.dev-log-table th {
+  background-color: #fee2e2;
+}
+
+.dev-log-entry-kind {
+  font-weight: bold;
+}
+
+details.dev-details {
+  margin-top: 0.5rem;
+  cursor: pointer;
+}
+
+details.dev-details summary {
+  font-size: 0.8rem;
+  color: #b91c1c;
+}
+
+.dev-pre {
+  font-size: 0.75rem;
+  background-color: #f8fafc;
+  padding: 0.5rem;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
 @media (max-width: 780px) {
   .app-shell {
     width: min(100% - 20px, 720px);

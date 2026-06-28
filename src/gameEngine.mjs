@@ -707,11 +707,11 @@ export class WerewolfGame {
   }
 
   createDeveloperSnapshot() {
-    return {
+    return structuredClone({
       day: this.state.day,
       phase: this.state.phase,
-      alivePlayers: [...this.state.alivePlayers],
-      deadPlayers: [...this.state.deadPlayers],
+      alivePlayers: this.state.alivePlayers,
+      deadPlayers: this.state.deadPlayers,
       winner: this.state.winner,
       players: this.state.players.map((player) => ({
         id: player.id,
@@ -727,11 +727,22 @@ export class WerewolfGame {
         voteHistory: player.voteHistory,
         conversationPolicy: player.conversationPolicy
       }))
-    };
+    });
   }
 
   getDeveloperSnapshot() {
     return this.createDeveloperSnapshot();
+  }
+
+  getDeveloperDiagnostics(options = {}) {
+    const logCursor = Number.isInteger(options.logCursor) ? options.logCursor : 0;
+    const entries = this.state.developerLog.slice(logCursor);
+
+    return {
+      snapshot: this.createDeveloperSnapshot(),
+      developerLogEntries: structuredClone(entries),
+      nextLogCursor: this.state.developerLog.length
+    };
   }
 
   getPublicSnapshot() {
