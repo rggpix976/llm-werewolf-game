@@ -31,6 +31,7 @@ startNewGame();
 elements.devModeToggle.addEventListener("click", () => {
   isDevMode = !isDevMode;
   elements.devModeToggle.setAttribute("aria-pressed", isDevMode);
+  elements.devModeToggle.setAttribute("aria-expanded", isDevMode);
   elements.devModeToggle.textContent = `Developer Mode: ${isDevMode ? "ON" : "OFF"}`;
   elements.developerPanel.hidden = !isDevMode;
 
@@ -90,6 +91,8 @@ function startNewGame() {
   logCursor = snapshot.playerLog.length;
   devLogCursor = 0;
   devLogEntries = [];
+  devLogFilterKind = "";
+  devLogFilterNpc = "";
   canRunNight = false;
   render(snapshot);
   if (isDevMode) {
@@ -243,8 +246,15 @@ function renderDevEventLog() {
     refreshDiagnostics();
   });
 
+  const kindLabel = document.createElement("label");
+  kindLabel.className = "dev-label";
+  kindLabel.textContent = "Filter by kind:";
+  kindLabel.setAttribute("for", "devLogKindFilter");
+  kindFilter.id = "devLogKindFilter";
+
   const npcFilter = document.createElement("select");
-  const npcs = ["", ...new Set(devLogEntries.filter(e => e.detail?.npcId).map(e => e.detail.npcId))].sort();
+  npcFilter.id = "devLogNpcFilter";
+  const npcs = ["", ...snapshot.players.map(p => p.id)].sort();
   npcs.forEach(n => {
     const opt = document.createElement("option");
     opt.value = n;
@@ -257,7 +267,12 @@ function renderDevEventLog() {
     refreshDiagnostics();
   });
 
-  filters.append(createDevLabel("Filter by kind:"), kindFilter, createDevLabel("Filter by NPC:"), npcFilter);
+  const npcLabel = document.createElement("label");
+  npcLabel.className = "dev-label";
+  npcLabel.textContent = "Filter by NPC:";
+  npcLabel.setAttribute("for", "devLogNpcFilter");
+
+  filters.append(kindLabel, kindFilter, npcLabel, npcFilter);
 
   const tableContainer = document.createElement("div");
   tableContainer.className = "dev-log-table-container";
@@ -272,7 +287,7 @@ function renderDevEventLog() {
   const tbody = document.createElement("tbody");
   const filtered = devLogEntries.filter(e => {
     if (devLogFilterKind && e.kind !== devLogFilterKind) return false;
-    if (devLogFilterNpc && e.detail?.npcId !== devLogFilterNpc) return false;
+    if (devLogFilterNpc && !developerLogReferencesNpc(e, devLogFilterNpc)) return false;
     return true;
   });
 
@@ -321,7 +336,7 @@ function renderResponseDiagnostics() {
 
   const responseLogs = devLogEntries.filter(e =>
     e.kind === "npc_response_generated" || e.kind === "npc_response_provider_error"
-  ).reverse().slice(0, 5); // Show last 5
+  ).reverse();
 
   if (responseLogs.length === 0) {
     const empty = document.createElement("div");
@@ -403,6 +418,27 @@ function createDevDetails(obj) {
   pre.textContent = JSON.stringify(obj, null, 2);
   details.append(summary, pre);
   return details;
+}
+
+function developerLogReferencesNpc(entry, npcId) {
+  if (!npcId) return true;
+  const d = entry.detail || {};
+
+  if (d.npcId === npcId) return true;
+  if (d.targetId === npcId) return true;
+  if (d.actorId === npcId) return true;
+  if (d.seerId === npcId) return true;
+  if (d.werewolfId === npcId) return true;
+  if (d.executedId === npcId) return true;
+
+  if (Array.isArray(d.mentionedIds) && d.mentionedIds.includes(npcId)) return true;
+  if (Array.isArray(d.roles) && d.roles.some(p => p.id === npcId)) return true;
+  if (Array.isArray(d.votes) && d.votes.some(v => v.voterId === npcId || v.targetId === npcId)) return true;
+
+  // snapshot.players check if the detail IS the snapshot
+  if (Array.isArray(d.players) && d.players.some(p => p.id === npcId)) return true;
+
+  return false;
 }
 
 function renderStatus() {

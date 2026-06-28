@@ -1,6 +1,0 @@
-
-> llm-werewolf-prototype@0.1.0 web
-> node src/webServer.mjs
-
-Browser UI available at http://127.0.0.1:4173/
-Terminated

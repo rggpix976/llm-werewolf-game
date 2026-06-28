@@ -735,7 +735,10 @@ export class WerewolfGame {
   }
 
   getDeveloperDiagnostics(options = {}) {
-    const logCursor = Number.isInteger(options.logCursor) ? options.logCursor : 0;
+    let logCursor = Number.isInteger(options.logCursor) ? options.logCursor : 0;
+    if (logCursor < 0) logCursor = 0;
+    if (logCursor > this.state.developerLog.length) logCursor = this.state.developerLog.length;
+
     const entries = this.state.developerLog.slice(logCursor);
 
     return {

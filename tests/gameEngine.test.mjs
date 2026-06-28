@@ -497,6 +497,41 @@ test("getDeveloperDiagnostics returns a structured, read-only clone of the state
   assert.equal(incremental.developerLogEntries[0].kind, "phase_change");
 });
 
+test("getDeveloperDiagnostics clamps out-of-range cursors", () => {
+  const game = createSampleGame();
+  const total = game.state.developerLog.length;
+
+  const negative = game.getDeveloperDiagnostics({ logCursor: -1 });
+  assert.equal(negative.developerLogEntries.length, total);
+
+  const overflow = game.getDeveloperDiagnostics({ logCursor: total + 100 });
+  assert.equal(overflow.developerLogEntries.length, 0);
+  assert.equal(overflow.nextLogCursor, total);
+});
+
+test("developer diagnostics return deep read-only clones of nested objects", () => {
+  const game = createSampleGame();
+  const diagnostics = game.getDeveloperDiagnostics();
+  const player = diagnostics.snapshot.players[0];
+
+  // knownInfo
+  player.knownInfo.push({ day: 99, text: "CLONE_TEST" });
+  assert.equal(game.state.players[0].knownInfo.some(i => i.text === "CLONE_TEST"), false);
+
+  // suspicionScores
+  player.suspicionScores.npc2 = 999;
+  assert.notEqual(game.state.players[0].suspicionScores.npc2, 999);
+
+  // conversationPolicy
+  player.conversationPolicy.forbidden.push("CLONE_TEST");
+  assert.equal(game.state.players[0].conversationPolicy.forbidden.includes("CLONE_TEST"), false);
+
+  // nested developer log data
+  const entry = diagnostics.developerLogEntries[0];
+  entry.detail.roles[0].id = "CLONE_TEST";
+  assert.notEqual(game.state.developerLog[0].detail.roles[0].id, "CLONE_TEST");
+});
+
 test("developer log contains promptPreview, evidenceUsed, and provider metadata", async () => {
   const responseProvider = {
     name: "test-provider",
@@ -579,4 +614,39 @@ test("getDeveloperDiagnostics has no side effects on game state", () => {
   game.getDeveloperDiagnostics({ logCursor: 5 });
 
   assert.equal(JSON.stringify(game.state), stateBefore);
+});
+
+test("developer log correctly maps NPCs for various log kinds", async () => {
+  const game = createSampleGame();
+
+  // npc_response_generated (npcId)
+  await game.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "Hi" });
+
+  // vote_resolved (votes[].voterId, votes[].targetId, executedId)
+  await game.dispatchPlayerAction({ type: "advance_vote" });
+
+  // seer_action (seerId, targetId)
+  // werewolf_attack (werewolfId, targetId)
+  await game.dispatchPlayerAction({ type: "run_night" });
+
+  const logs = game.state.developerLog;
+
+  // Aoi (npc1) should be found in: initial_roles, initial_player_states, npc_response_generated, vote_resolved, seer_action
+  const aoiLogs = logs.filter(e => {
+    const d = e.detail || {};
+    if (d.npcId === "npc1") return true;
+    if (d.actorId === "npc1") return true;
+    if (d.seerId === "npc1") return true;
+    if (d.werewolfId === "npc1") return true;
+    if (d.executedId === "npc1") return true;
+    if (Array.isArray(d.roles) && d.roles.some(p => p.id === "npc1")) return true;
+    if (Array.isArray(d.players) && d.players.some(p => p.id === "npc1")) return true;
+    if (Array.isArray(d.votes) && d.votes.some(v => v.voterId === "npc1" || v.targetId === "npc1")) return true;
+    return false;
+  });
+
+  assert.ok(aoiLogs.length >= 5);
+  assert.ok(aoiLogs.some(e => e.kind === "npc_response_generated"));
+  assert.ok(aoiLogs.some(e => e.kind === "vote_resolved"));
+  assert.ok(aoiLogs.some(e => e.kind === "seer_action"));
 });
