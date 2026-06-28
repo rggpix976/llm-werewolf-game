@@ -1,0 +1,190 @@
+name: PR Review Bundle
+
+on:
+  pull_request:
+    branches:
+      - master
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Validate and create review bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Install dependencies
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm ci
+
+      - name: Collect diff and validation logs
+        id: collect
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+
+          mkdir -p review-bundle
+
+          git fetch --no-tags origin \
+            "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+          BASE_COMMIT="$(
+            git merge-base "origin/$BASE_REF" HEAD
+          )"
+
+          git diff \
+            --binary \
+            --full-index \
+            "$BASE_COMMIT..HEAD" \
+            > review-bundle/jules-review.patch
+
+          git diff \
+            --name-status \
+            "$BASE_COMMIT..HEAD" \
+            > review-bundle/changed-files.txt
+
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const event = JSON.parse(
+            fs.readFileSync(
+              process.env.GITHUB_EVENT_PATH,
+              "utf8"
+            )
+          );
+
+          const pr = event.pull_request;
+
+          const info = {
+            number: pr.number,
+            title: pr.title,
+            state: pr.state,
+            url: pr.html_url,
+            baseRefName: pr.base.ref,
+            headRefName: pr.head.ref,
+            baseSha: pr.base.sha,
+            headSha: pr.head.sha,
+            body: pr.body
+          };
+
+          fs.writeFileSync(
+            "review-bundle/pr-info.json",
+            `${JSON.stringify(info, null, 2)}\n`
+          );
+          NODE
+
+          set +e
+
+          npm test \
+            > review-bundle/npm-test.log \
+            2>&1
+
+          TEST_EXIT=$?
+
+          echo "exit_code=$TEST_EXIT" \
+            >> review-bundle/npm-test.log
+
+          npm run sample \
+            > review-bundle/npm-sample.log \
+            2>&1
+
+          SAMPLE_EXIT=$?
+
+          echo "exit_code=$SAMPLE_EXIT" \
+            >> review-bundle/npm-sample.log
+
+          git diff \
+            --check \
+            "$BASE_COMMIT..HEAD" \
+            > review-bundle/diff-check.log \
+            2>&1
+
+          DIFF_EXIT=$?
+
+          {
+            echo "base_commit=$BASE_COMMIT"
+            echo "exit_code=$DIFF_EXIT"
+          } >> review-bundle/diff-check.log
+
+          set -e
+
+          {
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "pr_number=$PR_NUMBER"
+            echo "pr_url=$PR_URL"
+            echo "base_ref=$BASE_REF"
+            echo "base_commit=$BASE_COMMIT"
+            echo "head_sha=$HEAD_SHA"
+            echo "npm_test_exit_code=$TEST_EXIT"
+            echo "npm_sample_exit_code=$SAMPLE_EXIT"
+            echo "diff_check_exit_code=$DIFF_EXIT"
+          } > review-bundle/summary.txt
+
+          {
+            echo "## PR validation"
+            echo ""
+            echo "- npm test: $TEST_EXIT"
+            echo "- npm run sample: $SAMPLE_EXIT"
+            echo "- git diff --check: $DIFF_EXIT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "test_exit=$TEST_EXIT" \
+            >> "$GITHUB_OUTPUT"
+
+          echo "sample_exit=$SAMPLE_EXIT" \
+            >> "$GITHUB_OUTPUT"
+
+          echo "diff_exit=$DIFF_EXIT" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Upload review bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-bundle-pr-${{ github.event.pull_request.number }}
+          path: review-bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce validation result
+        if: always()
+        shell: bash
+        run: |
+          test \
+            "${{ steps.collect.outputs.test_exit }}" \
+            = "0"
+
+          test \
+            "${{ steps.collect.outputs.sample_exit }}" \
+            = "0"
+
+          test \
+            "${{ steps.collect.outputs.diff_exit }}" \
+            = "0"
