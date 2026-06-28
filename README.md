@@ -51,6 +51,20 @@ npm.cmd run web
 
 Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory session from the CLI. Reloading the page or starting a new game resets that session.
 
+### Developer Mode
+
+ブラウザUIには「Developer Mode」が搭載されています。画面上部のトグルボタンで切り替えることができます。
+
+- **Developer Modeで確認できる情報**:
+  - ゲーム診断サマリー（日、フェーズ、生存者、ログ件数など）
+  - 各NPCの内部状態（役職、陣営、既知の情報、秘密の情報、疑念スコア、記憶、ポリシーなど）
+  - 開発者イベントログ（全NPCの行動、内部判定の履歴）
+  - LLM/プロバイダー診断（プロンプトのプレビュー、使用された根拠、使用トークン、エラー詳細）
+- **注意点**:
+  - 初期状態はOFFです。
+  - ローカルでの診断およびデバッグ用であり、認証・認可の境界ではありません。
+  - 公開用のUIは引き続き `getPublicSnapshot()` を介して取得される制限された情報のみを使用します。
+
 ## 構成
 
 - `src/gameEngine.mjs`

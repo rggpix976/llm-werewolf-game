@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-06-25
+Last updated: 2026-06-26
 
 ## Current State
 
@@ -13,25 +13,27 @@ Last updated: 2026-06-25
 - UI-independent asynchronous action API is available through `await dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - A first browser UI adapter is available through `npm.cmd run web`.
+- **Developer Mode** is implemented in the browser UI, allowing inspection of roles, hidden info, prompts, and provider diagnostics.
+- `getDeveloperDiagnostics()` provides a read-only, structured view of the internal game state.
 - Player-facing logs and developer logs are separated.
 - Minimal suspicion updates from accusatory player questions are implemented.
-- Core game and response-provider invariants are covered by 16 automated tests using Node.js `node:test`.
+- Core game, response-provider invariants, and developer diagnostics are covered by 24 automated tests using Node.js `node:test`.
 
 ## Last Verified
 
-- Date: 2026-06-25
+- Date: 2026-06-26
 - Commands:
-  - `npm.cmd test`
-  - `npm.cmd run sample`
-  - `npm.cmd run web`
+  - `npm test`
+  - `npm run sample`
+  - `npm run web`
   - `git diff --check`
-- Result: all 16 automated tests passed, sample play audit checks were all OK, browser UI manual checks passed, and no whitespace errors were found.
+- Result: all 24 automated tests passed, sample play audit checks were all OK, browser UI Developer Mode manual checks passed, and no whitespace errors were found.
 
 ## Next Recommended Task
 
-1. Add developer mode to the browser UI for roles, known info, hidden info, prompts, and evidence logs.
-2. Add a real LLM provider after provider-level validation and configuration are designed.
-3. Improve natural language intent parsing and NPC-response-driven suspicion updates.
+1. Add a real LLM provider (Gemini, OpenAI, or Anthropic) after provider-level validation and configuration are designed.
+2. Improve natural language intent parsing and NPC-response-driven suspicion updates.
+3. Improve suspicion score updates from nuanced player questions and NPC responses.
 
 ## Read This First Next Time
 

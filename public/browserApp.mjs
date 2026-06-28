@@ -11,15 +11,36 @@ const elements = {
   voteButton: document.querySelector("#voteButton"),
   nightButton: document.querySelector("#nightButton"),
   logList: document.querySelector("#logList"),
-  voteList: document.querySelector("#voteList")
+  voteList: document.querySelector("#voteList"),
+  devModeToggle: document.querySelector("#devModeToggle"),
+  developerPanel: document.querySelector("#developerPanel")
 };
 
 let game;
 let snapshot;
 let logCursor = 0;
+let devLogCursor = 0;
 let canRunNight = false;
+let isDevMode = false;
+let devLogEntries = [];
+let devLogFilterKind = "";
+let devLogFilterNpc = "";
 
 startNewGame();
+
+elements.devModeToggle.addEventListener("click", () => {
+  isDevMode = !isDevMode;
+  elements.devModeToggle.setAttribute("aria-pressed", isDevMode);
+  elements.devModeToggle.setAttribute("aria-expanded", isDevMode);
+  elements.devModeToggle.textContent = `Developer Mode: ${isDevMode ? "ON" : "OFF"}`;
+  elements.developerPanel.hidden = !isDevMode;
+
+  if (isDevMode) {
+    refreshDiagnostics();
+  } else {
+    elements.developerPanel.replaceChildren();
+  }
+});
 
 elements.newGameButton.addEventListener("click", () => {
   startNewGame();
@@ -68,8 +89,15 @@ function startNewGame() {
   });
   snapshot = game.getPublicSnapshot();
   logCursor = snapshot.playerLog.length;
+  devLogCursor = 0;
+  devLogEntries = [];
+  devLogFilterKind = "";
+  devLogFilterNpc = "";
   canRunNight = false;
   render(snapshot);
+  if (isDevMode) {
+    refreshDiagnostics();
+  }
 }
 
 async function dispatch(action) {
@@ -81,6 +109,9 @@ async function dispatch(action) {
     });
     logCursor = result.nextLogCursor;
     render(result.publicSnapshot);
+    if (isDevMode) {
+      refreshDiagnostics();
+    }
     return result;
   } finally {
     setBusy(false);
@@ -95,6 +126,319 @@ function render(nextSnapshot) {
   renderLogs();
   renderVotes();
   updateControls();
+}
+
+function refreshDiagnostics() {
+  if (!isDevMode) return;
+
+  const diagnostics = game.getDeveloperDiagnostics({ logCursor: devLogCursor });
+  devLogCursor = diagnostics.nextLogCursor;
+  devLogEntries.push(...diagnostics.developerLogEntries);
+
+  renderDeveloperPanel(diagnostics.snapshot);
+}
+
+function renderDeveloperPanel(devSnapshot) {
+  elements.developerPanel.replaceChildren();
+
+  elements.developerPanel.append(
+    renderDevSummary(devSnapshot),
+    renderNpcInternalStates(devSnapshot),
+    renderDevEventLog(),
+    renderResponseDiagnostics()
+  );
+}
+
+function renderDevSummary(devSnapshot) {
+  const section = document.createElement("div");
+  section.className = "dev-section";
+
+  const title = document.createElement("div");
+  title.className = "dev-section-title";
+  title.textContent = "1. Game Diagnostics Summary";
+
+  const grid = document.createElement("div");
+  grid.className = "dev-grid";
+
+  const data = {
+    day: devSnapshot.day,
+    phase: devSnapshot.phase,
+    winner: devSnapshot.winner || "none",
+    alivePlayers: devSnapshot.alivePlayers.join(", "),
+    deadPlayers: devSnapshot.deadPlayers.join(", ") || "none",
+    developerLogCount: devLogEntries.length
+  };
+
+  for (const [key, value] of Object.entries(data)) {
+    grid.append(createDevCard(key, value));
+  }
+
+  section.append(title, grid);
+  return section;
+}
+
+function renderNpcInternalStates(devSnapshot) {
+  const section = document.createElement("div");
+  section.className = "dev-section";
+
+  const title = document.createElement("div");
+  title.className = "dev-section-title";
+  title.textContent = "2. NPC Internal State";
+
+  const grid = document.createElement("div");
+  grid.className = "dev-grid";
+
+  for (const player of devSnapshot.players) {
+    const card = document.createElement("div");
+    card.className = "dev-card";
+
+    const name = document.createElement("div");
+    name.className = "dev-card-title";
+    name.textContent = `${player.name} (${player.id})`;
+
+    card.append(name);
+
+    const fields = [
+      "role", "team", "alive", "knownInfo", "hiddenInfo",
+      "suspicionScores", "publicClaims", "privateMemory",
+      "voteHistory", "conversationPolicy"
+    ];
+
+    for (const field of fields) {
+      card.append(createDevLabel(field));
+      const value = player[field];
+      if (typeof value === "object") {
+        card.append(createDevDetails(value));
+      } else {
+        card.append(createDevValue(value));
+      }
+    }
+
+    grid.append(card);
+  }
+
+  section.append(title, grid);
+  return section;
+}
+
+function renderDevEventLog() {
+  const section = document.createElement("div");
+  section.className = "dev-section";
+
+  const title = document.createElement("div");
+  title.className = "dev-section-title";
+  title.textContent = "3. Developer Event Log";
+
+  const filters = document.createElement("div");
+  filters.className = "dev-log-filters";
+
+  const kindFilter = document.createElement("select");
+  const kinds = ["", ...new Set(devLogEntries.map(e => e.kind))].sort();
+  kinds.forEach(k => {
+    const opt = document.createElement("option");
+    opt.value = k;
+    opt.textContent = k || "All kinds";
+    kindFilter.append(opt);
+  });
+  kindFilter.value = devLogFilterKind;
+  kindFilter.addEventListener("change", (e) => {
+    devLogFilterKind = e.target.value;
+    refreshDiagnostics();
+  });
+
+  const kindLabel = document.createElement("label");
+  kindLabel.className = "dev-label";
+  kindLabel.textContent = "Filter by kind:";
+  kindLabel.setAttribute("for", "devLogKindFilter");
+  kindFilter.id = "devLogKindFilter";
+
+  const npcFilter = document.createElement("select");
+  npcFilter.id = "devLogNpcFilter";
+  const npcs = ["", ...snapshot.players.map(p => p.id)].sort();
+  npcs.forEach(n => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n || "All NPCs";
+    npcFilter.append(opt);
+  });
+  npcFilter.value = devLogFilterNpc;
+  npcFilter.addEventListener("change", (e) => {
+    devLogFilterNpc = e.target.value;
+    refreshDiagnostics();
+  });
+
+  const npcLabel = document.createElement("label");
+  npcLabel.className = "dev-label";
+  npcLabel.textContent = "Filter by NPC:";
+  npcLabel.setAttribute("for", "devLogNpcFilter");
+
+  filters.append(kindLabel, kindFilter, npcLabel, npcFilter);
+
+  const tableContainer = document.createElement("div");
+  tableContainer.className = "dev-log-table-container";
+
+  const table = document.createElement("table");
+  table.className = "dev-log-table";
+
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>Day</th><th>Phase</th><th>Kind</th><th>Detail</th></tr>";
+  table.append(thead);
+
+  const tbody = document.createElement("tbody");
+  const filtered = devLogEntries.filter(e => {
+    if (devLogFilterKind && e.kind !== devLogFilterKind) return false;
+    if (devLogFilterNpc && !developerLogReferencesNpc(e, devLogFilterNpc)) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td colspan='4' class='empty-state'>No logs matching filter</td>";
+    tbody.append(tr);
+  } else {
+    for (const entry of filtered) {
+      const tr = document.createElement("tr");
+
+      const day = document.createElement("td");
+      day.textContent = entry.day;
+
+      const phase = document.createElement("td");
+      phase.textContent = formatPhase(entry.phase);
+
+      const kind = document.createElement("td");
+      kind.className = "dev-log-entry-kind";
+      kind.textContent = entry.kind;
+
+      const detail = document.createElement("td");
+      detail.append(createDevDetails(entry.detail));
+
+      tr.append(day, phase, kind, detail);
+      tbody.append(tr);
+    }
+  }
+
+  table.append(tbody);
+  tableContainer.append(table);
+  section.append(title, filters, tableContainer);
+  return section;
+}
+
+function renderResponseDiagnostics() {
+  const section = document.createElement("div");
+  section.className = "dev-section";
+
+  const title = document.createElement("div");
+  title.className = "dev-section-title";
+  title.textContent = "4. LLM / Provider Diagnostics";
+
+  const grid = document.createElement("div");
+  grid.className = "dev-grid";
+
+  const responseLogs = devLogEntries.filter(e =>
+    e.kind === "npc_response_generated" || e.kind === "npc_response_provider_error"
+  ).reverse();
+
+  if (responseLogs.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "No response diagnostics yet";
+    section.append(title, empty);
+    return section;
+  }
+
+  for (const entry of responseLogs) {
+    const card = document.createElement("div");
+    card.className = "dev-card";
+
+    const name = document.createElement("div");
+    name.className = "dev-card-title";
+    name.textContent = `${entry.detail.npcName} (${entry.detail.npcId}) - Day ${entry.day}`;
+
+    card.append(name);
+
+    if (entry.kind === "npc_response_generated") {
+      card.append(createDevLabel("playerInput"), createDevValue(entry.detail.playerInput));
+      card.append(createDevLabel("response"), createDevValue(entry.detail.response));
+      card.append(createDevLabel("evidenceUsed"), createDevDetails(entry.detail.evidenceUsed));
+      card.append(createDevLabel("disclosedHiddenInfo"), createDevValue(entry.detail.disclosedHiddenInfo));
+      card.append(createDevLabel("promptPreview"), createDevDetails(entry.detail.promptPreview));
+
+      const provider = entry.detail.provider || {};
+      card.append(createDevLabel("providerName"), createDevValue(provider.providerName));
+      card.append(createDevLabel("model"), createDevValue(provider.model));
+      card.append(createDevLabel("usage"), createDevDetails(provider.usage));
+      card.append(createDevLabel("notes"), createDevDetails(provider.notes));
+    } else {
+      // Error
+      card.append(createDevLabel("STATUS"), createDevValue("ERROR", "danger"));
+      card.append(createDevLabel("playerInput"), createDevValue(entry.detail.playerInput));
+      card.append(createDevLabel("providerName"), createDevValue(entry.detail.providerName));
+      card.append(createDevLabel("errorType"), createDevValue(entry.detail.errorType));
+      card.append(createDevLabel("message"), createDevValue(entry.detail.message));
+      card.append(createDevLabel("evidenceUsed"), createDevDetails(entry.detail.evidenceUsed));
+      card.append(createDevLabel("promptPreview"), createDevDetails(entry.detail.promptPreview));
+    }
+
+    grid.append(card);
+  }
+
+  section.append(title, grid);
+  return section;
+}
+
+function createDevCard(label, value) {
+  const card = document.createElement("div");
+  card.className = "dev-card";
+  card.append(createDevLabel(label), createDevValue(value));
+  return card;
+}
+
+function createDevLabel(text) {
+  const label = document.createElement("div");
+  label.className = "dev-label";
+  label.textContent = text;
+  return label;
+}
+
+function createDevValue(value, type = "") {
+  const div = document.createElement("div");
+  div.className = "dev-value";
+  if (type === "danger") div.style.color = "#ef4444";
+  div.textContent = typeof value === "string" ? value : JSON.stringify(value);
+  return div;
+}
+
+function createDevDetails(obj) {
+  const details = document.createElement("details");
+  details.className = "dev-details";
+  const summary = document.createElement("summary");
+  summary.textContent = "View details";
+  const pre = document.createElement("pre");
+  pre.className = "dev-pre";
+  pre.textContent = JSON.stringify(obj, null, 2);
+  details.append(summary, pre);
+  return details;
+}
+
+function developerLogReferencesNpc(entry, npcId) {
+  if (!npcId) return true;
+  const d = entry.detail || {};
+
+  if (d.npcId === npcId) return true;
+  if (d.targetId === npcId) return true;
+  if (d.actorId === npcId) return true;
+  if (d.seerId === npcId) return true;
+  if (d.werewolfId === npcId) return true;
+  if (d.executedId === npcId) return true;
+
+  if (Array.isArray(d.mentionedIds) && d.mentionedIds.includes(npcId)) return true;
+  if (Array.isArray(d.roles) && d.roles.some(p => p.id === npcId)) return true;
+  if (Array.isArray(d.votes) && d.votes.some(v => v.voterId === npcId || v.targetId === npcId)) return true;
+
+  // snapshot.players check if the detail IS the snapshot
+  if (Array.isArray(d.players) && d.players.some(p => p.id === npcId)) return true;
+
+  return false;
 }
 
 function renderStatus() {

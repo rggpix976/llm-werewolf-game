@@ -11,14 +11,12 @@
 
 ## Soon
 
-- [ ] Add browser developer mode for roles, known info, prompts, and evidence logs.
 - [ ] Improve natural language intent parsing.
 - [ ] Improve suspicion score updates from nuanced player questions and NPC responses.
 - [ ] Add better validation for generated NPC utterances.
 
 ## Later
 
-- [ ] Add developer mode UI.
 - [ ] Add 9-player village support.
 - [ ] Add medium, knight, and madman roles.
 - [ ] Add richer character personalities and dialogue policies.
