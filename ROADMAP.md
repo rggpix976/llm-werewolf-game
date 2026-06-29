@@ -19,6 +19,7 @@
 - Define a response provider interface that can swap pseudo responses for real LLM calls. Done.
 - Add a secure server-side OpenAI response provider using the official Responses API. Done.
 - Build prompts from only the information each NPC is allowed to know. Done.
+- Redact private evidence and enforce factual grounding in server-side instructions. Done.
 - Validate provider output and handle transient failures with fallback. Done.
 - Keep all state mutations in code, never in LLM output. Done.
 

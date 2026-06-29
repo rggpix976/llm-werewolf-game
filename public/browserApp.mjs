@@ -421,6 +421,9 @@ function renderResponseDiagnostics() {
       card.append(createDevLabel("providerName"), createDevValue(entry.detail.providerName));
       card.append(createDevLabel("errorType"), createDevValue(entry.detail.errorType));
       card.append(createDevLabel("message"), createDevValue(entry.detail.message));
+      if (entry.detail.diagnostics) {
+        card.append(createDevLabel("diagnostics"), createDevDetails(entry.detail.diagnostics));
+      }
       card.append(createDevLabel("evidenceUsed"), createDevDetails(entry.detail.evidenceUsed));
       card.append(createDevLabel("promptPreview"), createDevDetails(entry.detail.promptPreview));
     }

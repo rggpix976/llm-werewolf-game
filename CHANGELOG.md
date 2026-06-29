@@ -8,8 +8,11 @@
 - Refactored `src/webServer.mjs` to separate core logic from listening for better testability.
 - Added `/api/npc-response` proxy with allowlist-based validation and request size limits (64 KiB).
 - Implemented `SessionManager` in the browser to prevent stale responses after "New Game".
-- Added automated tests for retries (exponential backoff), fallbacks, and security invariants.
-- Updated Developer Mode to display provider diagnostics including usage and fallback details.
+- Enhanced security: Redacted private evidence when public claim is not allowed.
+- Enhanced robustness: Strictly validated OpenAI response statuses and sanitized 400 error messages.
+- Fixed concurrency handling: Ensured waiters settle on reset/abort.
+- Added automated tests (68 total) covering security invariants and edge cases.
+- Updated Developer Mode to display structured diagnostics for both successful and failed responses.
 
 ## 2026-06-26
 

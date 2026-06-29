@@ -12,15 +12,16 @@ Last updated: 2026-06-28
 - Support for `LLM_PROVIDER=openai` with strict environment variable configuration.
 - Server-side API endpoints: `GET /api/runtime-config` and `POST /api/npc-response`.
 - Implemented strict server-side request validation with a 64 KiB byte-limit and allowlisted fields.
+- Redaction of private evidence (seer results) when public claim is not allowed.
 - Browser-side `HttpResponseProvider` and `SessionManager` for robust stale response prevention and request cancellation.
 - Configurable concurrency limit and RPM limit for OpenAI calls.
 - Transient error fallback to `PseudoResponseProvider` for game continuity.
 - UI-independent asynchronous action API is available through `await dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - A first browser UI adapter is available through `npm.cmd run web`.
-- **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status and fallback details.
+- **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by a comprehensive automated test suite.
+- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 68 automated tests.
 
 ## Last Verified
 
@@ -28,9 +29,9 @@ Last updated: 2026-06-28
 - Commands:
   - `npm test`
   - `npm run sample`
-  - `npm run web`
   - `git diff --check`
-- Result: All tests passed. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure.
+  - `find . -name "*.mjs" -exec node --check {} \;`
+- Result: 68/68 tests passed. All .mjs files pass syntax check. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
 
 ## Next Recommended Task
 
