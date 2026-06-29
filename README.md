@@ -81,6 +81,11 @@ npm.cmd run web
 LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 ```
 
+**セキュリティ上の注意**:
+- APIキーをフロントエンドのコードや `localStorage` 等に保存しないでください。
+- APIキーをリポジトリへコミットしないでください。
+- `.env` ファイルなどを使用する場合は、必ず `.gitignore` に追加されていることを確認してください。
+
 #### 設定項目 (環境変数)
 
 - `LLM_PROVIDER`: `pseudo` または `openai` (デフォルト: `pseudo`)

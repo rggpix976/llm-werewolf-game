@@ -1,6 +1,7 @@
 /**
  * Validates and sanitizes the NPC response request.
- * Returns a new object containing only allowed fields.
+ * Policy: Allowlist-reconstruction. Unexpected fields are stripped.
+ * Types are strictly checked; no coercion (e.g., "false" is not converted to boolean).
  */
 export function validateNpcResponseRequest(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -13,14 +14,14 @@ export function validateNpcResponseRequest(input) {
     context: validateContext(input.context),
     policyDecision: validatePolicyDecision(input.policyDecision),
     responsePlan: validateResponsePlan(input.responsePlan),
-    evidenceUsed: validateStringArray(input.evidenceUsed, "evidenceUsed", 0, 20, 200)
+    evidenceUsed: validateStringArray(input.evidenceUsed, "evidenceUsed", 0, 50, 500)
   };
 
   return validated;
 }
 
 function validateNpc(npc) {
-  if (!npc || typeof npc !== "object") throw createValidationError("Missing or invalid npc");
+  if (!npc || typeof npc !== "object" || Array.isArray(npc)) throw createValidationError("Missing or invalid npc");
   return {
     id: validateString(npc.id, "npc.id", 1, 50),
     name: validateString(npc.name, "npc.name", 1, 50),
@@ -31,23 +32,23 @@ function validateNpc(npc) {
 }
 
 function validateConversationPolicy(policy) {
-  if (!policy || typeof policy !== "object") throw createValidationError("Missing or invalid conversationPolicy");
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) throw createValidationError("Missing or invalid conversationPolicy");
   return {
     truthfulness: validateString(policy.truthfulness, "policy.truthfulness", 0, 100),
     roleClaim: validateString(policy.roleClaim, "policy.roleClaim", 0, 100),
-    allowedTactics: validateStringArray(policy.allowedTactics, "policy.allowedTactics", 0, 10, 100),
-    forbidden: validateStringArray(policy.forbidden, "policy.forbidden", 0, 10, 100)
+    allowedTactics: validateStringArray(policy.allowedTactics, "policy.allowedTactics", 0, 20, 100),
+    forbidden: validateStringArray(policy.forbidden, "policy.forbidden", 0, 20, 100)
   };
 }
 
 function validateContext(context) {
-  if (!context || typeof context !== "object") throw createValidationError("Missing or invalid context");
+  if (!context || typeof context !== "object" || Array.isArray(context)) throw createValidationError("Missing or invalid context");
   return {
-    day: validateInt(context.day, "context.day", 1, 30),
+    day: validateInt(context.day, "context.day", 1, 100),
     phase: validateString(context.phase, "context.phase", 1, 50),
-    publicEvidence: validateEvidenceArray(context.publicEvidence, "context.publicEvidence"),
-    shareableKnownEvidence: validateEvidenceArray(context.shareableKnownEvidence, "context.shareableKnownEvidence"),
-    privateStanceEvidence: validateEvidenceArray(context.privateStanceEvidence, "context.privateStanceEvidence"),
+    publicEvidence: validatePublicEvidenceArray(context.publicEvidence, "context.publicEvidence"),
+    shareableKnownEvidence: validateKnownEvidenceArray(context.shareableKnownEvidence, "context.shareableKnownEvidence"),
+    privateStanceEvidence: validateKnownEvidenceArray(context.privateStanceEvidence, "context.privateStanceEvidence"),
     publicClaims: validateClaimsArray(context.publicClaims, "context.publicClaims"),
     intent: validateIntent(context.intent),
     topSuspect: validateTopSuspect(context.topSuspect)
@@ -55,16 +56,18 @@ function validateContext(context) {
 }
 
 function validateIntent(intent) {
-  if (!intent || typeof intent !== "object") return null;
+  if (intent === null) return null;
+  if (typeof intent !== "object" || Array.isArray(intent)) throw createValidationError("intent must be an object or null");
   return {
-    asksWerewolfIdentity: Boolean(intent.asksWerewolfIdentity),
-    asksRoleOrClaim: Boolean(intent.asksRoleOrClaim),
-    asksVoteReason: Boolean(intent.asksVoteReason)
+    asksWerewolfIdentity: validateBoolean(intent.asksWerewolfIdentity, "intent.asksWerewolfIdentity"),
+    asksRoleOrClaim: validateBoolean(intent.asksRoleOrClaim, "intent.asksRoleOrClaim"),
+    asksVoteReason: validateBoolean(intent.asksVoteReason, "intent.asksVoteReason")
   };
 }
 
 function validateTopSuspect(suspect) {
-  if (!suspect || typeof suspect !== "object") return null;
+  if (suspect === null) return null;
+  if (typeof suspect !== "object" || Array.isArray(suspect)) throw createValidationError("topSuspect must be an object or null");
   return {
     id: validateString(suspect.id, "topSuspect.id", 1, 50),
     name: validateString(suspect.name, "topSuspect.name", 1, 50),
@@ -72,27 +75,45 @@ function validateTopSuspect(suspect) {
   };
 }
 
-function validateEvidenceArray(arr, name) {
-  if (!Array.isArray(arr)) return [];
-  if (arr.length > 20) throw createValidationError(`${name} too many items`);
-  return arr.slice(0, 20).map((item, i) => {
+// Public evidence from gameState.publicInfo contains day, phase, type, text, etc.
+function validatePublicEvidenceArray(arr, name) {
+  if (!Array.isArray(arr)) throw createValidationError(`${name} must be an array`);
+  if (arr.length > 30) throw createValidationError(`${name} too many items`);
+  return arr.map((item, i) => {
     if (!item || typeof item !== "object") throw createValidationError(`Invalid item in ${name} at ${i}`);
     return {
-      day: validateInt(item.day, `${name}[${i}].day`, 1, 30),
-      phase: validateString(item.phase, `${name}[${i}].phase`, 0, 50),
+      day: validateInt(item.day, `${name}[${i}].day`, 1, 100),
+      phase: validateString(item.phase, `${name}[${i}].phase`, 1, 50),
       type: validateString(item.type, `${name}[${i}].type`, 1, 50),
-      text: validateString(item.text, `${name}[${i}].text`, 1, 500)
+      text: validateString(item.text, `${name}[${i}].text`, 1, 1000)
+    };
+  });
+}
+
+// Known info evidence from player.knownInfo might NOT contain phase (e.g. setup info)
+function validateKnownEvidenceArray(arr, name) {
+  if (!Array.isArray(arr)) throw createValidationError(`${name} must be an array`);
+  if (arr.length > 30) throw createValidationError(`${name} too many items`);
+  return arr.map((item, i) => {
+    if (!item || typeof item !== "object") throw createValidationError(`Invalid item in ${name} at ${i}`);
+    return {
+      day: validateInt(item.day, `${name}[${i}].day`, 1, 100),
+      type: validateString(item.type, `${name}[${i}].type`, 1, 50),
+      text: validateString(item.text, `${name}[${i}].text`, 1, 1000),
+      // Optional fields that might exist in knownInfo
+      targetId: item.targetId !== undefined ? validateString(item.targetId, `${name}[${i}].targetId`, 1, 50) : undefined,
+      result: item.result !== undefined ? validateString(item.result, `${name}[${i}].result`, 1, 50) : undefined
     };
   });
 }
 
 function validateClaimsArray(arr, name) {
-  if (!Array.isArray(arr)) return [];
-  if (arr.length > 20) throw createValidationError(`${name} too many items`);
+  if (!Array.isArray(arr)) throw createValidationError(`${name} must be an array`);
+  if (arr.length > 30) throw createValidationError(`${name} too many items`);
   return arr.map((item, i) => {
     if (!item || typeof item !== "object") throw createValidationError(`Invalid item in ${name} at ${i}`);
     return {
-      day: validateInt(item.day, `${name}[${i}].day`, 1, 30),
+      day: validateInt(item.day, `${name}[${i}].day`, 1, 100),
       actorId: validateString(item.actorId, `${name}[${i}].actorId`, 1, 50),
       actorName: validateString(item.actorName, `${name}[${i}].actorName`, 1, 50),
       role: validateString(item.role, `${name}[${i}].role`, 1, 50),
@@ -102,7 +123,8 @@ function validateClaimsArray(arr, name) {
 }
 
 function validateResultsArray(arr, name) {
-  if (!Array.isArray(arr)) return [];
+  if (arr === undefined || arr === null) return [];
+  if (!Array.isArray(arr)) throw createValidationError(`${name} must be an array`);
   if (arr.length > 10) throw createValidationError(`${name} too many items`);
   return arr.map((item, i) => {
     if (!item || typeof item !== "object") throw createValidationError(`Invalid item in ${name} at ${i}`);
@@ -114,24 +136,24 @@ function validateResultsArray(arr, name) {
 }
 
 function validatePolicyDecision(decision) {
-  if (!decision || typeof decision !== "object") throw createValidationError("Missing or invalid policyDecision");
+  if (!decision || typeof decision !== "object" || Array.isArray(decision)) throw createValidationError("Missing or invalid policyDecision");
   return {
-    publicClaimAllowed: Boolean(decision.publicClaimAllowed),
+    publicClaimAllowed: validateBoolean(decision.publicClaimAllowed, "policyDecision.publicClaimAllowed"),
     publicClaim: decision.publicClaim ? {
-       day: validateInt(decision.publicClaim.day, "publicClaim.day", 1, 30),
+       day: validateInt(decision.publicClaim.day, "publicClaim.day", 1, 100),
        actorId: validateString(decision.publicClaim.actorId, "publicClaim.actorId", 1, 50),
        actorName: validateString(decision.publicClaim.actorName, "publicClaim.actorName", 1, 50),
        role: validateString(decision.publicClaim.role, "publicClaim.role", 1, 50),
        results: validateResultsArray(decision.publicClaim.results, "publicClaim.results")
     } : null,
-    disclosedHiddenInfo: Boolean(decision.disclosedHiddenInfo)
+    disclosedHiddenInfo: validateBoolean(decision.disclosedHiddenInfo, "policyDecision.disclosedHiddenInfo")
   };
 }
 
 function validateResponsePlan(plan) {
-  if (!plan || typeof plan !== "object") throw createValidationError("Missing or invalid responsePlan");
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) throw createValidationError("Missing or invalid responsePlan");
   return {
-    baseText: validateString(plan.baseText, "responsePlan.baseText", 1, 1000),
+    baseText: validateString(plan.baseText, "responsePlan.baseText", 1, 2000),
     speechStyle: validateString(plan.speechStyle, "responsePlan.speechStyle", 1, 50)
   };
 }
@@ -144,8 +166,13 @@ function validateString(val, name, min, max) {
 }
 
 function validateInt(val, name, min, max) {
-  if (!Number.isSafeInteger(val)) throw createValidationError(`${name} must be a safe integer`);
+  if (typeof val !== "number" || !Number.isSafeInteger(val)) throw createValidationError(`${name} must be a safe integer`);
   if (val < min || val > max) throw createValidationError(`${name} out of range`);
+  return val;
+}
+
+function validateBoolean(val, name) {
+  if (typeof val !== "boolean") throw createValidationError(`${name} must be a boolean`);
   return val;
 }
 

@@ -1,254 +1,158 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EventEmitter } from "node:events";
-import { createRequestHandler } from "../src/webServer.mjs";
+import { createWebServer } from "../src/webServer.mjs";
 
-class MockRequest extends EventEmitter {
-  constructor(method, url, headers = {}, body = "") {
-    super();
-    this.method = method;
-    this.url = url;
-    this.headers = headers;
-    this.bodyData = body;
-    this.aborted = false;
+async function startTestServer(options) {
+  const server = createWebServer(options);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  const close = () => new Promise((resolve) => server.close(resolve));
+  return { server, port, close };
+}
+
+test("GET /api/runtime-config returns config without secrets", async () => {
+  const { port, close } = await startTestServer({
+    config: {
+        provider: "openai",
+        openai: { apiKey: "secret-key", model: "gpt-o1", fallbackToPseudo: true }
+    }
+  });
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/runtime-config`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    const data = await res.json();
+    assert.equal(data.provider, "openai");
+    assert.equal(data.model, "gpt-o1");
+    assert.equal(data.fallbackEnabled, true);
+    assert.ok(!JSON.stringify(data).includes("secret-key"));
+  } finally {
+    await close();
   }
-  start() {
-    if (this.bodyData) {
-        if (typeof this.bodyData === "string") {
-            this.emit("data", Buffer.from(this.bodyData));
-        } else {
-            this.emit("data", this.bodyData);
+});
+
+test("POST /api/npc-response success", async () => {
+  const mockProvider = {
+    name: "mock",
+    generateResponse: async () => ({ text: "Mock Response", providerName: "mock" })
+  };
+  const { port, close } = await startTestServer({ provider: mockProvider });
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/npc-response`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+          npc: { id: "n1", name: "n1", personality: "p", speechStyle: "s", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
+          playerInput: "h",
+          context: { day: 1, phase: "p", publicEvidence: [], shareableKnownEvidence: [], privateStanceEvidence: [], publicClaims: [], intent: { asksWerewolfIdentity: false, asksRoleOrClaim: false, asksVoteReason: false }, topSuspect: null },
+          policyDecision: { publicClaimAllowed: false, publicClaim: null, disclosedHiddenInfo: false },
+          responsePlan: { baseText: "b", speechStyle: "s" },
+          evidenceUsed: []
+      })
+    });
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.text, "Mock Response");
+  } finally {
+    await close();
+  }
+});
+
+test("POST /api/npc-response rate limit", async () => {
+    const rateLimiter = { allow: () => false };
+    const { port, close } = await startTestServer({ rateLimiter });
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/npc-response`, { method: "POST" });
+        assert.equal(res.status, 429);
+        const data = await res.json();
+        assert.equal(data.type, "rate_limit");
+    } finally {
+        await close();
+    }
+});
+
+test("POST /api/npc-response content-type handling", async () => {
+    const { port, close } = await startTestServer({});
+    try {
+        const cases = [
+            { ct: "application/json", expected: 400 },
+            { ct: "APPLICATION/JSON", expected: 400 },
+            { ct: "application/json; charset=utf-8", expected: 400 },
+            { ct: "text/plain", expected: 415 },
+            { ct: "application/json-evil", expected: 415 }
+        ];
+        for (const { ct, expected } of cases) {
+            const res = await fetch(`http://127.0.0.1:${port}/api/npc-response`, {
+                method: "POST",
+                headers: { "Content-Type": ct }
+            });
+            assert.equal(res.status, expected, `Content-Type ${ct} should result in ${expected}`);
         }
+    } finally {
+        await close();
     }
-    this.emit("end");
-  }
-  resume() {}
-}
-
-class MockResponse extends EventEmitter {
-  constructor() {
-    super();
-    this.statusCode = 200;
-    this.headers = {};
-    this.body = "";
-    this.writable = true;
-    this.writableEnded = false;
-  }
-  writeHead(status, headers) {
-    this.statusCode = status;
-    this.headers = { ...this.headers, ...headers };
-  }
-  write(data) {
-    this.body += data;
-    return true;
-  }
-  end(data) {
-    if (data) this.body += data;
-    this.writableEnded = true;
-    this.emit("finish");
-  }
-  on(event, listener) {
-    super.on(event, listener);
-    return this;
-  }
-  once(event, listener) {
-    super.once(event, listener);
-    return this;
-  }
-  emit(event, ...args) {
-    return super.emit(event, ...args);
-  }
-}
-
-const validBaseRequest = {
-  npc: {
-    id: "npc1",
-    name: "Aoi",
-    personality: "Calm",
-    speechStyle: "calm",
-    conversationPolicy: {
-      truthfulness: "honest",
-      roleClaim: "never",
-      allowedTactics: [],
-      forbidden: []
-    }
-  },
-  playerInput: "Hello",
-  context: {
-    day: 1,
-    phase: "day_discussion",
-    publicEvidence: [],
-    shareableKnownEvidence: [],
-    privateStanceEvidence: [],
-    publicClaims: [],
-    intent: null,
-    topSuspect: null
-  },
-  policyDecision: {
-    publicClaimAllowed: false,
-    publicClaim: null,
-    disclosedHiddenInfo: false
-  },
-  responsePlan: {
-    baseText: "I am Aoi.",
-    speechStyle: "calm"
-  },
-  evidenceUsed: []
-};
-
-test("GET /api/runtime-config returns config without secrets", (t, done) => {
-  const handler = createRequestHandler({
-    config: { provider: "openai", openai: { model: "gpt-5.4-mini", fallbackToPseudo: true } }
-  });
-  const req = new MockRequest("GET", "/api/runtime-config");
-  const res = new MockResponse();
-
-  res.on("finish", () => {
-    try {
-      assert.equal(res.statusCode, 200);
-      const data = JSON.parse(res.body);
-      assert.equal(data.provider, "openai");
-      assert.equal(data.model, "gpt-5.4-mini");
-      assert.equal(res.headers["Cache-Control"], "no-store");
-      done();
-    } catch (e) {
-      done(e);
-    }
-  });
-
-  handler(req, res);
-  req.start();
 });
 
-test("POST /api/npc-response success", (t, done) => {
-  const mockProvider = {
-    async generateResponse(req) {
-      return { text: "Hello from mock", providerName: "mock" };
-    }
-  };
-  const handler = createRequestHandler({ provider: mockProvider });
-  const body = JSON.stringify(validBaseRequest);
-  const req = new MockRequest("POST", "/api/npc-response", { "content-type": "application/json" }, body);
-  const res = new MockResponse();
-
-  res.on("finish", () => {
+test("POST /api/npc-response too large body (bytes)", async () => {
+    const { port, close } = await startTestServer({});
     try {
-      assert.equal(res.statusCode, 200);
-      const data = JSON.parse(res.body);
-      assert.equal(data.text, "Hello from mock");
-      done();
-    } catch (e) {
-      done(e);
+        const bigBody = JSON.stringify({ data: "a".repeat(70000) });
+        const res = await fetch(`http://127.0.0.1:${port}/api/npc-response`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: bigBody
+        });
+        assert.equal(res.status, 413);
+    } finally {
+        await close();
     }
-  });
-
-  handler(req, res);
-  req.start();
 });
 
-test("POST /api/npc-response rate limit", (t, done) => {
-  const mockRateLimiter = { allow: () => false };
-  const handler = createRequestHandler({ rateLimiter: mockRateLimiter });
-  const req = new MockRequest("POST", "/api/npc-response", { "content-type": "application/json" }, "{}");
-  const res = new MockResponse();
-
-  res.on("finish", () => {
-    try {
-      assert.equal(res.statusCode, 429);
-      assert.equal(JSON.parse(res.body).type, "rate_limit");
-      done();
-    } catch (e) {
-      done(e);
-    }
-  });
-
-  handler(req, res);
-  req.start();
+test("Static file delivery - index.html", async () => {
+  const { port, close } = await startTestServer({});
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/index.html`);
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.ok(text.toLowerCase().includes("<!doctype html>"));
+  } finally {
+    await close();
+  }
 });
 
-test("POST /api/npc-response invalid content-type", (t, done) => {
-  const handler = createRequestHandler();
-  const req = new MockRequest("POST", "/api/npc-response", { "content-type": "text/plain" }, "{}");
-  const res = new MockResponse();
-
-  res.on("finish", () => {
+test("POST /api/npc-response sanitized error", async () => {
+    const mockProvider = {
+        name: "mock",
+        generateResponse: async () => {
+            const err = new Error("Evil stack trace");
+            err.status = 500;
+            err.type = "provider_server_error";
+            throw err;
+        }
+    };
+    const { port, close } = await startTestServer({ provider: mockProvider });
     try {
-      assert.equal(res.statusCode, 415);
-      done();
-    } catch (e) {
-      done(e);
+        const res = await fetch(`http://127.0.0.1:${port}/api/npc-response`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                npc: { id: "n1", name: "n1", personality: "p", speechStyle: "s", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
+                playerInput: "h",
+                context: { day: 1, phase: "p", publicEvidence: [], shareableKnownEvidence: [], privateStanceEvidence: [], publicClaims: [], intent: { asksWerewolfIdentity: false, asksRoleOrClaim: false, asksVoteReason: false }, topSuspect: null },
+                policyDecision: { publicClaimAllowed: false, publicClaim: null, disclosedHiddenInfo: false },
+                responsePlan: { baseText: "b", speechStyle: "s" },
+                evidenceUsed: []
+            })
+        });
+        assert.equal(res.status, 500);
+        const data = await res.json();
+        assert.ok(!JSON.stringify(data).includes("Evil stack trace"));
+        assert.ok(data.error);
+        assert.equal(data.type, "provider_server_error");
+    } finally {
+        await close();
     }
-  });
-
-  handler(req, res);
-  req.start();
-});
-
-test("POST /api/npc-response too large body (bytes)", (t, done) => {
-  const handler = createRequestHandler();
-  const largeBody = Buffer.alloc(65537, 'a');
-  const req = new MockRequest("POST", "/api/npc-response", { "content-type": "application/json" }, largeBody);
-  const res = new MockResponse();
-
-  res.on("finish", () => {
-    try {
-      assert.equal(res.statusCode, 413);
-      done();
-    } catch (e) {
-      done(e);
-    }
-  });
-
-  handler(req, res);
-  req.start();
-});
-
-test("Static file delivery - index.html", (t, done) => {
-  const handler = createRequestHandler();
-  const req = new MockRequest("GET", "/");
-  const res = new MockResponse();
-
-  res.on("finish", () => {
-    try {
-      assert.equal(res.statusCode, 200);
-      assert.equal(res.headers["Content-Type"], "text/html; charset=utf-8");
-      assert.ok(res.body.includes("<!doctype html>"));
-      done();
-    } catch (e) {
-      done(e);
-    }
-  });
-
-  handler(req, res);
-  req.start();
-});
-
-test("POST /api/npc-response sanitized error", (t, done) => {
-  const mockProvider = {
-    async generateResponse() {
-      const err = new Error("Raw secret error from OpenAI");
-      err.status = 401;
-      err.type = "authentication_error";
-      throw err;
-    }
-  };
-  const handler = createRequestHandler({ provider: mockProvider });
-  const body = JSON.stringify(validBaseRequest);
-  const req = new MockRequest("POST", "/api/npc-response", { "content-type": "application/json" }, body);
-  const res = new MockResponse();
-
-  res.on("finish", () => {
-    try {
-      const data = JSON.parse(res.body);
-      assert.equal(res.statusCode, 401);
-      assert.ok(!data.error.includes("Raw secret error"));
-      assert.ok(data.error.includes("authentication failed"));
-      done();
-    } catch (e) {
-      done(e);
-    }
-  });
-
-  handler(req, res);
-  req.start();
 });

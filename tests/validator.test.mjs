@@ -2,72 +2,77 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { validateNpcResponseRequest } from "../src/validator.mjs";
 
-const validBase = {
+const validRequest = {
   npc: {
     id: "npc1",
     name: "Aoi",
-    personality: "Calm",
-    speechStyle: "calm",
+    personality: "P",
+    speechStyle: "S",
     conversationPolicy: {
-      truthfulness: "honest",
-      roleClaim: "never",
-      allowedTactics: ["tactic1"],
-      forbidden: ["lie"]
+        truthfulness: "t",
+        roleClaim: "r",
+        allowedTactics: [],
+        forbidden: []
     }
   },
   playerInput: "Hello",
   context: {
     day: 1,
-    phase: "day_discussion",
-    publicEvidence: [{ day: 1, phase: "day_discussion", type: "setup", text: "text" }],
+    phase: "day",
+    publicEvidence: [],
     shareableKnownEvidence: [],
     privateStanceEvidence: [],
     publicClaims: [],
-    intent: { asksWerewolfIdentity: false },
-    topSuspect: { id: "npc2", name: "Beni", score: 5 }
+    intent: { asksWerewolfIdentity: false, asksRoleOrClaim: false, asksVoteReason: false },
+    topSuspect: null
   },
-  policyDecision: {
-    publicClaimAllowed: false,
-    publicClaim: null,
-    disclosedHiddenInfo: false
-  },
-  responsePlan: {
-    baseText: "I am Aoi.",
-    speechStyle: "calm"
-  },
-  evidenceUsed: ["evidence1"]
+  policyDecision: { publicClaimAllowed: false, publicClaim: null, disclosedHiddenInfo: false },
+  responsePlan: { baseText: "B", speechStyle: "S" },
+  evidenceUsed: []
 };
 
-test("validateNpcResponseRequest - valid input", () => {
-  const result = validateNpcResponseRequest(validBase);
-  assert.deepEqual(result.npc.id, "npc1");
+test("Validator accepts a real game-generated request", () => {
+  const result = validateNpcResponseRequest(validRequest);
+  assert.equal(result.npc.id, "npc1");
   assert.equal(result.playerInput, "Hello");
-  assert.equal(result.context.day, 1);
 });
 
-test("validateNpcResponseRequest - rejects arbitrary additional fields", () => {
-  const input = { ...validBase, extra: "field" };
-  const result = validateNpcResponseRequest(input);
-  assert.equal(result.extra, undefined);
+test("Strict type validation", () => {
+  // Reject string "false" instead of boolean false
+  const invalidBool = JSON.parse(JSON.stringify(validRequest));
+  invalidBool.policyDecision.publicClaimAllowed = "false";
+  assert.throws(() => validateNpcResponseRequest(invalidBool), /must be a boolean/);
+
+  // Reject object instead of array
+  const invalidArray = JSON.parse(JSON.stringify(validRequest));
+  invalidArray.context.publicEvidence = {};
+  assert.throws(() => validateNpcResponseRequest(invalidArray), /must be an array/);
+
+  // Reject missing required fields
+  const missingField = JSON.parse(JSON.stringify(validRequest));
+  delete missingField.npc.id;
+  assert.throws(() => validateNpcResponseRequest(missingField), /npc.id must be a string/);
 });
 
-test("validateNpcResponseRequest - rejects oversized string", () => {
-  const input = { ...validBase, playerInput: "a".repeat(1001) };
-  assert.throws(() => validateNpcResponseRequest(input), /playerInput too long/);
+test("Allowlist reconstruction policy", () => {
+  const untrusted = JSON.parse(JSON.stringify(validRequest));
+  untrusted.extraField = "dangerous";
+  untrusted.npc.evil = "hack";
+
+  const result = validateNpcResponseRequest(untrusted);
+  assert.ok(!("extraField" in result), "Extra top-level fields should be stripped");
+  assert.ok(!("evil" in result.npc), "Extra nested fields should be stripped");
+  assert.equal(result.npc.id, "npc1");
 });
 
-test("validateNpcResponseRequest - rejects invalid types", () => {
-  const input = { ...validBase, playerInput: 123 };
-  assert.throws(() => validateNpcResponseRequest(input), /playerInput must be a string/);
-});
+test("Size and nesting limits", () => {
+    // Oversized string
+    const bigString = JSON.parse(JSON.stringify(validRequest));
+    bigString.playerInput = "a".repeat(10001);
+    assert.throws(() => validateNpcResponseRequest(bigString), /too long/);
 
-test("validateNpcResponseRequest - rejects missing required fields", () => {
-  const input = { ...validBase };
-  delete input.npc;
-  assert.throws(() => validateNpcResponseRequest(input), /Missing or invalid npc/);
-});
-
-test("validateNpcResponseRequest - rejects oversized array", () => {
-  const input = { ...validBase, evidenceUsed: Array(21).fill("e") };
-  assert.throws(() => validateNpcResponseRequest(input), /evidenceUsed length out of range/);
+    // Oversized array
+    const bigArray = JSON.parse(JSON.stringify(validRequest));
+    for (let i = 0; i < 201; i++) bigArray.evidenceUsed.push("e");
+    assert.throws(() => validateNpcResponseRequest(bigArray), /length out of range/);
 });

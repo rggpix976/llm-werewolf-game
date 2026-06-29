@@ -1,15 +1,15 @@
 # Changelog
 
-## 2026-06-27
+## 2026-06-28
 
-- Added a secure server-side OpenAI response provider.
-- Implemented `OpenAIResponseProvider` using OpenAI Responses API.
-- Added environment variable configuration (`LLM_PROVIDER`, `OPENAI_API_KEY`, etc.).
-- Refactored `src/webServer.mjs` to support API endpoints and better testability.
-- Added `GET /api/runtime-config` and `POST /api/npc-response` endpoints.
-- Implemented browser-side `HttpResponseProvider` and `SessionManager` for stale response handling.
-- Added support for transient error fallback to `PseudoResponseProvider`.
-- Added comprehensive unit tests for configuration, OpenAI provider, and API endpoints.
+- Added a secure server-side OpenAI response provider using the official Responses API.
+- Implemented `OpenAIResponseProvider` with support for `input_text` and `reasoning: { effort: "none" }`.
+- Added environment variable configuration with strict validation and sane defaults.
+- Refactored `src/webServer.mjs` to separate core logic from listening for better testability.
+- Added `/api/npc-response` proxy with allowlist-based validation and request size limits (64 KiB).
+- Implemented `SessionManager` in the browser to prevent stale responses after "New Game".
+- Added automated tests for retries (exponential backoff), fallbacks, and security invariants.
+- Updated Developer Mode to display provider diagnostics including usage and fallback details.
 
 ## 2026-06-26
 

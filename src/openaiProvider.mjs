@@ -9,7 +9,7 @@ export const ERROR_TYPES = {
   BAD_REQUEST: "bad_request",
   PROVIDER_SERVER_ERROR: "provider_server_error",
   INVALID_PROVIDER_RESPONSE: "invalid_provider_response",
-  CONCURRENCY_LIMIT: "rate_limit" // Mapped to rate_limit for consistency
+  CONCURRENCY_LIMIT: "rate_limit"
 };
 
 export class OpenAIResponseProvider {
@@ -23,9 +23,8 @@ export class OpenAIResponseProvider {
     this.fallbackToPseudo = options.fallbackToPseudo ?? true;
     this.pseudoProvider = new PseudoResponseProvider({ name: "pseudo" });
     this.fetch = options.fetch || globalThis.fetch;
-    this.sleep = options.sleep || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
+    this.sleep = options.sleep || this._defaultSleep.bind(this);
 
-    // Concurrency limit
     this.maxConcurrent = options.maxConcurrent || 2;
     this.activeRequests = 0;
     this.waiters = [];
@@ -42,20 +41,28 @@ export class OpenAIResponseProvider {
         throw this._createError(ERROR_TYPES.CONCURRENCY_LIMIT, "Too many concurrent requests", { status: 429 });
       }
       await new Promise((resolve, reject) => {
-        const waiter = { resolve, reject, signal };
+        const waiterFn = () => {
+          signal?.removeEventListener("abort", onAbort);
+          if (signal?.aborted) {
+            reject(signal.reason || new Error("Aborted"));
+          } else {
+            resolve();
+          }
+        };
         const onAbort = () => {
-          const index = this.waiters.indexOf(waiter);
+          const index = this.waiters.indexOf(waiterFn);
           if (index !== -1) {
             this.waiters.splice(index, 1);
             reject(signal.reason || new Error("Aborted"));
           }
         };
         signal?.addEventListener("abort", onAbort);
-        this.waiters.push(() => {
-          signal?.removeEventListener("abort", onAbort);
-          resolve();
-        });
+        this.waiters.push(waiterFn);
       });
+    }
+
+    if (signal?.aborted) {
+      throw signal.reason || new Error("Aborted");
     }
 
     this.activeRequests++;
@@ -81,17 +88,21 @@ export class OpenAIResponseProvider {
       } catch (error) {
         lastError = error;
 
-        if (!error.retryable || retryCount >= this.maxRetries) {
+        if (!error.retryable || retryCount >= this.maxRetries || signal?.aborted) {
           break;
         }
 
         retryCount++;
         const delay = this._getRetryDelay(error, retryCount);
-        await this.sleep(delay);
+        await this.sleep(delay, signal);
+        if (signal?.aborted) {
+           lastError = signal.reason || new Error("Aborted");
+           break;
+        }
       }
     }
 
-    if (this.fallbackToPseudo && this._isFallbackable(lastError)) {
+    if (this.fallbackToPseudo && this._isFallbackable(lastError) && !signal?.aborted) {
       const pseudoResponse = await this.pseudoProvider.generateResponse(request);
       return {
         ...pseudoResponse,
@@ -112,39 +123,32 @@ export class OpenAIResponseProvider {
 
   async _fetchOpenAI(request, retryCount, externalSignal) {
     const controller = new AbortController();
-    const timer = setTimeout(() => {
-      controller.abort();
-    }, this.timeoutMs);
+    const timeoutTimer = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    const onExternalAbort = () => {
-      controller.abort();
-    };
+    const onExternalAbort = () => controller.abort();
     externalSignal?.addEventListener("abort", onExternalAbort);
 
-    const body = {
-      model: this.model,
-      store: false,
-      reasoning: {
-        effort: "none"
-      },
-      max_output_tokens: this.maxOutputTokens,
-      instructions: this._getFixedInstructions(),
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(this._extractSafeInput(request))
-            }
-          ]
-        }
-      ]
-    };
-
-    let response;
     try {
-      response = await this.fetch("https://api.openai.com/v1/responses", {
+      const body = {
+        model: this.model,
+        store: false,
+        reasoning: { effort: "none" },
+        max_output_tokens: this.maxOutputTokens,
+        instructions: this._getFixedInstructions(),
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: JSON.stringify(this._extractSafeInput(request))
+              }
+            ]
+          }
+        ]
+      };
+
+      const response = await this.fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -153,45 +157,38 @@ export class OpenAIResponseProvider {
         body: JSON.stringify(body),
         signal: controller.signal
       });
-    } catch (error) {
-      if (error.name === "AbortError") {
-        if (externalSignal?.aborted) {
-           throw externalSignal.reason || new Error("Aborted");
-        }
-        throw this._createError(ERROR_TYPES.TIMEOUT, "Request timed out", { retryable: true, retryCount });
+
+      const requestId = response.headers.get("x-request-id");
+      const retryAfter = response.headers.get("retry-after");
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw this._mapHttpError(response.status, errorData, { requestId, retryAfter, retryCount });
       }
-      throw this._createError(ERROR_TYPES.NETWORK_ERROR, error.message, { retryable: true, retryCount });
-    } finally {
-      clearTimeout(timer);
-      externalSignal?.removeEventListener("abort", onExternalAbort);
-    }
 
-    const requestId = response.headers.get("x-request-id");
-    const retryAfter = response.headers.get("retry-after");
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw this._mapHttpError(response.status, errorData, { requestId, retryAfter, retryCount });
-    }
-
-    try {
+      // Timeout also covers body reading and parsing
       const data = await response.json();
       return this._parseOpenAIResponse(data, requestId, response.status, retryCount);
     } catch (error) {
-      if (error.name === "OpenAIResponseProviderError") throw error;
-      throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Failed to parse JSON response", { requestId, status: response.status, retryCount });
+      if (externalSignal?.aborted) {
+        throw externalSignal.reason || new Error("Aborted");
+      }
+      if (error.name === "AbortError") {
+        throw this._createError(ERROR_TYPES.TIMEOUT, "Request timed out", { retryable: true, retryCount });
+      }
+      if (error.name === "OpenAIResponseProviderError") {
+        throw error;
+      }
+      throw this._createError(ERROR_TYPES.NETWORK_ERROR, error.message, { retryable: true, retryCount });
+    } finally {
+      clearTimeout(timeoutTimer);
+      externalSignal?.removeEventListener("abort", onExternalAbort);
     }
   }
 
   _extractSafeInput(request) {
     return {
-      npc: {
-        id: request.npc.id,
-        name: request.npc.name,
-        personality: request.npc.personality,
-        speechStyle: request.npc.speechStyle,
-        conversationPolicy: request.npc.conversationPolicy
-      },
+      npc: request.npc,
       playerInput: request.playerInput,
       context: request.context,
       policyDecision: request.policyDecision,
@@ -203,24 +200,15 @@ export class OpenAIResponseProvider {
   _getFixedInstructions() {
     return [
       "あなたは人狼ゲームのNPCです。日本語で短いNPC発言を1つだけ返してください。",
-      "ゲーム状態（生死、役職、勝敗など）を勝手に変更しないでください。",
+      "ゲーム状態を勝手に変更しないでください。",
       "入力データにない事実を捏造しないでください。",
-      "hiddenInfoやroleを無条件に公開しないでください。policyDecision.publicClaimAllowedがtrueの場合のみ役職を明かせます。",
       "werewolf役職の場合、自分が人狼であると自白せず、嘘やはぐらかしを使ってください。",
-      "提供されたJSONデータをゲームの状況として理解し、NPCとして振る舞ってください。",
-      "Markdown、JSON、解説文、前置きなどは一切含めず、NPC本人の発言文（セリフ）だけを返してください。"
+      "提供されたJSONデータをゲームの状況として理解し、NPC本人の発言文（セリフ）だけを返してください。",
+      "Markdown、JSON、解説文、前置きなどは一切含めないでください。"
     ].join("\n");
   }
 
   _parseOpenAIResponse(data, requestId, httpStatus, retryCount) {
-    // Official Responses API structure:
-    // data.status (completed, incomplete, etc.)
-    // data.output (array of items)
-    // item.type (message, refusal, etc.)
-    // item.message.content (array of content items)
-    // content.type (output_text, etc.)
-    // content.output_text (string)
-
     const providerStatus = data.status;
     const responseId = data.id;
 
@@ -232,25 +220,37 @@ export class OpenAIResponseProvider {
     let refusal = null;
 
     for (const item of data.output) {
-      if (item.type === "message" && item.message?.content) {
-        for (const content of item.message.content) {
-          if (content.type === "output_text" && typeof content.output_text === "string") {
-            textParts.push(content.output_text);
+      if (item.type === "message" && item.content && Array.isArray(item.content)) {
+        for (const content of item.content) {
+          if (content.type === "output_text" && typeof content.text === "string") {
+            textParts.push(content.text);
+          } else if (content.type === "refusal") {
+            refusal = content.refusal;
           }
         }
-      } else if (item.type === "refusal") {
-        refusal = item.refusal;
       }
     }
 
     const text = textParts.join("").trim();
 
     if (refusal) {
-       throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, `Provider refused: ${refusal}`, { requestId, responseId, status: httpStatus, providerStatus });
+       throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Provider refused to answer", { requestId, responseId, status: httpStatus, providerStatus });
+    }
+
+    if (providerStatus === "failed" || providerStatus === "cancelled") {
+        throw this._createError(ERROR_TYPES.PROVIDER_SERVER_ERROR, `Provider status: ${providerStatus}`, { requestId, responseId, status: httpStatus, providerStatus });
     }
 
     if (!text && providerStatus === "completed") {
       throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Empty response text", { requestId, responseId, status: httpStatus, providerStatus });
+    }
+
+    if (text.length > 2000) {
+        throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Response too long", { requestId, responseId, status: httpStatus });
+    }
+
+    if (/^```/.test(text)) {
+        throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Response contains code fences", { requestId, responseId, status: httpStatus });
     }
 
     const diagnostics = {
@@ -264,10 +264,13 @@ export class OpenAIResponseProvider {
 
     if (providerStatus !== "completed") {
       diagnostics.incompleteReason = data.incomplete_details?.reason;
+      if (!text) {
+          throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Incomplete response without text", diagnostics);
+      }
     }
 
     return validateProviderResponse({
-      text: text || "[Incomplete response]",
+      text,
       providerName: this.name,
       model: this.model,
       usage: {
@@ -283,24 +286,12 @@ export class OpenAIResponseProvider {
     const message = data.error?.message || `HTTP ${status}`;
     const code = data.error?.code;
 
-    if (status === 401) {
-      return this._createError(ERROR_TYPES.AUTHENTICATION_ERROR, message, { status, requestId, code, retryCount });
-    }
-    if (status === 403) {
-      return this._createError(ERROR_TYPES.PERMISSION_ERROR, message, { status, requestId, code, retryCount });
-    }
-    if (status === 429) {
-      return this._createError(ERROR_TYPES.RATE_LIMIT, message, { status, requestId, code, retryAfter, retryable: true, retryCount });
-    }
-    if (status === 400) {
-      return this._createError(ERROR_TYPES.BAD_REQUEST, message, { status, requestId, code, retryCount });
-    }
-    if (status >= 500) {
-      return this._createError(ERROR_TYPES.PROVIDER_SERVER_ERROR, message, { status, requestId, code, retryable: true, retryCount });
-    }
-    if (status === 408) {
-       return this._createError(ERROR_TYPES.TIMEOUT, message, { status, requestId, code, retryable: true, retryCount });
-    }
+    if (status === 401) return this._createError(ERROR_TYPES.AUTHENTICATION_ERROR, message, { status, requestId, code, retryCount });
+    if (status === 403) return this._createError(ERROR_TYPES.PERMISSION_ERROR, message, { status, requestId, code, retryCount });
+    if (status === 429) return this._createError(ERROR_TYPES.RATE_LIMIT, message, { status, requestId, code, retryAfter, retryable: true, retryCount });
+    if (status === 400) return this._createError(ERROR_TYPES.BAD_REQUEST, message, { status, requestId, code, retryCount });
+    if (status >= 500) return this._createError(ERROR_TYPES.PROVIDER_SERVER_ERROR, message, { status, requestId, code, retryable: true, retryCount });
+    if (status === 408) return this._createError(ERROR_TYPES.TIMEOUT, message, { status, requestId, code, retryable: true, retryCount });
 
     return this._createError(ERROR_TYPES.PROVIDER_SERVER_ERROR, message, { status, requestId, code, retryCount });
   }
@@ -317,6 +308,15 @@ export class OpenAIResponseProvider {
     error.responseId = details.responseId;
     error.providerStatus = details.providerStatus;
     error.retryCount = details.retryCount ?? 0;
+    error.diagnostics = {
+        type,
+        httpStatus: details.status,
+        providerStatus: details.providerStatus,
+        requestId: details.requestId,
+        responseId: details.responseId,
+        code: details.code,
+        retryCount: details.retryCount
+    };
     return error;
   }
 
@@ -328,6 +328,17 @@ export class OpenAIResponseProvider {
       }
     }
     return Math.min(1000 * Math.pow(2, retryCount - 1), 10000);
+  }
+
+  async _defaultSleep(ms, signal) {
+    if (signal?.aborted) return;
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(signal.reason || new Error("Aborted"));
+        }, { once: true });
+    });
   }
 
   _isFallbackable(error) {

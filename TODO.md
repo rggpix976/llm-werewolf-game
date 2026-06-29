@@ -11,7 +11,8 @@
 
 ## Soon
 
-- [x] Add secure server-side OpenAI response provider.
+- [x] Add secure server-side OpenAI response provider using Responses API.
+- [x] Implement browser-side request cancellation for "New Game".
 - [ ] Improve natural language intent parsing.
 - [ ] Improve suspicion score updates from nuanced player questions and NPC responses.
 - [ ] Add better validation for generated NPC utterances.
