@@ -11,7 +11,7 @@
 - Enhanced security: Redacted private evidence when public claim is not allowed.
 - Enhanced robustness: Strictly validated OpenAI response statuses, sanitized 400 error messages, and correctly classified body-reading timeouts.
 - Fixed concurrency handling: Removed reset() to prevent unstable state and ensured activeRequests never becomes negative.
-- Added automated tests (71 total) covering security invariants and edge cases.
+- Added automated tests (74 total) covering security invariants and edge cases.
 - Updated Developer Mode to display structured diagnostics for both successful and failed responses.
 
 ## 2026-06-26
