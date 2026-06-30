@@ -66,6 +66,8 @@ Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory s
 - OpenAI Responses APIをサーバー経由で呼び出します
 - 環境変数で有効化し、APIキーが必要です
 - APIキーはブラウザへ送信されず、サーバー側で安全に管理されます
+- プロセス内でのレート制限と同時実行数制限が適用されます
+- ネットワークエラー等の一時的な失敗時には `pseudo` モードへのフォールバックが可能です
 
 起動例 (PowerShell):
 

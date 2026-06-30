@@ -252,9 +252,6 @@ function createRateLimiter(config) {
       if (requests.length >= maxPerMinute) return false;
       requests.push(now);
       return true;
-    },
-    reset() {
-      requests = [];
     }
   };
 }

@@ -76,3 +76,25 @@ test("Size and nesting limits", () => {
     for (let i = 0; i < 201; i++) bigArray.evidenceUsed.push("e");
     assert.throws(() => validateNpcResponseRequest(bigArray), /length out of range/);
 });
+
+test("PolicyDecision consistency validation", () => {
+    // true requires publicClaim
+    const t1 = JSON.parse(JSON.stringify(validRequest));
+    t1.policyDecision.publicClaimAllowed = true;
+    t1.policyDecision.disclosedHiddenInfo = true;
+    t1.policyDecision.publicClaim = null;
+    assert.throws(() => validateNpcResponseRequest(t1), /true requires a valid publicClaim/);
+
+    // true requires disclosedHiddenInfo
+    const t2 = JSON.parse(JSON.stringify(validRequest));
+    t2.policyDecision.publicClaimAllowed = true;
+    t2.policyDecision.disclosedHiddenInfo = false;
+    t2.policyDecision.publicClaim = { day: 1, actorId: "n1", actorName: "A", role: "seer", results: [] };
+    assert.throws(() => validateNpcResponseRequest(t2), /true requires disclosedHiddenInfo: true/);
+
+    // false requires null publicClaim
+    const t3 = JSON.parse(JSON.stringify(validRequest));
+    t3.policyDecision.publicClaimAllowed = false;
+    t3.policyDecision.publicClaim = { day: 1, actorId: "n1", actorName: "A", role: "seer", results: [] };
+    assert.throws(() => validateNpcResponseRequest(t3), /false requires publicClaim: null/);
+});

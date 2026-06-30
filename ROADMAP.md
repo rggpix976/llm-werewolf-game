@@ -30,7 +30,13 @@
 - Add developer mode for roles, hidden info, and LLM diagnostics. Done.
 - Implement stale response prevention for rapid session resets. Done.
 
-## Phase 5: Game Expansion
+## Phase 5: Controlled Local Testing
+
+- Verify OpenAI integration using mocked HTTP responses. Done.
+- Implement security protections for private evidence and error messages. Done.
+- Expand test suite to 68 tests covering edge cases. Done.
+
+## Phase 6: Game Expansion
 
 - Add 9-player village support.
 - Add medium, knight, and madman roles.
@@ -39,4 +45,4 @@
 
 ## Current Priority
 
-The next milestone is adding a real LLM provider.
+Controlled local testing and refinement of NPC dialogue policies.

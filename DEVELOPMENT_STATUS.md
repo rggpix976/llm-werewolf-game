@@ -31,7 +31,8 @@ Last updated: 2026-06-28
   - `npm run sample`
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
-- Result: 68/68 tests passed. All .mjs files pass syntax check. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
+  - `node scripts/mock-openai-server.mjs`
+- Result: 68/68 tests passed. All .mjs files pass syntax check. Mock server starts successfully. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
 
 ## Next Recommended Task
 

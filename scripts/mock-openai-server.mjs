@@ -1,4 +1,4 @@
-import { createWebServer } from "./src/webServer.mjs";
+import { createWebServer } from "../src/webServer.mjs";
 
 const mockFetch = async (url, options) => {
     console.log("MOCK FETCH CALLED", url);

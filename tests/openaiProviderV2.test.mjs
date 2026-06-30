@@ -31,7 +31,7 @@ const officialSuccessResponse = {
   usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }
 };
 
-test("OpenAIResponseProvider - redact privateStanceEvidence when publicClaimAllowed is false", async () => {
+test("OpenAIResponseProvider - never send privateStanceEvidence even if publicClaimAllowed is true", async () => {
   let capturedBody;
   const mockFetch = async (url, options) => {
     capturedBody = JSON.parse(options.body);
@@ -43,11 +43,21 @@ test("OpenAIResponseProvider - redact privateStanceEvidence when publicClaimAllo
     };
   };
   const provider = new OpenAIResponseProvider({ apiKey: "test-key", fetch: mockFetch });
-  await provider.generateResponse(dummyRequest);
+
+  // Malformed request from potentially tampered client
+  const malformedRequest = {
+    ...dummyRequest,
+    policyDecision: {
+        publicClaimAllowed: true,
+        publicClaim: { day: 1, actorId: "npc1", actorName: "Aoi", role: "seer", results: [] },
+        disclosedHiddenInfo: true
+    }
+  };
+
+  await provider.generateResponse(malformedRequest);
 
   const inputText = JSON.parse(capturedBody.input[0].content[0].text);
-  assert.ok(inputText.context.privateStanceEvidence.includes("redacted"), "Should be redacted");
-  assert.ok(!inputText.context.privateStanceEvidence.includes("werewolf"), "Should not contain sensitive info");
+  assert.equal(inputText.context.privateStanceEvidence, undefined, "privateStanceEvidence must be omitted entirely");
 });
 
 test("OpenAIResponseProvider - prompt injection remains user data", async () => {
@@ -89,8 +99,7 @@ test("OpenAIResponseProvider - providerName 'openai' in error diagnostics", asyn
 
     await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
         assert.equal(err.diagnostics.type, ERROR_TYPES.PROVIDER_SERVER_ERROR);
-        // providerName is usually added by the web server in the response,
-        // but let's check if the provider itself can identify itself or if we handle it in webServer.
+        assert.equal(err.diagnostics.providerName, "openai");
         return true;
     });
 });
@@ -98,14 +107,28 @@ test("OpenAIResponseProvider - providerName 'openai' in error diagnostics", asyn
 test("OpenAIResponseProvider - reject non-completed statuses (including incomplete)", async () => {
     const statuses = ["incomplete", "queued", "in_progress", "failed", "cancelled", "unknown"];
     for (const status of statuses) {
+        let calls = 0;
         const body = { id: "res_1", status, output: [] };
-        const mockFetch = async () => ({ ok: true, status: 200, headers: new Map(), json: async () => body });
-        const provider = new OpenAIResponseProvider({ apiKey: "key", fetch: mockFetch, fallbackToPseudo: false });
+        const mockFetch = async () => {
+            calls++;
+            return { ok: true, status: 200, headers: new Map(), json: async () => body };
+        };
+        const provider = new OpenAIResponseProvider({
+            apiKey: "key",
+            fetch: mockFetch,
+            sleep: async () => {},
+            maxRetries: 1,
+            fallbackToPseudo: false
+        });
         await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
-            assert.equal(err.type, ERROR_TYPES.PROVIDER_SERVER_ERROR);
+            const expectedType = (status === "failed" || status === "cancelled")
+              ? ERROR_TYPES.PROVIDER_SERVER_ERROR
+              : ERROR_TYPES.INVALID_PROVIDER_RESPONSE;
+            assert.equal(err.type, expectedType);
             assert.ok(err.message.includes(status));
             return true;
         }, `Should reject status: ${status}`);
+        assert.equal(calls, 1, `Status ${status} should perform exactly one fetch`);
     }
 });
 
@@ -127,18 +150,24 @@ test("OpenAIResponseProvider - malformed JSON is non-retryable invalid_provider_
     assert.equal(calls, 1, "Should not retry malformed JSON");
 });
 
-test("OpenAIResponseProvider - concurrency reset rejects all waiters", async () => {
-    const provider = new OpenAIResponseProvider({ apiKey: "key", maxConcurrent: 1 });
-    provider.activeRequests = 1;
+test("OpenAIResponseProvider - activeRequests never becomes negative", async () => {
+    let resolveFetch;
+    const mockFetch = async () => {
+        return new Promise((resolve) => {
+            resolveFetch = () => resolve({
+                ok: true,
+                status: 200,
+                headers: new Map(),
+                json: async () => officialSuccessResponse
+            });
+        });
+    };
+    const provider = new OpenAIResponseProvider({ apiKey: "key", fetch: mockFetch, maxConcurrent: 1 });
 
     const p1 = provider.generateResponse(dummyRequest);
-    const p2 = provider.generateResponse(dummyRequest);
+    assert.equal(provider.activeRequests, 1);
 
-    assert.equal(provider.waiters.length, 2);
-    provider.reset();
-
-    await assert.rejects(p1, { name: "AbortError", message: "Provider reset" });
-    await assert.rejects(p2, { name: "AbortError", message: "Provider reset" });
-    assert.equal(provider.waiters.length, 0);
+    resolveFetch();
+    await p1;
     assert.equal(provider.activeRequests, 0);
 });

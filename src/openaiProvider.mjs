@@ -180,6 +180,16 @@ export class OpenAIResponseProvider {
           retryable: false
         });
       }
+
+      // Root validation
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Provider response root must be an object", {
+          requestId,
+          status: response.status,
+          retryCount,
+          retryable: false
+        });
+      }
       return this._parseOpenAIResponse(data, requestId, response.status, retryCount);
     } catch (error) {
       if (externalSignal?.aborted) {
@@ -199,15 +209,23 @@ export class OpenAIResponseProvider {
   }
 
   _extractSafeInput(request) {
-    const context = { ...request.context };
-
-    // Privacy: Redact privateStanceEvidence if not explicitly allowed to be claimed.
-    if (!request.policyDecision?.publicClaimAllowed) {
-      context.privateStanceEvidence = "[redacted for privacy: not allowed to claim publicly]";
-    }
+    const context = {
+      day: request.context.day,
+      phase: request.context.phase,
+      publicEvidence: request.context.publicEvidence,
+      shareableKnownEvidence: request.context.shareableKnownEvidence,
+      publicClaims: request.context.publicClaims,
+      intent: request.context.intent,
+      topSuspect: request.context.topSuspect
+    };
 
     return {
-      npc: request.npc,
+      npc: {
+        id: request.npc.id,
+        name: request.npc.name,
+        personality: request.npc.personality,
+        speechStyle: request.npc.speechStyle
+      },
       playerInput: request.playerInput,
       context: context,
       policyDecision: {
@@ -233,17 +251,25 @@ export class OpenAIResponseProvider {
     const providerStatus = data.status;
     const responseId = data.id;
 
+    if (!providerStatus) {
+       throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Missing provider status", { requestId, responseId, status: httpStatus, retryable: false });
+    }
+
     // Accept only "completed" as success.
-    // "incomplete" is treated as a transient failure to trigger fallback/retry.
+    // "incomplete" and others are non-retryable invalid_provider_response or provider_server_error.
     if (providerStatus !== "completed") {
         const reason = data.incomplete_details?.reason || "unknown";
-        const type = providerStatus === "incomplete" ? ERROR_TYPES.PROVIDER_SERVER_ERROR : ERROR_TYPES.PROVIDER_SERVER_ERROR;
+        const isTransient = false; // Requirement: do not retry non-completed HTTP 200 results
+        const type = (providerStatus === "failed" || providerStatus === "cancelled")
+          ? ERROR_TYPES.PROVIDER_SERVER_ERROR
+          : ERROR_TYPES.INVALID_PROVIDER_RESPONSE;
+
         throw this._createError(type, `Provider status: ${providerStatus} (${reason})`, {
             requestId,
             responseId,
             status: httpStatus,
             providerStatus,
-            retryable: true
+            retryable: isTransient
         });
     }
 
@@ -381,13 +407,4 @@ export class OpenAIResponseProvider {
     return fallbackableTypes.includes(error.type);
   }
 
-  reset() {
-    const error = new Error("Provider reset");
-    error.name = "AbortError";
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      waiter.reject(error);
-    }
-    this.activeRequests = 0;
-  }
 }

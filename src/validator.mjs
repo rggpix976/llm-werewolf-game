@@ -137,8 +137,22 @@ function validateResultsArray(arr, name) {
 
 function validatePolicyDecision(decision) {
   if (!decision || typeof decision !== "object" || Array.isArray(decision)) throw createValidationError("Missing or invalid policyDecision");
+  const allowed = validateBoolean(decision.publicClaimAllowed, "policyDecision.publicClaimAllowed");
+  const disclosed = validateBoolean(decision.disclosedHiddenInfo, "policyDecision.disclosedHiddenInfo");
+
+  // Consistency Check
+  if (allowed && !decision.publicClaim) {
+    throw createValidationError("publicClaimAllowed: true requires a valid publicClaim");
+  }
+  if (allowed && !disclosed) {
+    throw createValidationError("publicClaimAllowed: true requires disclosedHiddenInfo: true");
+  }
+  if (!allowed && decision.publicClaim) {
+    throw createValidationError("publicClaimAllowed: false requires publicClaim: null");
+  }
+
   return {
-    publicClaimAllowed: validateBoolean(decision.publicClaimAllowed, "policyDecision.publicClaimAllowed"),
+    publicClaimAllowed: allowed,
     publicClaim: decision.publicClaim ? {
        day: validateInt(decision.publicClaim.day, "publicClaim.day", 1, 100),
        actorId: validateString(decision.publicClaim.actorId, "publicClaim.actorId", 1, 50),
@@ -146,7 +160,7 @@ function validatePolicyDecision(decision) {
        role: validateString(decision.publicClaim.role, "publicClaim.role", 1, 50),
        results: validateResultsArray(decision.publicClaim.results, "publicClaim.results")
     } : null,
-    disclosedHiddenInfo: validateBoolean(decision.disclosedHiddenInfo, "policyDecision.disclosedHiddenInfo")
+    disclosedHiddenInfo: disclosed
   };
 }
 

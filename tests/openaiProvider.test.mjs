@@ -73,7 +73,6 @@ test("OpenAIResponseProvider - abort during concurrency wait", async () => {
 
     await assert.rejects(promise, { name: "AbortError" });
     assert.equal(provider.waiters.length, 0, "Waiter should be removed");
-    provider.reset();
 });
 
 test("OpenAIResponseProvider - error classification: 401, 403, 429, 400, 500", async () => {
@@ -105,15 +104,22 @@ test("OpenAIResponseProvider - error classification: 401, 403, 429, 400, 500", a
 test("OpenAIResponseProvider - retry logic (429 and 500)", async () => {
     for (const status of [429, 500]) {
         let calls = 0;
+        let sleepCalled = 0;
         const mockFetch = async () => {
             calls++;
             if (calls === 1) return { ok: false, status, headers: new Map(), json: async () => ({}) };
             return { ok: true, status: 200, headers: new Map(), json: async () => officialSuccessResponse };
         };
-        const provider = new OpenAIResponseProvider({ apiKey: "key", fetch: mockFetch, sleep: async () => {}, maxRetries: 1 });
+        const provider = new OpenAIResponseProvider({
+            apiKey: "key",
+            fetch: mockFetch,
+            sleep: async () => { sleepCalled++; },
+            maxRetries: 1
+        });
         const result = await provider.generateResponse(dummyRequest);
         assert.equal(result.text, "こんにちは");
         assert.equal(calls, 2);
+        assert.equal(sleepCalled, 1, `Sleep should be called once for status ${status}`);
         assert.equal(result.diagnostics.retryCount, 1);
     }
 });
@@ -160,20 +166,34 @@ test("OpenAIResponseProvider - no fallback on 401", async () => {
     });
 });
 
-test("OpenAIResponseProvider - incomplete response is rejected", async () => {
-    const incWithText = {
-        id: "resp_inc",
-        status: "incomplete",
-        incomplete_details: { reason: "max_output_tokens" },
-        output: [{ type: "message", content: [{ type: "output_text", text: "Partially" }] }]
-    };
-    const mockFetch1 = async () => ({ ok: true, status: 200, headers: new Map(), json: async () => incWithText });
-    const provider1 = new OpenAIResponseProvider({ apiKey: "key", fetch: mockFetch1, fallbackToPseudo: false });
-    await assert.rejects(provider1.generateResponse(dummyRequest), (err) => {
-        assert.equal(err.type, ERROR_TYPES.PROVIDER_SERVER_ERROR);
-        assert.ok(err.message.includes("incomplete"));
-        return true;
-    });
+test("OpenAIResponseProvider - non-completed HTTP 200 responses are not retried", async () => {
+    const statuses = ["incomplete", "queued", "in_progress", "failed", "cancelled"];
+    for (const status of statuses) {
+        let calls = 0;
+        let sleepCalled = 0;
+        const body = { id: "res_1", status, output: [] };
+        const mockFetch = async () => {
+            calls++;
+            return { ok: true, status: 200, headers: new Map(), json: async () => body };
+        };
+        const provider = new OpenAIResponseProvider({
+            apiKey: "key",
+            fetch: mockFetch,
+            sleep: async () => { sleepCalled++; },
+            maxRetries: 1,
+            fallbackToPseudo: false
+        });
+        await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
+            const expectedType = (status === "failed" || status === "cancelled")
+              ? ERROR_TYPES.PROVIDER_SERVER_ERROR
+              : ERROR_TYPES.INVALID_PROVIDER_RESPONSE;
+            assert.equal(err.type, expectedType);
+            assert.ok(err.message.includes(status));
+            return true;
+        });
+        assert.equal(calls, 1, `Status ${status} should perform exactly one fetch`);
+        assert.equal(sleepCalled, 0, `Sleep should not be called for status ${status}`);
+    }
 });
 
 test("OpenAIResponseProvider - edge case: refusal, failed/cancelled status", async () => {
