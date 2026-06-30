@@ -147,7 +147,7 @@ function validatePolicyDecision(decision) {
   if (allowed && !disclosed) {
     throw createValidationError("publicClaimAllowed: true requires disclosedHiddenInfo: true");
   }
-  if (!allowed && decision.publicClaim) {
+  if (!allowed && decision.publicClaim !== null) {
     throw createValidationError("publicClaimAllowed: false requires publicClaim: null");
   }
 

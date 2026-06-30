@@ -101,6 +101,16 @@ LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックを使用します。本機能は制御されたローカル環境でのモック応答を用いたテストが完了した状態です。実APIの確認は利用者が明示的に設定を行ってから実施してください。
 
+### 手動検証用ツール (Mock Server)
+
+本物の OpenAI API を呼び出さずにブラウザ UI を確認するために、モックサーバーが利用可能です。
+
+```bash
+node scripts/mock-openai-server.mjs
+```
+
+起動後、`http://127.0.0.1:4174/` にアクセスしてください。
+
 ### Developer Mode
 
 ブラウザUIには「Developer Mode」が搭載されています。画面上部のトグルボタンで切り替えることができます。

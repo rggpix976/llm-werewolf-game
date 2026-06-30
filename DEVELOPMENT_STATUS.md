@@ -21,7 +21,7 @@ Last updated: 2026-06-28
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 68 automated tests.
+- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 71 automated tests.
 
 ## Last Verified
 
@@ -32,7 +32,7 @@ Last updated: 2026-06-28
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `node scripts/mock-openai-server.mjs`
-- Result: 68/68 tests passed. All .mjs files pass syntax check. Mock server starts successfully. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
+- Result: 71/71 tests passed. All .mjs files pass syntax check. Mock server starts successfully. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
 
 ## Next Recommended Task
 

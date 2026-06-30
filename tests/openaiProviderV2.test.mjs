@@ -150,6 +150,53 @@ test("OpenAIResponseProvider - malformed JSON is non-retryable invalid_provider_
     assert.equal(calls, 1, "Should not retry malformed JSON");
 });
 
+test("OpenAIResponseProvider - malformed nested JSON is non-retryable and no fallback", async () => {
+    const malformedBodies = [
+        { status: "completed", output: [null] },
+        { status: "completed", output: [{ type: "message", content: "not-array" }] },
+        { status: "completed", output: [{ type: "message", content: [null] }] },
+        { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: 123 }] }] }
+    ];
+
+    for (const body of malformedBodies) {
+        let calls = 0;
+        const mockFetch = async () => {
+            calls++;
+            return { ok: true, status: 200, headers: new Map(), json: async () => body };
+        };
+        const provider = new OpenAIResponseProvider({
+            apiKey: "key",
+            fetch: mockFetch,
+            maxRetries: 1,
+            fallbackToPseudo: true
+        });
+        await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
+            assert.equal(err.type, ERROR_TYPES.INVALID_PROVIDER_RESPONSE);
+            assert.equal(err.retryable, false);
+            // assert.rejects proves that it did not return a successful fallback response
+            return true;
+        });
+        assert.equal(calls, 1, "Should not retry malformed nested JSON");
+    }
+});
+
+test("OpenAIResponseProvider - non-completed statuses do not fall back", async () => {
+    const statuses = ["incomplete", "queued", "in_progress", "failed", "cancelled"];
+    for (const status of statuses) {
+        const body = { id: "res_1", status, output: [] };
+        const mockFetch = async () => ({ ok: true, status: 200, headers: new Map(), json: async () => body });
+        const provider = new OpenAIResponseProvider({
+            apiKey: "key",
+            fetch: mockFetch,
+            fallbackToPseudo: true
+        });
+        await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
+            // assert.rejects proves that it did not return a successful fallback response
+            return true;
+        });
+    }
+});
+
 test("OpenAIResponseProvider - activeRequests never becomes negative", async () => {
     let resolveFetch;
     const mockFetch = async () => {

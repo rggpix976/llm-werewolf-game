@@ -289,16 +289,14 @@ test("OpenAIResponseProvider - timeout during body reading", async () => {
     };
     const provider = new OpenAIResponseProvider({ apiKey: "key", fetch: mockFetch, timeoutMs: 10, fallbackToPseudo: false });
     await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
-        // Body reading timeout can either be TIMEOUT or INVALID_PROVIDER_RESPONSE
-        // depending on whether the AbortError from fetch signal or our catch block wins.
-        // In our current implementation, fetch throws AbortError which we map to TIMEOUT.
-        // Wait, if json() throws AbortError, it's caught in _fetchOpenAI.
-        return err.type === ERROR_TYPES.TIMEOUT || err.type === ERROR_TYPES.INVALID_PROVIDER_RESPONSE;
+        assert.equal(err.type, ERROR_TYPES.TIMEOUT, "Body reading timeout must be classified as TIMEOUT");
+        assert.equal(err.retryable, true, "Body reading timeout must be retryable");
+        return true;
     });
 });
 
 test("OpenAIResponseProvider - slot release after various outcomes", async () => {
-    const provider = new OpenAIResponseProvider({ apiKey: "key", maxConcurrent: 1 });
+    const provider = new OpenAIResponseProvider({ apiKey: "key", maxConcurrent: 1, maxRetries: 0 });
 
     // Success
     const mockSuccess = async () => ({ ok: true, status: 200, headers: new Map(), json: async () => officialSuccessResponse });

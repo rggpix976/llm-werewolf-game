@@ -172,7 +172,10 @@ export class OpenAIResponseProvider {
       let data;
       try {
         data = await response.json();
-      } catch (jsonError) {
+      } catch (err) {
+        if (err.name === "AbortError") {
+          throw this._createError(ERROR_TYPES.TIMEOUT, "Request timed out during body reading", { retryable: true, retryCount });
+        }
         throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Malformed JSON response from provider", {
           requestId,
           status: response.status,
@@ -281,9 +284,23 @@ export class OpenAIResponseProvider {
     let refusal = null;
 
     for (const item of data.output) {
-      if (item.type === "message" && item.content && Array.isArray(item.content)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+         throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Malformed output item", { requestId, responseId, status: httpStatus });
+      }
+
+      if (item.type === "message") {
+        if (!Array.isArray(item.content)) {
+          throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Message content is not an array", { requestId, responseId, status: httpStatus });
+        }
         for (const content of item.content) {
-          if (content.type === "output_text" && typeof content.text === "string") {
+          if (!content || typeof content !== "object" || Array.isArray(content)) {
+             throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Malformed content item", { requestId, responseId, status: httpStatus });
+          }
+
+          if (content.type === "output_text") {
+            if (typeof content.text !== "string") {
+               throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "output_text content is not a string", { requestId, responseId, status: httpStatus });
+            }
             textParts.push(content.text);
           } else if (content.type === "refusal") {
             refusal = content.refusal;
@@ -371,7 +388,8 @@ export class OpenAIResponseProvider {
         requestId: details.requestId,
         responseId: details.responseId,
         code: details.code,
-        retryCount: details.retryCount
+        retryCount: details.retryCount,
+        retryable: error.retryable
     };
     return error;
   }
@@ -398,6 +416,7 @@ export class OpenAIResponseProvider {
   }
 
   _isFallbackable(error) {
+    if (!error.retryable) return false;
     const fallbackableTypes = [
       ERROR_TYPES.TIMEOUT,
       ERROR_TYPES.NETWORK_ERROR,
