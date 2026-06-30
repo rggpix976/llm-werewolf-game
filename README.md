@@ -135,8 +135,8 @@ node scripts/mock-openai-server.mjs
 - `src/responseGenerator.mjs`
   - NPCに許可された情報から、応答要求とプロンプトを組み立てます。
 - `src/responseProvider.mjs`
-  - `generateResponse(request)` を持つ応答プロバイダーの既定実装を提供します。
-  - 現在は `PseudoResponseProvider` を使用し、将来は実LLMプロバイダーへ差し替えられます。
+  - `generateResponse(request)` を持つ応答プロバイダーの共通インターフェースを定義します。
+  - ブラウザUIでは `HttpResponseProvider` を使用し、サーバー側で設定に応じて `PseudoResponseProvider` または `OpenAIResponseProvider` が選択されます。
 - `src/audit.mjs`
   - サンプルプレイ後の最低限の検証を行います。
 - `scripts/sample-play.mjs`
@@ -144,7 +144,13 @@ node scripts/mock-openai-server.mjs
 
 ## 設計メモ
 
-LLMにゲーム状態は変更させません。役職、生死、投票、占い結果、襲撃結果、勝敗判定は `WerewolfGame` が管理します。
+### 安全なLLM接続
+
+本プロトタイプは、セキュリティと整合性のために以下の設計を採用しています。
+
+- **サーバーサイド接続**: ブラウザから OpenAI API へ直接接続せず、Node.js サーバーがプロキシとして動作します。これにより、API キーをブラウザへ渡すことなく安全に管理できます。
+- **データ最小化**: OpenAI への入力データからは `privateStanceEvidence`（占い結果等の非公開情報）が完全に除外されます。NPC はコード側で決定された `responsePlan.baseText` を事実上の根拠として発言を生成します。
+- **状態管理の分離**: LLMにゲーム状態は変更させません。役職、生死、投票、占い結果、襲撃結果、勝敗判定は `WerewolfGame` が管理します。
 
 応答プロバイダーは発言文と診断用メタデータだけを返します。役職COの許可、公開情報、記憶更新は `WerewolfGame` が処理します。開発者ログでは `knownInfo`、`hiddenInfo`、`suspicionScores`、投票理由、占い対象、襲撃対象、応答生成時の根拠を確認できます。
 

@@ -287,7 +287,7 @@ test("OpenAIResponseProvider - timeout during body reading", async () => {
             }
         };
     };
-    const provider = new OpenAIResponseProvider({ apiKey: "key", fetch: mockFetch, timeoutMs: 10, fallbackToPseudo: false });
+    const provider = new OpenAIResponseProvider({ apiKey: "key", fetch: mockFetch, timeoutMs: 10, maxRetries: 0, fallbackToPseudo: false });
     await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
         assert.equal(err.type, ERROR_TYPES.TIMEOUT, "Body reading timeout must be classified as TIMEOUT");
         assert.equal(err.retryable, true, "Body reading timeout must be retryable");
