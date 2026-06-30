@@ -113,7 +113,7 @@ export class OpenAIResponseProvider {
           fallbackFrom: this.name,
           fallbackTo: pseudoResponse.providerName,
           originalErrorType: lastError.type,
-          httpStatus: lastError.status,
+          httpStatus: lastError.upstreamStatus,
           requestId: lastError.requestId,
           retryCount
         }

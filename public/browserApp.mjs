@@ -72,12 +72,16 @@ elements.askForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  await dispatch({
+  const gameIdAtSubmit = currentGameId;
+  const result = await dispatch({
     type: "ask_npc",
     target,
     input
   });
-  elements.questionInput.value = "";
+
+  if (result && sessionManager.isCurrentGame(gameIdAtSubmit)) {
+    elements.questionInput.value = "";
+  }
 });
 
 elements.voteButton.addEventListener("click", async () => {

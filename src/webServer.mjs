@@ -134,6 +134,10 @@ async function handleNpcResponse(request, response, provider, rateLimiter) {
        return;
     }
 
+    if (error.name === "ValidationError") {
+      return sendError(response, 400, error.message, "bad_request");
+    }
+
     const type = error.type || "server_error";
     const status = mapErrorToHttpStatus(type, error.upstreamStatus);
     const safeMessage = getSafeErrorMessage(type, error.message, status);
