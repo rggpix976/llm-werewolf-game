@@ -128,7 +128,7 @@ test("POST /api/npc-response sanitized error", async () => {
         name: "mock",
         generateResponse: async () => {
             const err = new Error("Evil stack trace");
-            err.status = 500;
+            err.upstreamStatus = 500;
             err.type = "provider_server_error";
             throw err;
         }
@@ -147,7 +147,7 @@ test("POST /api/npc-response sanitized error", async () => {
                 evidenceUsed: []
             })
         });
-        assert.equal(res.status, 500);
+        assert.equal(res.status, 502);
         const data = await res.json();
         assert.ok(!JSON.stringify(data).includes("Evil stack trace"));
         assert.ok(data.error);

@@ -373,7 +373,7 @@ export class OpenAIResponseProvider {
     error.name = "OpenAIResponseProviderError";
     error.type = type;
     error.retryable = details.retryable ?? false;
-    error.status = details.status;
+    error.upstreamStatus = details.status; // Preserve upstream HTTP status
     error.requestId = details.requestId;
     error.code = details.code;
     error.retryAfter = details.retryAfter;
@@ -383,7 +383,7 @@ export class OpenAIResponseProvider {
     error.diagnostics = {
         providerName: this.name,
         type,
-        httpStatus: details.status,
+        httpStatus: details.status, // diagnostics preserved for developer mode
         providerStatus: details.providerStatus,
         requestId: details.requestId,
         responseId: details.responseId,

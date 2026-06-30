@@ -134,12 +134,12 @@ async function handleNpcResponse(request, response, provider, rateLimiter) {
        return;
     }
 
-    const status = error.status || 500;
     const type = error.type || "server_error";
+    const status = mapErrorToHttpStatus(type, error.upstreamStatus);
     const safeMessage = getSafeErrorMessage(type, error.message, status);
 
     sendError(response, status, safeMessage, type, error.diagnostics || {
-       httpStatus: status,
+       httpStatus: error.upstreamStatus || status,
        code: error.code,
        requestId: error.requestId,
        responseId: error.responseId,
@@ -152,6 +152,20 @@ async function handleNpcResponse(request, response, provider, rateLimiter) {
     // response listener removal is trickier as 'close' is used for many things,
     // but in Node.js 18+ it should be fine as it's terminal.
   }
+}
+
+function mapErrorToHttpStatus(type, upstreamStatus) {
+  const map = {
+    "invalid_provider_response": 502,
+    "timeout": 504,
+    "network_error": 503,
+    "provider_server_error": 502,
+    "rate_limit": 429,
+    "bad_request": 400,
+    "authentication_error": 502,
+    "permission_error": 502
+  };
+  return map[type] || upstreamStatus || 500;
 }
 
 function getSafeErrorMessage(type, originalMessage, status) {

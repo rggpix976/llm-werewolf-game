@@ -43,3 +43,32 @@ test("HttpResponseProvider - aborted request settles promptly", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("HttpResponseProvider - error propagation (502 invalid_provider_response)", async () => {
+    const provider = new HttpResponseProvider();
+    const originalFetch = globalThis.fetch;
+    const diagnostics = { providerName: "openai", upstreamHttpStatus: 200 };
+
+    globalThis.fetch = async () => ({
+        ok: false,
+        status: 502,
+        json: async () => ({
+            error: "The provider returned an invalid response.",
+            type: "invalid_provider_response",
+            diagnostics
+        })
+    });
+
+    try {
+        await assert.rejects(provider.generateResponse({}), (err) => {
+            assert.equal(err.name, "ResponseProviderError");
+            assert.equal(err.status, 502);
+            assert.equal(err.type, "invalid_provider_response");
+            assert.deepEqual(err.diagnostics, diagnostics);
+            assert.equal(err.diagnostics.providerName, "openai");
+            return true;
+        });
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});

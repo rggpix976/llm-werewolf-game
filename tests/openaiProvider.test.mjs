@@ -95,7 +95,7 @@ test("OpenAIResponseProvider - error classification: 401, 403, 429, 400, 500", a
         await assert.rejects(provider.generateResponse(dummyRequest), (err) => {
             assert.equal(err.type, expected, `Status ${status} should map to ${expected}`);
             assert.ok(!err.message.includes("key"), "Error message should not contain API key");
-            assert.equal(err.status, status);
+            assert.equal(err.upstreamStatus, status);
             return true;
         });
     }

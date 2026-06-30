@@ -274,7 +274,7 @@ export class WerewolfGame {
         npcId: npc.id,
         npcName: npc.name,
         playerInput: questionText,
-        providerName,
+        providerName: error?.diagnostics?.providerName || providerName,
         errorType: error?.type ?? error?.name ?? "Error",
         message: error?.message ?? String(error),
         diagnostics: error?.diagnostics,
