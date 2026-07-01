@@ -24,12 +24,21 @@ export class SmokeTestError extends Error {
 }
 
 /**
+ * Creates a fetch wrapper that allows exactly one call.
+ */
+export function createOneCallFetch(originalFetch) {
+  let callCount = 0;
+  return async (url, opts) => {
+    if (callCount > 0) {
+      throw new Error("Blocked second outbound OpenAI request locally.");
+    }
+    callCount++;
+    return await originalFetch(url, opts);
+  };
+}
+
+/**
  * Performs a controlled one-call real OpenAI smoke test.
- * @param {Object} options
- * @param {Object} options.env - Environment variables.
- * @param {Object} options.logger - Logger with .log and .error.
- * @param {AbortSignal} options.signal - Abort signal for cancellation.
- * @param {Function} options.fetch - Optional fetch override for OpenAI provider.
  */
 export async function runSmokeTest(options = {}) {
   const env = options.env || process.env;
@@ -67,7 +76,7 @@ export async function runSmokeTest(options = {}) {
   logger.log("Safety gates passed. Starting controlled OpenAI smoke test...");
 
   let server;
-  let openAIFetchCount = 0;
+  let networkCallCount = 0;
 
   try {
     if (signal?.aborted) throw signal.reason;
@@ -95,16 +104,12 @@ export async function runSmokeTest(options = {}) {
       throw new SmokeTestError(err.message, EXIT_CODES.CONFIG_OR_OPT_IN_FAILURE);
     }
 
-    // Wrap fetch to enforce one-OpenAI-request limit
     const originalFetch = options.fetch || config.openai?.fetch || globalThis.fetch;
     const wrappedOpenAIFetch = async (url, fetchOpts) => {
-      // Only count outbound OpenAI API calls
-      if (typeof url === "string" && url.includes("api.openai.com")) {
-        openAIFetchCount++;
-        if (openAIFetchCount > 1) {
-          throw new Error("Blocked second outbound OpenAI request locally.");
-        }
+      if (networkCallCount > 0) {
+        throw new Error("Blocked second outbound OpenAI request locally.");
       }
+      networkCallCount++;
       return await originalFetch(url, fetchOpts);
     };
 
@@ -122,7 +127,9 @@ export async function runSmokeTest(options = {}) {
     await new Promise((resolve, reject) => {
       server.listen(0, "127.0.0.1", () => resolve());
       server.on("error", reject);
-      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      if (signal) {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }
     });
 
     const port = server.address().port;
@@ -148,12 +155,11 @@ export async function runSmokeTest(options = {}) {
       logger.error(`Error Type: ${body.type}`);
       logger.error(`Error Message: ${body.error}`);
       if (body.diagnostics) {
-        logger.error("Diagnostics: " + JSON.stringify(body.diagnostics, null, 2));
+        const diag = { ...body.diagnostics };
+        delete diag.apiKey;
+        logger.error("Diagnostics: " + JSON.stringify(diag, null, 2));
       }
 
-      // Distinguish local validation (400) from provider failure (other)
-      // Upstream 400 is mapped to 502/authentication/permission or similar by the web server
-      // and usually carries diagnostics.providerName === "openai"
       const isProviderError = body.diagnostics?.providerName === "openai";
       const exitCode = (status === 400 && !isProviderError)
         ? EXIT_CODES.LOCAL_VALIDATION_FAILURE
@@ -173,7 +179,7 @@ export async function runSmokeTest(options = {}) {
       fallbackUsed !== true &&
       providerStatus === "completed" &&
       model &&
-      openAIFetchCount === 1
+      networkCallCount === 1
     );
 
     if (pass) {
@@ -183,7 +189,7 @@ export async function runSmokeTest(options = {}) {
       if (fallbackUsed) logger.log("- Reason: Fallback to pseudo was used.");
       if (providerName !== "openai") logger.log(`- Reason: Unexpected provider name: ${providerName}`);
       if (providerStatus !== "completed") logger.log(`- Reason: Unexpected provider status: ${providerStatus}`);
-      if (openAIFetchCount !== 1) logger.log(`- Reason: Unexpected OpenAI fetch count: ${openAIFetchCount}`);
+      if (networkCallCount !== 1) logger.log(`- Reason: Unexpected OpenAI fetch count: ${networkCallCount}`);
     }
 
     // 5. Print sanitized report
@@ -191,7 +197,7 @@ export async function runSmokeTest(options = {}) {
     logger.log(`Result:          ${pass ? "PASS" : "FAIL"}`);
     logger.log(`Model:           ${model || "unknown"}`);
     logger.log(`Provider:        ${providerName}`);
-    logger.log(`OpenAI Fetches:  ${openAIFetchCount}`);
+    logger.log(`OpenAI Fetches:  ${networkCallCount}`);
     logger.log(`Elapsed (ms):    ${duration}`);
     logger.log(`Output chars:    ${text?.length || 0}`);
     if (usage) {
@@ -209,10 +215,11 @@ export async function runSmokeTest(options = {}) {
     logger.log("----------------------------------------");
 
     if (!pass) {
-      throw new SmokeTestError("Smoke test assertion failed", EXIT_CODES.SMOKE_TEST_ASSERTION_FAILURE, diagnostics);
+      const assertionMsg = fallbackUsed ? "Smoke test failed: Pseudo fallback was used." : "Smoke test assertion failed";
+      throw new SmokeTestError(assertionMsg, EXIT_CODES.SMOKE_TEST_ASSERTION_FAILURE, diagnostics);
     }
 
-    return { pass, body, duration, openAIFetchCount };
+    return { pass, body, duration, networkCallCount };
 
   } catch (error) {
     if (error instanceof SmokeTestError) throw error;
@@ -231,7 +238,6 @@ export async function runSmokeTest(options = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const controller = new AbortController();
   const onSigInt = () => {
-    console.log("\nInterrupted by user.");
     controller.abort();
   };
   process.on("SIGINT", onSigInt);
@@ -241,8 +247,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       process.exitCode = 0;
     })
     .catch(err => {
-      if (err.exitCode) {
+      if (err instanceof SmokeTestError) {
         process.exitCode = err.exitCode;
+        if (err.exitCode !== EXIT_CODES.INTERRUPTION) {
+           console.error("\n" + err.message);
+        } else {
+           console.log("\n" + err.message);
+        }
       } else {
         console.error("\nFAIL: An unexpected error occurred.");
         console.error(err.message);
