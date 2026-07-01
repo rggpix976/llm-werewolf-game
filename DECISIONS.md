@@ -61,3 +61,9 @@ Closing the CLI, refreshing the browser, or closing the application discards the
 OpenAI API keys must never be exposed to the browser.
 
 All LLM calls are handled by the Node.js server. The browser communicates with the server via a local API endpoint (`/api/npc-response`). This ensures that API keys remain secure in the server's environment and allows for centralized rate limiting and auditing.
+
+## D-011: Real OpenAI Verification is Controlled and Explicit
+
+Real OpenAI API verification is explicit, local, single-request, non-retrying, non-fallback, and never executed by automated tests or AI agents (Jules).
+
+The `npm run smoke:openai` command requires a mandatory opt-in flag `OPENAI_LIVE_SMOKE_TEST=I_ACCEPT_API_CHARGES` to prevent accidental billing and ensures that verification follows the production code path through a temporary local server.

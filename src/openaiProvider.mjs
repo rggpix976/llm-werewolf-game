@@ -316,7 +316,7 @@ export class OpenAIResponseProvider {
     }
 
     if (!text && providerStatus === "completed") {
-      throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Empty response text", { requestId, responseId, status: httpStatus, providerStatus });
+      throw this._createError(ERROR_TYPES.INVALID_PROVIDER_RESPONSE, "Empty response text", { requestId, responseId, status: httpStatus, providerStatus, retryable: false });
     }
 
     if (text.length > 2000) {

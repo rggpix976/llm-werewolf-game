@@ -16,12 +16,13 @@ Last updated: 2026-06-28
 - Browser-side `HttpResponseProvider` and `SessionManager` for robust stale response prevention and request cancellation.
 - Configurable concurrency limit and RPM limit for OpenAI calls.
 - Transient error fallback to `PseudoResponseProvider` for game continuity.
+- Added a controlled one-call real OpenAI smoke-test workflow (`npm run smoke:openai`) for local verification.
 - UI-independent asynchronous action API is available through `await dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 74 automated tests.
+- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 95 automated tests.
 
 ## Last Verified
 
@@ -31,7 +32,7 @@ Last updated: 2026-06-28
   - `npm run sample`
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
-- Result: 74/74 tests passed. All .mjs files pass syntax check. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
+- Result: 95/95 tests passed. All .mjs files pass syntax check. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
 
 ## Next Recommended Task
 
