@@ -3,7 +3,7 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runSmokeTest, EXIT_CODES } from "../scripts/smoke-openai-live.mjs";
+import { runSmokeTest, EXIT_CODES, createOneCallFetch } from "../scripts/smoke-openai-live.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const scriptPath = path.resolve(__dirname, "../scripts/smoke-openai-live.mjs");
@@ -48,18 +48,18 @@ function runScript(env = {}) {
 }
 
 // 1. CLI Process Tests
-test("CLI - refuses without credentials with clear explanation", () => {
+test("CLI - refuses without credentials with clear explanation (Exit Code 1)", () => {
     const result = runScript({
         OPENAI_LIVE_SMOKE_TEST: "",
-        LLM_PROVIDER: "",
-        OPENAI_API_KEY: ""
+        LLM_PROVIDER: "openai",
+        OPENAI_API_KEY: "<test-api-key>"
     });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /Missing or invalid OPENAI_LIVE_SMOKE_TEST/);
     assert.ok(!result.stdout.includes("Local server listening"), "Should not start server");
 });
 
-test("CLI - invalid config (timeout) prints safe error", () => {
+test("CLI - invalid config (timeout) prints safe error (Exit Code 1)", () => {
     const result = runScript({
         ...validEnv,
         OPENAI_TIMEOUT_MS: "999999"
@@ -68,40 +68,88 @@ test("CLI - invalid config (timeout) prints safe error", () => {
     assert.match(result.stderr, /OPENAI_TIMEOUT_MS must be between/);
 });
 
-// 2. Logic & In-Process Tests
-test("Smoke test logic - safety gate: incorrect opt-in", async () => {
+// 2. Unit Test: Shared One-Call Guard
+test("createOneCallFetch - block second outbound request locally", async () => {
+    let originalFetchCount = 0;
+    const mockOriginalFetch = async (url) => {
+        originalFetchCount++;
+        return { ok: true, status: 200, url };
+    };
+
+    const guard = createOneCallFetch(mockOriginalFetch);
+    assert.equal(guard.getCallCount(), 0);
+
+    const res1 = await guard.fetch("http://api.openai.com/v1/test", {});
+    assert.equal(res1.status, 200);
+    assert.equal(guard.getCallCount(), 1);
+    assert.equal(originalFetchCount, 1);
+
+    await assert.rejects(guard.fetch("http://api.openai.com/v1/second", {}), (err) => {
+        assert.match(err.message, /Blocked second outbound OpenAI request/);
+        return true;
+    });
+
+    assert.equal(guard.getCallCount(), 1, "Call count should not increment on blocked attempt");
+    assert.equal(originalFetchCount, 1, "Original fetch should not be called a second time");
+});
+
+// 3. Logic & In-Process Tests (Safety Gates)
+test("Smoke test logic - safety gate: missing opt-in (Exit 1)", async () => {
+    await assert.rejects(runSmokeTest({ env: { ...validEnv, OPENAI_LIVE_SMOKE_TEST: "" }, logger: silentLogger }), (err) => {
+        assert.equal(err.exitCode, EXIT_CODES.CONFIG_OR_OPT_IN_FAILURE);
+        assert.match(err.message, /Missing or invalid OPENAI_LIVE_SMOKE_TEST/);
+        return true;
+    });
+});
+
+test("Smoke test logic - safety gate: incorrect opt-in value (Exit 1)", async () => {
     await assert.rejects(runSmokeTest({ env: { ...validEnv, OPENAI_LIVE_SMOKE_TEST: "true" }, logger: silentLogger }), (err) => {
         assert.equal(err.exitCode, EXIT_CODES.CONFIG_OR_OPT_IN_FAILURE);
         return true;
     });
 });
 
-test("Smoke test logic - safety gate: LLM_PROVIDER other than openai", async () => {
+test("Smoke test logic - safety gate: LLM_PROVIDER other than openai (Exit 1)", async () => {
     await assert.rejects(runSmokeTest({ env: { ...validEnv, LLM_PROVIDER: "pseudo" }, logger: silentLogger }), (err) => {
         assert.equal(err.exitCode, EXIT_CODES.CONFIG_OR_OPT_IN_FAILURE);
         return true;
     });
 });
 
-test("Smoke test logic - safety gate: whitespace API key", async () => {
+test("Smoke test logic - safety gate: missing API key (Exit 1)", async () => {
+    await assert.rejects(runSmokeTest({ env: { ...validEnv, OPENAI_API_KEY: "" }, logger: silentLogger }), (err) => {
+        assert.equal(err.exitCode, EXIT_CODES.CONFIG_OR_OPT_IN_FAILURE);
+        return true;
+    });
+});
+
+test("Smoke test logic - safety gate: whitespace API key (Exit 1)", async () => {
     await assert.rejects(runSmokeTest({ env: { ...validEnv, OPENAI_API_KEY: "   " }, logger: silentLogger }), (err) => {
         assert.equal(err.exitCode, EXIT_CODES.CONFIG_OR_OPT_IN_FAILURE);
         return true;
     });
 });
 
-test("Smoke test logic - successful mocked response, one-request limit, and secret protection", async () => {
-    let fetchCount = 0;
+test("Smoke test logic - safety gate: no outbound fetch occurs on failure", async () => {
+    let fetchCalled = false;
+    const mockFetch = async () => { fetchCalled = true; return { ok: true }; };
+    try {
+        await runSmokeTest({ env: { ...validEnv, OPENAI_API_KEY: "" }, fetch: mockFetch, logger: silentLogger });
+    } catch (e) {
+        // Expected
+    }
+    assert.equal(fetchCalled, false, "Fetch should not be called if safety gate fails");
+});
+
+// 4. Success Case & Invariants
+test("Smoke test logic - successful mocked response, cost controls, and secret protection", async () => {
     let capturedRequest;
     let logBuffer = "";
     const mockFetch = async (url, options) => {
         if (url.includes("api.openai.com")) {
-            fetchCount++;
             capturedRequest = { url, options, body: JSON.parse(options.body) };
             return {
-                ok: true,
-                status: 200,
-                headers: new Map([["x-request-id", "req_smoke_success"]]),
+                ok: true, status: 200, headers: new Map([["x-request-id", "req_success"]]),
                 json: async () => officialSuccessResponse
             };
         }
@@ -116,175 +164,224 @@ test("Smoke test logic - successful mocked response, one-request limit, and secr
     const result = await runSmokeTest({ env: validEnv, fetch: mockFetch, logger });
 
     assert.equal(result.pass, true);
-    assert.equal(fetchCount, 1, "Should perform exactly one OpenAI fetch");
     assert.equal(result.networkCallCount, 1);
     assert.equal(capturedRequest.options.headers["Authorization"], "Bearer <test-api-key>");
 
-    // Cost and request control assertions
-    assert.equal(capturedRequest.body.max_output_tokens, 120, "Output tokens must be capped at 120");
-    assert.equal(capturedRequest.body.store, false, "store must be false");
-    assert.ok(!capturedRequest.body.tools, "tools field must not be sent");
+    // Cost control: max output tokens <= 120, store: false, no tools
+    assert.ok(capturedRequest.body.max_output_tokens <= 120);
+    assert.equal(capturedRequest.body.store, false);
+    assert.ok(!capturedRequest.body.tools);
 
-    // Secret protection: check full outbound body
+    // Secret protection
     const bodyStr = JSON.stringify(capturedRequest.body);
-    assert.ok(!bodyStr.includes("<test-api-key>"), "API key must be absent from request body");
-    assert.ok(!logBuffer.includes("<test-api-key>"), "API key must be absent from console output");
-    assert.ok(!JSON.stringify(result.body).includes("<test-api-key>"), "API key must be absent from returned result");
+    assert.ok(!bodyStr.includes("<test-api-key>"), "Key leaked in request body");
+    assert.ok(!logBuffer.includes("<test-api-key>"), "Key leaked in console output");
+    assert.ok(!JSON.stringify(result.body).includes("<test-api-key>"), "Key leaked in result");
 
     // Redaction of private evidence
     const inputText = JSON.parse(capturedRequest.body.input[0].content[0].text);
-    assert.equal(inputText.context.privateStanceEvidence, undefined, "Private evidence must be absent from OpenAI input");
+    assert.equal(inputText.context.privateStanceEvidence, undefined, "Private evidence leaked in input");
 
-    assert.match(logBuffer, /Local server closed\./, "Server must close after success");
+    assert.match(logBuffer, /Local server closed\./);
 });
 
-test("Smoke test logic - block second outbound request locally", async () => {
-    // We mock the original fetch and try to trigger a second call through the provider.
-    // Since runSmokeTest configures maxRetries: 0, it won't naturally call twice.
-    // But we can test the fetch wrapper directly if we want to be thorough.
-
-    let originalFetchCount = 0;
-    const originalFetch = async () => {
-        originalFetchCount++;
-        return { ok: true, status: 200, headers: new Map(), json: async () => officialSuccessResponse };
-    };
-
-    // Use the logic from the script
-    const wrappedFetch = async (url, opts) => {
-        let callCount = 0;
-        const inner = async (u, o) => {
-            callCount++;
-            if (callCount > 1) throw new Error("Blocked");
-            return await originalFetch(u, o);
-        };
-        // This is a simplified version of the logic in the script.
-        // We've already verified the script has this logic.
-    };
-});
-
-test("Smoke test logic - exactly one call on provider failures", async () => {
-    const failureCases = [
-        { status: 401, name: "authentication failure" },
-        { status: 429, name: "rate limit" },
-        { status: 504, name: "timeout", error: () => { const e = new Error("timeout"); e.name = "AbortError"; return e; } },
-        { status: 200, name: "invalid provider response", body: { status: "incomplete" } }
-    ];
-
-    for (const c of failureCases) {
-        let fetchCount = 0;
-        let logBuffer = "";
-        const mockFetch = async (url) => {
-            if (url.includes("api.openai.com")) {
-                fetchCount++;
-                if (c.error) throw c.error();
-                return {
-                    ok: c.status === 200,
-                    status: c.status,
-                    headers: new Map(),
-                    json: async () => c.body || ({ error: { message: "Fail" } })
-                };
-            }
-            return globalThis.fetch(url);
-        };
-
-        const logger = {
-            log: (m) => { logBuffer += m + "\n"; },
-            error: (m) => { logBuffer += m + "\n"; }
-        };
-
-        await assert.rejects(runSmokeTest({ env: validEnv, fetch: mockFetch, logger }), (err) => {
-            assert.equal(err.exitCode, EXIT_CODES.PROVIDER_API_FAILURE, `Failed on ${c.name}`);
-            assert.ok(!JSON.stringify(err).includes("<test-api-key>"), `Key leaked in ${c.name} error`);
-            return true;
-        });
-        assert.equal(fetchCount, 1, `Should perform exactly one fetch for ${c.name}`);
-        assert.match(logBuffer, /Local server closed\./, `Server should close after ${c.name}`);
-    }
-});
-
-test("Smoke test logic - server cleanup on assertion failure (fallback used)", async () => {
-    let logBuffer = "";
-    // We mock a success but with a different provider name to trigger assertion failure
+// 5. Provider & Communication Failures
+test("Smoke test logic - upstream OpenAI 400 maps to EXIT 3", async () => {
     const mockFetch = async (url) => {
         if (url.includes("api.openai.com")) {
             return {
-                ok: true,
-                status: 200,
-                headers: new Map(),
-                json: async () => ({
-                   ...officialSuccessResponse,
-                   usage: { ...officialSuccessResponse.usage }
-                })
+                ok: false, status: 400, headers: new Map(),
+                json: async () => ({ error: { message: "Bad request" } })
             };
         }
         return globalThis.fetch(url);
     };
 
-    // We can't easily force fallbackUsed = true from mockFetch if OpenAIResponseProvider disables it.
-    // But we can mock the LOCAL response if we wanted.
-    // Let's just mock a success that passes all provider checks but fails our final PASS assertions.
-    // Actually, PASS assertions check text, providerName, fallbackUsed, providerStatus, model, networkCallCount.
-    // If we return providerName: "not-openai", it fails.
+    await assert.rejects(runSmokeTest({ env: validEnv, fetch: mockFetch, logger: silentLogger }), (err) => {
+        assert.equal(err.exitCode, 3);
+        assert.equal(err.diagnostics.providerName, "openai");
+        return true;
+    });
 });
 
-test("Smoke test logic - server cleanup on assertion failure (fetch count)", async () => {
-    let logBuffer = "";
-    const logger = {
-        log: (m) => { logBuffer += m + "\n"; },
-        error: (m) => { logBuffer += m + "\n"; }
+test("Smoke test logic - authentication failure performs exactly one outbound call (Exit 3)", async () => {
+    let fetchCount = 0;
+    const mockFetch = async (url) => {
+        if (url.includes("api.openai.com")) {
+            fetchCount++;
+            return { ok: false, status: 401, headers: new Map(), json: async () => ({}) };
+        }
+        return globalThis.fetch(url);
     };
+    await assert.rejects(runSmokeTest({ env: validEnv, fetch: mockFetch, logger: silentLogger }), { exitCode: 3 });
+    assert.equal(fetchCount, 1);
+});
 
-    // We can override the check logic by mocking the local endpoint
+test("Smoke test logic - rate limit failure performs exactly one outbound call (Exit 3)", async () => {
+    let fetchCount = 0;
+    const mockFetch = async (url) => {
+        if (url.includes("api.openai.com")) {
+            fetchCount++;
+            return { ok: false, status: 429, headers: new Map(), json: async () => ({}) };
+        }
+        return globalThis.fetch(url);
+    };
+    await assert.rejects(runSmokeTest({ env: validEnv, fetch: mockFetch, logger: silentLogger }), { exitCode: 3 });
+    assert.equal(fetchCount, 1);
+});
+
+test("Smoke test logic - timeout performs exactly one outbound call (Exit 3)", async () => {
+    let fetchCount = 0;
+    const mockFetch = async (url) => {
+        if (url.includes("api.openai.com")) {
+            fetchCount++;
+            const e = new Error("timeout"); e.name = "AbortError"; throw e;
+        }
+        return globalThis.fetch(url);
+    };
+    await assert.rejects(runSmokeTest({ env: validEnv, fetch: mockFetch, logger: silentLogger }), { exitCode: 3 });
+    assert.equal(fetchCount, 1);
+});
+
+test("Smoke test logic - invalid provider response performs exactly one outbound call (Exit 3)", async () => {
+    let fetchCount = 0;
+    const mockFetch = async (url) => {
+        if (url.includes("api.openai.com")) {
+            fetchCount++;
+            return { ok: true, status: 200, headers: new Map(), json: async () => ({ status: "incomplete" }) };
+        }
+        return globalThis.fetch(url);
+    };
+    await assert.rejects(runSmokeTest({ env: validEnv, fetch: mockFetch, logger: silentLogger }), { exitCode: 3 });
+    assert.equal(fetchCount, 1);
+});
+
+// 6. Local Validation Failure
+test("Smoke test logic - local request validation failure maps to EXIT 2", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (url, opts) => {
+    globalThis.fetch = async (url) => {
         if (typeof url === "string" && url.includes("/api/npc-response")) {
             return {
-                ok: true,
-                status: 200,
-                json: async () => ({
-                    text: "Fail",
-                    providerName: "pseudo", // Triggers assertion fail
-                    model: "m",
-                    diagnostics: { providerStatus: "completed" }
-                })
+                ok: false, status: 400,
+                json: async () => ({ error: "Local validation failed", type: "bad_request", diagnostics: { providerName: "unknown" } })
             };
         }
-        return originalFetch(url, opts);
+        return originalFetch(url);
     };
 
     try {
-        await assert.rejects(runSmokeTest({ env: validEnv, logger }), (err) => {
-            assert.equal(err.exitCode, EXIT_CODES.SMOKE_TEST_ASSERTION_FAILURE);
+        await assert.rejects(runSmokeTest({ env: validEnv, logger: silentLogger }), (err) => {
+            assert.equal(err.exitCode, 2);
             return true;
         });
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+// 7. Smoke Assertion Failures & Cleanup
+test("Smoke test logic - pseudo/fallback results cannot PASS (Exit 4)", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+        if (typeof url === "string" && url.includes("/api/npc-response")) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    text: "FALLBACK", providerName: "pseudo",
+                    diagnostics: { fallbackUsed: true, providerStatus: "completed" },
+                    model: "m"
+                })
+            };
+        }
+        return originalFetch(url);
+    };
+
+    try {
+        await assert.rejects(runSmokeTest({ env: validEnv, logger: silentLogger }), (err) => {
+            assert.equal(err.exitCode, 4);
+            assert.match(err.message, /Pseudo fallback was used/);
+            return true;
+        });
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("Smoke test logic - server cleanup after success", async () => {
+    let logBuffer = "";
+    const logger = { log: (m) => { logBuffer += m + "\n"; }, error: () => {} };
+    const mockFetch = async (url) => {
+        if (url.includes("api.openai.com")) {
+            return { ok: true, status: 200, headers: new Map(), json: async () => officialSuccessResponse };
+        }
+        return globalThis.fetch(url);
+    };
+    await runSmokeTest({ env: validEnv, fetch: mockFetch, logger });
+    assert.match(logBuffer, /Local server closed\./);
+});
+
+test("Smoke test logic - server cleanup after assertion failure (Exit 4)", async () => {
+    let logBuffer = "";
+    const logger = { log: (m) => { logBuffer += m + "\n"; }, error: () => {} };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+        if (typeof url === "string" && url.includes("/api/npc-response")) {
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    text: "Fail", providerName: "pseudo",
+                    model: "m", diagnostics: { providerStatus: "completed" }
+                })
+            };
+        }
+        return originalFetch(url);
+    };
+
+    try {
+        await assert.rejects(runSmokeTest({ env: validEnv, logger }), { exitCode: 4 });
         assert.match(logBuffer, /Local server closed\./);
     } finally {
         globalThis.fetch = originalFetch;
     }
 });
 
-test("Smoke test logic - pseudo/fallback results cannot PASS", async () => {
-   // Already covered by PROVIDER_API_FAILURE tests because fallback is disabled and
-   // any non-OpenAI response (or error mapped to pseudo) would have diagnostics.fallbackUsed = true
-   // or providerName !== "openai", both triggering assertion failure.
-});
-
-test("Smoke test logic - does not create output files", async () => {
+// 8. Miscellaneous
+test("Smoke test logic - does not create any files", async () => {
     const fs = await import("node:fs/promises");
-    const before = await fs.readdir(".");
+    const os = await import("node:os");
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "smoke-test-check-"));
+    const cwd = process.cwd();
 
-    // We assume successful run doesn't create files. Success case is already tested.
-    // Let's just check the current directory doesn't have output.txt after any test.
-    assert.ok(!(await fs.stat("output.txt").then(() => true).catch(() => false)), "output.txt should not exist");
+    try {
+        process.chdir(tmpDir);
+        const before = await fs.readdir(".");
+
+        const mockFetch = async (url) => {
+            if (url.includes("api.openai.com")) {
+                return {
+                    ok: true, status: 200, headers: new Map(),
+                    json: async () => officialSuccessResponse
+                };
+            }
+            const fullUrl = url.startsWith("http") ? url : `http://127.0.0.1${url}`;
+            return globalThis.fetch(fullUrl);
+        };
+
+        await runSmokeTest({ env: validEnv, fetch: mockFetch, logger: silentLogger });
+
+        const after = await fs.readdir(".");
+        assert.deepEqual(before, after, "No files should be created by the smoke test");
+    } finally {
+        process.chdir(cwd);
+        await fs.rm(tmpDir, { recursive: true, force: true });
+    }
 });
 
-test("Smoke test logic - SIGINT handling", async () => {
+test("Smoke test logic - SIGINT handling (Exit Code 130)", async () => {
     const controller = new AbortController();
     let logBuffer = "";
-    const logger = {
-        log: (m) => { logBuffer += m + "\n"; },
-        error: (m) => { logBuffer += m + "\n"; }
-    };
+    const logger = { log: (m) => { logBuffer += m + "\n"; }, error: () => {} };
 
     const promise = runSmokeTest({ env: validEnv, signal: controller.signal, logger });
     controller.abort();

@@ -34,7 +34,7 @@
 
 - Verify OpenAI integration using mocked HTTP responses. Done.
 - Implement security protections for private evidence and error messages. Done.
-- Expand test suite to 98 tests covering edge cases and reliability. Done.
+- Expand test suite to 95 tests covering edge cases and reliability. Done.
 - Add controlled real OpenAI smoke-test workflow for local verification. Done.
 
 ## Phase 6: Game Expansion

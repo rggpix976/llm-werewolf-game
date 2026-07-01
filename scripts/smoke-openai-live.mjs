@@ -28,12 +28,15 @@ export class SmokeTestError extends Error {
  */
 export function createOneCallFetch(originalFetch) {
   let callCount = 0;
-  return async (url, opts) => {
-    if (callCount > 0) {
-      throw new Error("Blocked second outbound OpenAI request locally.");
-    }
-    callCount++;
-    return await originalFetch(url, opts);
+  return {
+    fetch: async (url, opts) => {
+      if (callCount > 0) {
+        throw new Error("Blocked second outbound OpenAI request locally.");
+      }
+      callCount++;
+      return await originalFetch(url, opts);
+    },
+    getCallCount: () => callCount
   };
 }
 
@@ -76,7 +79,7 @@ export async function runSmokeTest(options = {}) {
   logger.log("Safety gates passed. Starting controlled OpenAI smoke test...");
 
   let server;
-  let networkCallCount = 0;
+  let guard;
 
   try {
     if (signal?.aborted) throw signal.reason;
@@ -105,13 +108,7 @@ export async function runSmokeTest(options = {}) {
     }
 
     const originalFetch = options.fetch || config.openai?.fetch || globalThis.fetch;
-    const wrappedOpenAIFetch = async (url, fetchOpts) => {
-      if (networkCallCount > 0) {
-        throw new Error("Blocked second outbound OpenAI request locally.");
-      }
-      networkCallCount++;
-      return await originalFetch(url, fetchOpts);
-    };
+    guard = createOneCallFetch(originalFetch);
 
     const openaiProvider = new OpenAIResponseProvider({
       ...config.openai,
@@ -119,7 +116,7 @@ export async function runSmokeTest(options = {}) {
       fallbackToPseudo: false,
       maxOutputTokens: 120,
       maxConcurrent: 1,
-      fetch: wrappedOpenAIFetch
+      fetch: guard.fetch
     });
 
     server = createWebServer({ config, provider: openaiProvider });
@@ -179,7 +176,7 @@ export async function runSmokeTest(options = {}) {
       fallbackUsed !== true &&
       providerStatus === "completed" &&
       model &&
-      networkCallCount === 1
+      guard.getCallCount() === 1
     );
 
     if (pass) {
@@ -189,7 +186,7 @@ export async function runSmokeTest(options = {}) {
       if (fallbackUsed) logger.log("- Reason: Fallback to pseudo was used.");
       if (providerName !== "openai") logger.log(`- Reason: Unexpected provider name: ${providerName}`);
       if (providerStatus !== "completed") logger.log(`- Reason: Unexpected provider status: ${providerStatus}`);
-      if (networkCallCount !== 1) logger.log(`- Reason: Unexpected OpenAI fetch count: ${networkCallCount}`);
+      if (guard.getCallCount() !== 1) logger.log(`- Reason: Unexpected OpenAI fetch count: ${guard.getCallCount()}`);
     }
 
     // 5. Print sanitized report
@@ -197,7 +194,7 @@ export async function runSmokeTest(options = {}) {
     logger.log(`Result:          ${pass ? "PASS" : "FAIL"}`);
     logger.log(`Model:           ${model || "unknown"}`);
     logger.log(`Provider:        ${providerName}`);
-    logger.log(`OpenAI Fetches:  ${networkCallCount}`);
+    logger.log(`OpenAI Fetches:  ${guard.getCallCount()}`);
     logger.log(`Elapsed (ms):    ${duration}`);
     logger.log(`Output chars:    ${text?.length || 0}`);
     if (usage) {
@@ -219,7 +216,7 @@ export async function runSmokeTest(options = {}) {
       throw new SmokeTestError(assertionMsg, EXIT_CODES.SMOKE_TEST_ASSERTION_FAILURE, diagnostics);
     }
 
-    return { pass, body, duration, networkCallCount };
+    return { pass, body, duration, networkCallCount: guard.getCallCount() };
 
   } catch (error) {
     if (error instanceof SmokeTestError) throw error;
