@@ -122,6 +122,53 @@ node scripts/mock-openai-server.mjs
   - LLM/プロバイダー診断（プロンプトのプレビュー、使用された根拠、使用トークン、エラー詳細）
 - **注意点**:
   - 初期状態はOFFです。
+
+### 制御された実OpenAIスモークテスト
+
+本物のOpenAI APIとの接続を、最小限のコスト（1リクエスト）で安全に確認するためのコマンドが用意されています。
+
+**注意**: 本コマンドを実行すると、実際にOpenAIの利用料金が発生します。また、実行はローカル環境で開発者自身が行うことを想定しています。
+
+#### 実行手順
+
+1. 必要な環境変数をセットします（APIキーをリポジトリやチャットに貼り付けないでください）。
+2. 明示的なオプトインフラグ `I_ACCEPT_API_CHARGES` を指定します。
+
+**Windows (PowerShell):**
+```powershell
+$env:OPENAI_LIVE_SMOKE_TEST="I_ACCEPT_API_CHARGES"
+$env:LLM_PROVIDER="openai"
+$env:OPENAI_API_KEY="<your-api-key>"
+$env:OPENAI_MODEL="gpt-5.4-mini"
+npm.cmd run smoke:openai
+```
+
+**macOS / Linux:**
+```bash
+OPENAI_LIVE_SMOKE_TEST=I_ACCEPT_API_CHARGES \
+LLM_PROVIDER=openai \
+OPENAI_API_KEY="<your-api-key>" \
+OPENAI_MODEL="gpt-5.4-mini" \
+npm run smoke:openai
+```
+
+#### クリーンアップ (Windows):
+```powershell
+Remove-Item Env:OPENAI_API_KEY
+Remove-Item Env:OPENAI_LIVE_SMOKE_TEST
+Remove-Item Env:LLM_PROVIDER
+Remove-Item Env:OPENAI_MODEL
+```
+
+#### 特徴と制限
+- **1リクエスト制限**: プロセス実行につき最大1回のリクエストしか行いません。
+- **再試行なし**: 一時的なエラーが発生してもリトライしません。
+- **フォールバックなし**: `pseudo` モードへの自動フォールバックは無効化されています。
+- **トークン制限**: 最大出力トークン数は120に制限されています。
+- **機密保護**: APIキーや生のレスポンス全文はコンソールに出力されません。
+- **プロダクションパス**: 本番と同じゲーム生成、検証、サーバーロジックを介して実行されます。
+
+Julesや自動テスト環境では実APIを呼び出しません。
   - ローカルでの診断およびデバッグ用であり、認証・認可の境界ではありません。
   - 公開用のUIは引き続き `getPublicSnapshot()` を介して取得される制限された情報のみを使用します。
 

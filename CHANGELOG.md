@@ -2,6 +2,9 @@
 
 ## 2026-06-28
 
+- Added a controlled one-call real OpenAI smoke-test workflow (`npm run smoke:openai`).
+- Implemented explicit safety gates and opt-in (`I_ACCEPT_API_CHARGES`) for real API verification.
+- Added automated tests for the smoke-test logic using mocked HTTP responses.
 - Added a secure server-side OpenAI response provider using the official Responses API.
 - Implemented `OpenAIResponseProvider` with support for `input_text` and `reasoning: { effort: "none" }`.
 - Added environment variable configuration with strict validation and sane defaults.

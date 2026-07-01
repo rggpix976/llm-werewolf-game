@@ -16,6 +16,7 @@ Last updated: 2026-06-28
 - Browser-side `HttpResponseProvider` and `SessionManager` for robust stale response prevention and request cancellation.
 - Configurable concurrency limit and RPM limit for OpenAI calls.
 - Transient error fallback to `PseudoResponseProvider` for game continuity.
+- Added a controlled one-call real OpenAI smoke-test workflow (`npm run smoke:openai`) for local verification.
 - UI-independent asynchronous action API is available through `await dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - A first browser UI adapter is available through `npm.cmd run web`.

@@ -2,6 +2,7 @@
 
 ## Next
 
+- [x] Add a controlled one-call real OpenAI smoke-test workflow.
 - [x] Add a UI-independent action API.
 - [x] Add automated tests for the core game engine.
 - [x] Define a response provider interface for future LLM integration.

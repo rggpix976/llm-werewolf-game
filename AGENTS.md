@@ -26,6 +26,7 @@ This repository is a prototype of an LLM-integrated Werewolf game. As an AI agen
 
 - `npm test`: Runs the Node.js automated tests.
 - `npm run sample`: Runs a sample game play and audits the results.
+- `npm run smoke:openai`: Performs one controlled, billable real OpenAI request. (Local use only, Jules must not use real keys).
 - `npm run web`: Starts the browser UI.
 - `git diff --check`: Checks for whitespace errors.
 
