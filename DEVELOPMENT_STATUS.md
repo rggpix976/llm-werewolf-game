@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-06-28
+Last updated: 2026-07-01
 
 ## Current State
 
@@ -26,13 +26,27 @@ Last updated: 2026-06-28
 
 ## Last Verified
 
-- Date: 2026-06-28
+- Date: 2026-07-01
 - Commands:
   - `npm test`
   - `npm run sample`
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
-- Result: 95/95 tests passed. All .mjs files pass syntax check. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
+  - `npm run smoke:openai` (Controlled live smoke test)
+- Result: 95/95 tests passed. All .mjs files pass syntax check.
+- **Real OpenAI Smoke Test**:
+  - Result: PASS
+  - Date: 2026-07-01
+  - Model: `gpt-5.4-mini`
+  - Provider: `openai`
+  - Outbound requests: Exactly 1 billable request
+  - Status: Completed (HTTP 200)
+  - Fallback used: False
+  - Retries: Disabled
+  - Usage: 571 input tokens, 27 output tokens (598 total)
+  - Elapsed time: 2378 ms
+  - Security: API key was not committed or stored. Key was removed from the local shell environment immediately after verification (Test-Path Env:OPENAI_API_KEY returned False).
+  - Scope: Validates controlled local integration using the production server and provider paths. This does not make the project production-ready; authentication and distributed rate limiting remain unimplemented.
 
 ## Next Recommended Task
 

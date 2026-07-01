@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-01
+
+- Recorded successful real OpenAI smoke-test result (`npm run smoke:openai`).
+- Verified local integration using the production server and `OpenAIResponseProvider` path.
+- Confirmed exactly 1 billable request (gpt-5.4-mini) with no retries and no fallbacks.
+- Validated secure API key handling (not stored, removed from environment afterward).
+
 ## 2026-06-28
 
 - Added a controlled one-call real OpenAI smoke-test workflow (`npm run smoke:openai`).
