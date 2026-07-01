@@ -2,6 +2,7 @@
 
 ## Next
 
+- [x] Perform first live OpenAI smoke test (2026-07-01).
 - [x] Add a controlled one-call real OpenAI smoke-test workflow.
 - [x] Add a UI-independent action API.
 - [x] Add automated tests for the core game engine.

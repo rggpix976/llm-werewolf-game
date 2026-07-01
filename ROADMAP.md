@@ -36,6 +36,7 @@
 - Implement security protections for private evidence and error messages. Done.
 - Expand test suite to 95 tests covering edge cases and reliability. Done.
 - Add controlled real OpenAI smoke-test workflow for local verification. Done.
+- Perform first live OpenAI smoke test. Done (2026-07-01).
 
 ## Phase 6: Game Expansion
 
