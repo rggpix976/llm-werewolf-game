@@ -14,21 +14,29 @@
 - Test that werewolves cannot attack themselves. Done.
 - Test minimal suspicion updates from accusatory player questions. Done.
 
-## Phase 3: Prepare LLM Integration
+## Phase 3: Real LLM Integration
 
-- Define a response provider interface that can swap pseudo responses for real LLM calls. Done for the provider boundary.
-- Build prompts from only the information each NPC is allowed to know. Done for the current prototype.
-- Validate provider output before adding it to logs. Done for the current provider contract.
-- Keep all state mutations in code, never in LLM output.
+- Define a response provider interface that can swap pseudo responses for real LLM calls. Done.
+- Add a secure server-side OpenAI response provider using the official Responses API. Done.
+- Build prompts from only the information each NPC is allowed to know. Done.
+- Redact private evidence and enforce factual grounding in server-side instructions. Done.
+- Validate provider output and handle transient failures with fallback. Done.
+- Keep all state mutations in code, never in LLM output. Done.
 
-## Phase 4: Browser UI
+## Phase 4: Browser UI & Developer Experience
 
-- Keep the CLI as a temporary adapter.
-- Add a browser adapter that sends player actions to the core game engine. Done for the first public UI.
-- Display public state, conversation history, alive/dead players, voting results, and win result. Done for the first public UI.
-- Add developer mode for roles, known info, hidden info, prompts, and evidence logs. Done.
+- Add a browser adapter that sends player actions to the core game engine. Done.
+- Display public state, conversation history, and voting results. Done.
+- Add developer mode for roles, hidden info, and LLM diagnostics. Done.
+- Implement stale response prevention for rapid session resets. Done.
 
-## Phase 5: Game Expansion
+## Phase 5: Controlled Local Testing
+
+- Verify OpenAI integration using mocked HTTP responses. Done.
+- Implement security protections for private evidence and error messages. Done.
+- Expand test suite to 74 tests covering edge cases and reliability. Done.
+
+## Phase 6: Game Expansion
 
 - Add 9-player village support.
 - Add medium, knight, and madman roles.
@@ -37,4 +45,4 @@
 
 ## Current Priority
 
-The next milestone is adding a real LLM provider.
+Controlled local testing and refinement of NPC dialogue policies.

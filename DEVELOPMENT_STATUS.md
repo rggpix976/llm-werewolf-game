@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-06-26
+Last updated: 2026-06-28
 
 ## Current State
 
@@ -8,32 +8,35 @@ Last updated: 2026-06-26
 - Current roles are 1 werewolf, 1 seer, and 3 citizens.
 - The game can run through player question, NPC response, vote, execution, night, seer action, werewolf attack, and win check.
 - NPC response generation uses an injectable asynchronous provider interface.
-- The default provider is still a pseudo-LLM implementation, not a real LLM call.
-- Game logic is mostly separated from the temporary CLI UI.
+- Added a secure server-side OpenAI response provider using the official Responses API raw HTTP shape.
+- Support for `LLM_PROVIDER=openai` with strict environment variable configuration.
+- Server-side API endpoints: `GET /api/runtime-config` and `POST /api/npc-response`.
+- Implemented strict server-side request validation with a 64 KiB byte-limit and allowlisted fields.
+- Redaction of private evidence (seer results) when public claim is not allowed.
+- Browser-side `HttpResponseProvider` and `SessionManager` for robust stale response prevention and request cancellation.
+- Configurable concurrency limit and RPM limit for OpenAI calls.
+- Transient error fallback to `PseudoResponseProvider` for game continuity.
 - UI-independent asynchronous action API is available through `await dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - A first browser UI adapter is available through `npm.cmd run web`.
-- **Developer Mode** is implemented in the browser UI, allowing inspection of roles, hidden info, prompts, and provider diagnostics.
-- `getDeveloperDiagnostics()` provides a read-only, structured view of the internal game state.
+- **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Minimal suspicion updates from accusatory player questions are implemented.
-- Core game, response-provider invariants, and developer diagnostics are covered by 24 automated tests using Node.js `node:test`.
+- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 74 automated tests.
 
 ## Last Verified
 
-- Date: 2026-06-26
+- Date: 2026-06-28
 - Commands:
   - `npm test`
   - `npm run sample`
-  - `npm run web`
   - `git diff --check`
-- Result: all 24 automated tests passed, sample play audit checks were all OK, browser UI Developer Mode manual checks passed, and no whitespace errors were found.
+  - `find . -name "*.mjs" -exec node --check {} \;`
+- Result: 74/74 tests passed. All .mjs files pass syntax check. Real OpenAI API was not called; all integration tests used mocks matching the official Responses API raw HTTP structure. Ready for controlled local testing.
 
 ## Next Recommended Task
 
-1. Add a real LLM provider (Gemini, OpenAI, or Anthropic) after provider-level validation and configuration are designed.
-2. Improve natural language intent parsing and NPC-response-driven suspicion updates.
-3. Improve suspicion score updates from nuanced player questions and NPC responses.
+1. Improve natural language intent parsing and NPC-response-driven suspicion updates.
+2. Improve suspicion score updates from nuanced player questions and NPC responses.
 
 ## Read This First Next Time
 

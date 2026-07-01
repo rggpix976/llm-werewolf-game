@@ -51,6 +51,66 @@ npm.cmd run web
 
 Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory session from the CLI. Reloading the page or starting a new game resets that session.
 
+### LLM Providers
+
+現在は2つのモードをサポートしています。
+
+#### 1. pseudoモード (デフォルト)
+
+- APIキー不要
+- 決定論的な応答を生成します
+- 開発やテストに使用します
+
+#### 2. openaiモード
+
+- OpenAI Responses APIをサーバー経由で呼び出します
+- 環境変数で有効化し、APIキーが必要です
+- APIキーはブラウザへ送信されず、サーバー側で安全に管理されます
+- プロセス内でのレート制限と同時実行数制限が適用されます
+- ネットワークエラー等の一時的な失敗時には `pseudo` モードへのフォールバックが可能です
+
+起動例 (PowerShell):
+
+```powershell
+$env:LLM_PROVIDER="openai"
+$env:OPENAI_API_KEY="sk-..."
+npm.cmd run web
+```
+
+起動例 (macOS/Linux):
+
+```bash
+LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
+```
+
+**セキュリティ上の注意**:
+- APIキーをフロントエンドのコードや `localStorage` 等に保存しないでください。
+- APIキーをリポジトリへコミットしないでください。
+- `.env` ファイルなどを使用する場合は、必ず `.gitignore` に追加されていることを確認してください。
+
+#### 設定項目 (環境変数)
+
+- `LLM_PROVIDER`: `pseudo` または `openai` (デフォルト: `pseudo`)
+- `OPENAI_API_KEY`: OpenAI APIキー (`openai` モードで必須)
+- `OPENAI_MODEL`: 使用するモデル (デフォルト: `gpt-5.4-mini`)
+- `OPENAI_TIMEOUT_MS`: タイムアウト時間 (ms) (デフォルト: `15000`)
+- `OPENAI_MAX_RETRIES`: 失敗時の再試行回数 (デフォルト: `1`)
+- `OPENAI_MAX_OUTPUT_TOKENS`: 最大出力トークン数 (デフォルト: `220`)
+- `OPENAI_MAX_REQUESTS_PER_MINUTE`: 1分間あたりの最大リクエスト数 (デフォルト: `10`)
+- `OPENAI_FALLBACK_TO_PSEUDO`: 一時的なエラー時に `pseudo` モードへ切り替えるか (デフォルト: `true`)
+
+**注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックを使用します。本機能は制御されたローカル環境でのモック応答を用いたテストが完了した状態です。実APIの確認は利用者が明示的に設定を行ってから実施してください。
+
+### 手動検証用ツール (Mock Server)
+
+本物の OpenAI API を呼び出さずにブラウザ UI を確認するために、モックサーバーが利用可能です。
+
+```bash
+node scripts/mock-openai-server.mjs
+```
+
+起動後、`http://127.0.0.1:4174/` にアクセスしてください。
+
 ### Developer Mode
 
 ブラウザUIには「Developer Mode」が搭載されています。画面上部のトグルボタンで切り替えることができます。
@@ -75,8 +135,8 @@ Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory s
 - `src/responseGenerator.mjs`
   - NPCに許可された情報から、応答要求とプロンプトを組み立てます。
 - `src/responseProvider.mjs`
-  - `generateResponse(request)` を持つ応答プロバイダーの既定実装を提供します。
-  - 現在は `PseudoResponseProvider` を使用し、将来は実LLMプロバイダーへ差し替えられます。
+  - `generateResponse(request)` を持つ応答プロバイダーの共通インターフェースを定義します。
+  - ブラウザUIでは `HttpResponseProvider` を使用し、サーバー側で設定に応じて `PseudoResponseProvider` または `OpenAIResponseProvider` が選択されます。
 - `src/audit.mjs`
   - サンプルプレイ後の最低限の検証を行います。
 - `scripts/sample-play.mjs`
@@ -84,7 +144,13 @@ Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory s
 
 ## 設計メモ
 
-LLMにゲーム状態は変更させません。役職、生死、投票、占い結果、襲撃結果、勝敗判定は `WerewolfGame` が管理します。
+### 安全なLLM接続
+
+本プロトタイプは、セキュリティと整合性のために以下の設計を採用しています。
+
+- **サーバーサイド接続**: ブラウザから OpenAI API へ直接接続せず、Node.js サーバーがプロキシとして動作します。これにより、API キーをブラウザへ渡すことなく安全に管理できます。
+- **データ最小化**: OpenAI への入力データからは `privateStanceEvidence`（占い結果等の非公開情報）が完全に除外されます。NPC はコード側で決定された `responsePlan.baseText` を事実上の根拠として発言を生成します。
+- **状態管理の分離**: LLMにゲーム状態は変更させません。役職、生死、投票、占い結果、襲撃結果、勝敗判定は `WerewolfGame` が管理します。
 
 応答プロバイダーは発言文と診断用メタデータだけを返します。役職COの許可、公開情報、記憶更新は `WerewolfGame` が処理します。開発者ログでは `knownInfo`、`hiddenInfo`、`suspicionScores`、投票理由、占い対象、襲撃対象、応答生成時の根拠を確認できます。
 

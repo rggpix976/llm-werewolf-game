@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-28
+
+- Added a secure server-side OpenAI response provider using the official Responses API.
+- Implemented `OpenAIResponseProvider` with support for `input_text` and `reasoning: { effort: "none" }`.
+- Added environment variable configuration with strict validation and sane defaults.
+- Refactored `src/webServer.mjs` to separate core logic from listening for better testability.
+- Added `/api/npc-response` proxy with allowlist-based validation and request size limits (64 KiB).
+- Implemented `SessionManager` in the browser to prevent stale responses after "New Game".
+- Enhanced security: Redacted private evidence when public claim is not allowed.
+- Enhanced robustness: Strictly validated OpenAI response statuses, sanitized 400 error messages, and correctly classified body-reading timeouts.
+- Fixed concurrency handling: Removed reset() to prevent unstable state and ensured activeRequests never becomes negative.
+- Added automated tests (74 total) covering security invariants and edge cases.
+- Updated Developer Mode to display structured diagnostics for both successful and failed responses.
+
 ## 2026-06-26
 
 - Added Developer Mode to the browser UI.

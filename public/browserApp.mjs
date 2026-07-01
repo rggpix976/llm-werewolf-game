@@ -1,4 +1,6 @@
 import { WerewolfGame } from "../src/gameEngine.mjs";
+import { HttpResponseProvider, SessionManager } from "./httpResponseProvider.mjs";
+import { PseudoResponseProvider } from "../src/responseProvider.mjs";
 
 const elements = {
   statusLine: document.querySelector("#statusLine"),
@@ -25,8 +27,24 @@ let isDevMode = false;
 let devLogEntries = [];
 let devLogFilterKind = "";
 let devLogFilterNpc = "";
+let runtimeConfig = null;
+let sessionManager = new SessionManager();
+let currentGameId = 0;
 
-startNewGame();
+initializeApp();
+
+async function initializeApp() {
+  try {
+    const res = await fetch("/api/runtime-config");
+    if (!res.ok) throw new Error("Failed to fetch runtime config");
+    runtimeConfig = await res.json();
+    startNewGame();
+  } catch (error) {
+    console.error("Initialization error:", error);
+    elements.statusLine.textContent = "Error: Could not connect to server.";
+    alert("初期化エラー: サーバーに接続できません。");
+  }
+}
 
 elements.devModeToggle.addEventListener("click", () => {
   isDevMode = !isDevMode;
@@ -54,12 +72,16 @@ elements.askForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  await dispatch({
+  const gameIdAtSubmit = currentGameId;
+  const result = await dispatch({
     type: "ask_npc",
     target,
     input
   });
-  elements.questionInput.value = "";
+
+  if (result && sessionManager.isCurrentGame(gameIdAtSubmit)) {
+    elements.questionInput.value = "";
+  }
 });
 
 elements.voteButton.addEventListener("click", async () => {
@@ -68,8 +90,10 @@ elements.voteButton.addEventListener("click", async () => {
   }
 
   const action = await dispatch({ type: "advance_vote" });
-  canRunNight = !action.publicSnapshot.winner;
-  render(action.publicSnapshot);
+  if (action) {
+    canRunNight = !action.publicSnapshot.winner;
+    render(action.publicSnapshot);
+  }
 });
 
 elements.nightButton.addEventListener("click", async () => {
@@ -79,13 +103,23 @@ elements.nightButton.addEventListener("click", async () => {
 
   canRunNight = false;
   const action = await dispatch({ type: "run_night" });
-  render(action.publicSnapshot);
+  if (action) {
+    render(action.publicSnapshot);
+  }
 });
 
 function startNewGame() {
+  currentGameId = sessionManager.startNewGame();
+
+  // Always use HttpResponseProvider, delegate selection to server
+  const responseProvider = new HttpResponseProvider({
+    sessionManager
+  });
+
   game = WerewolfGame.create({
     seed: Date.now(),
-    shuffleRoles: true
+    shuffleRoles: true,
+    responseProvider
   });
   snapshot = game.getPublicSnapshot();
   logCursor = snapshot.playerLog.length;
@@ -101,20 +135,33 @@ function startNewGame() {
 }
 
 async function dispatch(action) {
+  const gameIdAtStart = currentGameId;
   setBusy(true);
   try {
     const result = await game.dispatchPlayerAction({
       ...action,
       logCursor
     });
+
+    if (!sessionManager.isCurrentGame(gameIdAtStart)) {
+      return null;
+    }
+
     logCursor = result.nextLogCursor;
     render(result.publicSnapshot);
     if (isDevMode) {
       refreshDiagnostics();
     }
     return result;
+  } catch (error) {
+    if (error.name === "AbortError" || !sessionManager.isCurrentGame(gameIdAtStart)) {
+      return null;
+    }
+    throw error;
   } finally {
-    setBusy(false);
+    if (sessionManager.isCurrentGame(gameIdAtStart)) {
+      setBusy(false);
+    }
   }
 }
 
@@ -368,6 +415,9 @@ function renderResponseDiagnostics() {
       card.append(createDevLabel("model"), createDevValue(provider.model));
       card.append(createDevLabel("usage"), createDevDetails(provider.usage));
       card.append(createDevLabel("notes"), createDevDetails(provider.notes));
+      if (provider.diagnostics) {
+        card.append(createDevLabel("diagnostics"), createDevDetails(provider.diagnostics));
+      }
     } else {
       // Error
       card.append(createDevLabel("STATUS"), createDevValue("ERROR", "danger"));
@@ -375,6 +425,9 @@ function renderResponseDiagnostics() {
       card.append(createDevLabel("providerName"), createDevValue(entry.detail.providerName));
       card.append(createDevLabel("errorType"), createDevValue(entry.detail.errorType));
       card.append(createDevLabel("message"), createDevValue(entry.detail.message));
+      if (entry.detail.diagnostics) {
+        card.append(createDevLabel("diagnostics"), createDevDetails(entry.detail.diagnostics));
+      }
       card.append(createDevLabel("evidenceUsed"), createDevDetails(entry.detail.evidenceUsed));
       card.append(createDevLabel("promptPreview"), createDevDetails(entry.detail.promptPreview));
     }
@@ -443,7 +496,10 @@ function developerLogReferencesNpc(entry, npcId) {
 
 function renderStatus() {
   const winner = snapshot.winner ? ` / Winner: ${snapshot.winner}` : "";
-  elements.statusLine.textContent = `Day ${snapshot.day} / ${formatPhase(snapshot.phase)}${winner}`;
+  const providerInfo = runtimeConfig
+    ? ` (Provider: ${runtimeConfig.provider}${runtimeConfig.model ? " / " + runtimeConfig.model : ""})`
+    : "";
+  elements.statusLine.textContent = `Day ${snapshot.day} / ${formatPhase(snapshot.phase)}${winner}${providerInfo}`;
 }
 
 function renderPlayers() {

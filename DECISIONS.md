@@ -42,14 +42,22 @@ Response providers implement `async generateResponse(request)`.
 
 They receive a frozen, cloned request instead of the live game state. Their accepted output is limited to utterance text and diagnostic metadata. Claims, memory updates, public information, roles, life/death, votes, and win state remain controlled by the game engine.
 
-## D-008: Provider Failure Cancels Only the Current Response
+## D-008: Provider Failure Handling and Fallback
 
-Provider exceptions, empty text, and invalid return values do not end the game and do not trigger a pseudo-response fallback.
+Provider exceptions, empty text, and invalid return values do not end the game.
 
-The current NPC response is skipped, the failure is recorded in the developer log, the phase returns to `day_discussion`, and the player may ask another question or proceed to voting.
+For transient errors (timeout, network error, rate limit, provider server error), if `OPENAI_FALLBACK_TO_PSEUDO` is enabled, the system falls back to `PseudoResponseProvider` to ensure game continuity.
+
+For non-transient errors (authentication, permission, bad request), the current NPC response is skipped, the failure is recorded in the developer log, the phase returns to `day_discussion`, and the player may ask another question or proceed to voting.
 
 ## D-009: Game Sessions Are Not Persisted
 
 Game state exists only in memory for the current process or browser session.
 
 Closing the CLI, refreshing the browser, or closing the application discards the current game. The prototype does not use save files, `localStorage`, IndexedDB, or server-side persistence. A new session always starts a new game.
+
+## D-010: Secure Server-Side LLM Integration
+
+OpenAI API keys must never be exposed to the browser.
+
+All LLM calls are handled by the Node.js server. The browser communicates with the server via a local API endpoint (`/api/npc-response`). This ensures that API keys remain secure in the server's environment and allows for centralized rate limiting and auditing.
