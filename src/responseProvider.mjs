@@ -1,17 +1,32 @@
 import { generatePseudoResponseText } from "./responseGenerator.mjs";
 import { guardProviderResponse } from "./utteranceGuard.mjs";
 
+const GUARDED_PROVIDERS = new WeakSet();
+
+/**
+ * Checks if a provider is already wrapped in a trusted GuardedResponseProvider.
+ */
+export function isGuardedProvider(provider) {
+  return provider && typeof provider === "object" && GUARDED_PROVIDERS.has(provider);
+}
+
+/**
+ * Marks a provider as guarded. Used only within this module.
+ */
+function markAsGuarded(provider) {
+  GUARDED_PROVIDERS.add(provider);
+}
+
 export class GuardedResponseProvider {
   constructor(innerProvider) {
     this.innerProvider = innerProvider;
     this.name = innerProvider.name || getProviderName(innerProvider);
+    markAsGuarded(this);
   }
 
   async generateResponse(request, options = {}) {
     const result = await this.innerProvider.generateResponse(request, options);
     // Generic provider validation. Throws if fundamentally broken (e.g. empty text).
-    // This preserves existing provider-error behavior by not triggering safety fallback
-    // for broken provider responses that should be treated as system errors.
     const validated = validateProviderResponse(result, this.name);
     return guardProviderResponse({ request, providerResult: validated });
   }
@@ -31,6 +46,17 @@ export class PseudoResponseProvider {
       notes: ["deterministic_pseudo_response"]
     };
   }
+}
+
+/**
+ * A marker-only provider for cases where guarding happened upstream (e.g. server).
+ * Use markProviderAsGuarded(provider) instead of public properties.
+ */
+export function markExternalProviderAsGuarded(provider) {
+    if (provider && typeof provider === "object") {
+        markAsGuarded(provider);
+    }
+    return provider;
 }
 
 export function validateProviderResponse(value, fallbackProviderName = "unknown") {

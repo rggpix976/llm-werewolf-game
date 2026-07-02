@@ -3,6 +3,7 @@ import {
   getProviderName,
   PseudoResponseProvider,
   GuardedResponseProvider,
+  isGuardedProvider,
   validateProviderResponse
 } from "./responseProvider.mjs";
 import { PHASES, ROLES, TEAMS, publicRoleName, publicTeamName, teamForRole } from "./constants.mjs";
@@ -21,29 +22,29 @@ const DEFAULT_PLAYERS = [
     id: "npc2",
     name: "Beni",
     aliases: ["B", "紅", "ベニ"],
-    personality: "素直でやや不安がり",
-    speechStyle: "soft"
+    personality: "情熱的で直感的",
+    speechStyle: "direct"
   },
   {
     id: "npc3",
     name: "Chika",
-    aliases: ["C", "千佳", "チカ"],
-    personality: "押しが強く話題転換がうまい",
-    speechStyle: "direct"
+    aliases: ["C", "千香", "チカ"],
+    personality: "慎重で控えめ",
+    speechStyle: "cautious"
   },
   {
     id: "npc4",
     name: "Daichi",
     aliases: ["D", "大地", "ダイチ"],
-    personality: "慎重で投票理由にこだわる",
-    speechStyle: "cautious"
+    personality: "論理的で客観的",
+    speechStyle: "logical"
   },
   {
     id: "npc5",
     name: "Ema",
-    aliases: ["E", "絵真", "エマ"],
-    personality: "論理重視で発言を整理する",
-    speechStyle: "logical"
+    aliases: ["E", "恵麻", "エマ"],
+    personality: "明るく協調的",
+    speechStyle: "soft"
   }
 ];
 
@@ -66,15 +67,13 @@ const SAMPLE_SUSPICION = {
 const ACCUSATORY_QUESTION_KEYWORDS = [
   "怪しい",
   "疑",
-  "人狼",
-  "矛盾",
-  "おかしい",
-  "黒",
-  "suspicious",
+  "人狼ですか",
+  "嘘",
+  "信じられない",
   "suspect",
+  "liar",
   "werewolf",
-  "wolf",
-  "black"
+  "wolf"
 ];
 
 export class WerewolfGame {
@@ -107,7 +106,7 @@ export class WerewolfGame {
     };
 
     const rawProvider = options.responseProvider ?? new PseudoResponseProvider();
-    const guardedProvider = (rawProvider instanceof GuardedResponseProvider)
+    const guardedProvider = isGuardedProvider(rawProvider)
       ? rawProvider
       : new GuardedResponseProvider(rawProvider);
 
@@ -143,19 +142,7 @@ export class WerewolfGame {
   }
 
   getAlivePlayers() {
-    return this.state.alivePlayers.map((id) => this.getPlayer(id));
-  }
-
-  getDeadPlayers() {
-    return this.state.deadPlayers.map((id) => this.getPlayer(id));
-  }
-
-  setPhase(phase) {
-    if (!PHASES.includes(phase)) {
-      throw new Error(`Unknown phase: ${phase}`);
-    }
-    this.state.phase = phase;
-    this.addDeveloperLog("phase_change", { day: this.state.day, phase });
+    return this.state.players.filter((player) => player.alive);
   }
 
   addPlayerLog(message) {
@@ -166,21 +153,62 @@ export class WerewolfGame {
     });
   }
 
-  addDeveloperLog(kind, detail) {
-    this.state.developerLog.push({
-      day: this.state.day,
-      phase: this.state.phase,
-      kind,
-      detail
-    });
-  }
-
   addPublicInfo(info) {
     this.state.publicInfo.push({
       day: this.state.day,
       phase: this.state.phase,
       ...info
     });
+  }
+
+  addDeveloperLog(kind, detail) {
+    this.state.developerLog.push({
+      day: this.state.day,
+      phase: this.state.phase,
+      timestamp: Date.now(),
+      kind,
+      detail: structuredClone(detail)
+    });
+  }
+
+  createDeveloperSnapshot() {
+    return structuredClone(this.state);
+  }
+
+  getPublicSnapshot() {
+    return {
+      day: this.state.day,
+      phase: this.state.phase,
+      players: this.state.players.map((player) => ({
+        id: player.id,
+        name: player.name,
+        alive: player.alive,
+        publicClaims: player.publicClaims
+      })),
+      alivePlayers: [...this.state.alivePlayers],
+      deadPlayers: [...this.state.deadPlayers],
+      publicInfo: structuredClone(this.state.publicInfo),
+      winner: this.state.winner,
+      playerLog: structuredClone(this.state.playerLog)
+    };
+  }
+
+  getDeveloperDiagnostics(options = {}) {
+    const logCursor = options.logCursor ?? 0;
+    const entries = this.state.developerLog.slice(Math.max(0, logCursor));
+
+    return {
+      snapshot: this.createDeveloperSnapshot(),
+      developerLogEntries: structuredClone(entries),
+      nextLogCursor: this.state.developerLog.length
+    };
+  }
+
+  setPhase(phase) {
+    if (this.state.phase !== phase) {
+      this.state.phase = phase;
+      this.addDeveloperLog("phase_change", { day: this.state.day, phase });
+    }
   }
 
   async dispatchPlayerAction(action = {}) {
@@ -305,8 +333,7 @@ export class WerewolfGame {
       type: "npc_response",
       actorId: npc.id,
       actorName: npc.name,
-      text: `${npc.name}: ${result.text}`,
-      utteranceGuard: providerResult.diagnostics?.utteranceGuard
+      text: `${npc.name}: ${result.text}`
     });
     npc.privateMemory.push({
       day: this.state.day,
@@ -343,29 +370,22 @@ export class WerewolfGame {
 
   applyQuestionPressure(questionText) {
     const mentionedIds = extractMentionedPlayerIds(questionText, this.state.players);
-    if (!mentionedIds.length) {
-      return;
-    }
-
     const isAccusatory = containsAny(questionText, ACCUSATORY_QUESTION_KEYWORDS);
-    if (!isAccusatory) {
-      return;
-    }
 
-    for (const npc of this.getAlivePlayers()) {
-      for (const mentionedId of mentionedIds) {
-        if (mentionedId === npc.id) {
+    if (isAccusatory && mentionedIds.length > 0) {
+      for (const player of this.state.players) {
+        if (!player.alive) {
           continue;
         }
-        npc.suspicionScores[mentionedId] = (npc.suspicionScores[mentionedId] ?? 0) + 1;
-      }
-    }
 
-    this.addDeveloperLog("question_pressure_applied", {
-      questionText,
-      mentionedIds,
-      effect: "alive NPC suspicion +1 for mentioned targets"
-    });
+        for (const targetId of mentionedIds) {
+          if (targetId !== player.id) {
+            player.suspicionScores[targetId] = (player.suspicionScores[targetId] ?? 0) + 1;
+          }
+        }
+      }
+      this.addDeveloperLog("question_pressure_applied", { mentionedIds, input: questionText });
+    }
   }
 
   runVote() {
@@ -374,115 +394,81 @@ export class WerewolfGame {
     }
 
     this.setPhase("vote");
-    const votes = this.getAlivePlayers().map((voter) => this.chooseVote(voter));
-    for (const vote of votes) {
-      const voter = this.getPlayer(vote.voterId);
-      voter.voteHistory.push({
-        day: this.state.day,
-        targetId: vote.targetId,
-        reasonPublic: vote.reasonPublic,
-        reasonDeveloper: vote.reasonDeveloper
-      });
-    }
-
-    const result = this.resolveVote(votes);
-    this.state.voteHistory.push({
-      day: this.state.day,
-      votes,
-      executedId: result.executedId,
-      tie: result.tie
+    const votes = this.getAlivePlayers().map((player) => {
+      const targetId = this.chooseVoteTarget(player);
+      const target = this.getPlayer(targetId);
+      return {
+        voterId: player.id,
+        voterName: player.name,
+        targetId: target.id,
+        targetName: target.name,
+        reasonPublic: "最も疑いが強い相手に投票",
+        reasonDeveloper: player.voteReasonDeveloper
+      };
     });
 
-    const voteSummary = votes.map((vote) => {
-      const voter = this.getPlayer(vote.voterId);
-      const target = this.getPlayer(vote.targetId);
-      return `${voter.name}->${target.name}`;
-    }).join("、");
+    const counts = votes.reduce((acc, vote) => {
+      acc[vote.targetId] = (acc[vote.targetId] ?? 0) + 1;
+      return acc;
+    }, {});
 
-    this.addPlayerLog(`投票結果: ${voteSummary}`);
-    this.addPublicInfo({
-      type: "vote_result",
-      text: `投票結果: ${voteSummary}`,
-      votes: votes.map(({ voterId, targetId }) => ({ voterId, targetId }))
-    });
-    this.addDeveloperLog("vote_resolved", {
-      votes,
-      counts: result.counts,
-      tie: result.tie,
-      executedId: result.executedId,
-      executedName: this.getPlayer(result.executedId).name
-    });
+    const sortedCounts = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const maxVotes = sortedCounts[0][1];
+    const tiedIds = sortedCounts.filter((item) => item[1] === maxVotes).map((item) => item[0]);
 
-    this.setPhase("execution");
-    this.killPlayer(result.executedId, "execution");
-    const executed = this.getPlayer(result.executedId);
-    this.addPlayerLog(`${executed.name}が処刑されました。`);
-    this.addPublicInfo({
-      type: "execution",
-      targetId: executed.id,
-      targetName: executed.name,
-      text: `${executed.name}が処刑された。`
-    });
-    this.addDeveloperLog("execution", {
-      executedId: executed.id,
-      executedName: executed.name,
-      role: executed.role,
-      team: executed.team
-    });
-
-    this.setPhase("win_check");
-    this.checkWin("after_execution");
-    return {
-      votes,
-      executedId: result.executedId,
-      winner: this.state.winner
-    };
-  }
-
-  chooseVote(voter) {
-    const candidates = this.getAlivePlayers().filter((candidate) => candidate.id !== voter.id);
-    const ranked = candidates
-      .map((candidate) => ({
-        candidate,
-        score: voter.suspicionScores[candidate.id] ?? 0
-      }))
-      .sort((a, b) => b.score - a.score || a.candidate.name.localeCompare(b.candidate.name));
-
-    const chosen = ranked[0].candidate;
-    const privateReason = findPrivateVoteReason(voter, chosen);
-    const reasonDeveloper = privateReason
-      ? `${privateReason}; suspicionScore=${ranked[0].score}`
-      : `highest suspicionScore=${ranked[0].score}`;
-
-    return {
-      voterId: voter.id,
-      voterName: voter.name,
-      targetId: chosen.id,
-      targetName: chosen.name,
-      reasonPublic: "最も疑いが強い相手に投票",
-      reasonDeveloper
-    };
-  }
-
-  resolveVote(votes) {
-    const counts = {};
-    for (const vote of votes) {
-      counts[vote.targetId] = (counts[vote.targetId] ?? 0) + 1;
-    }
-
-    const maxVotes = Math.max(...Object.values(counts));
-    const tiedIds = Object.entries(counts)
-      .filter(([, count]) => count === maxVotes)
-      .map(([id]) => id);
+    let executedId;
+    let tie = false;
 
     if (tiedIds.length === 1) {
-      return {
-        executedId: tiedIds[0],
-        counts,
-        tie: false
-      };
+      executedId = tiedIds[0];
+    } else {
+      tie = true;
+      const tieBreak = this.resolveTie(tiedIds, counts);
+      executedId = tieBreak.executedId;
     }
 
+    const executed = this.getPlayer(executedId);
+    const voteResult = {
+      votes,
+      counts,
+      tie,
+      executedId,
+      executedName: executed.name
+    };
+
+    this.state.voteHistory.push(voteResult);
+    this.addDeveloperLog("vote_resolved", voteResult);
+    this.killPlayer(executedId, "execution");
+    this.setPhase("day_discussion");
+
+    this.checkWin("after_execution");
+
+    return voteResult;
+  }
+
+  chooseVoteTarget(voter) {
+    const candidates = this.state.alivePlayers
+      .filter((id) => id !== voter.id)
+      .map((id) => ({
+        id,
+        score: voter.suspicionScores[id] ?? 0
+      }))
+      .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+
+    const top = candidates[0];
+    voter.voteReasonDeveloper = `highest suspicionScore=${top.score}`;
+
+    // NPC logic reinforcement: if they have a private seer result, they should act on it.
+    const seerResult = voter.knownInfo.find(i => i.type === "seer_result" && i.result === "werewolf" && this.state.alivePlayers.includes(i.targetId));
+    if (seerResult) {
+        voter.voteReasonDeveloper = `private seer result=werewolf; suspicionScore=${voter.suspicionScores[seerResult.targetId]}`;
+        return seerResult.targetId;
+    }
+
+    return top.id;
+  }
+
+  resolveTie(tiedIds, counts) {
     const aggregateSuspicion = tiedIds.map((id) => {
       const total = this.getAlivePlayers().reduce((sum, voter) => {
         if (voter.id === id) {
@@ -533,47 +519,26 @@ export class WerewolfGame {
 
     return {
       seerResult,
-      attackResult,
-      winner: this.state.winner
+      attackResult
     };
   }
 
   runSeerAction() {
-    const seer = this.state.players.find((player) => player.role === ROLES.SEER && player.alive);
-    if (!seer) {
-      this.addDeveloperLog("seer_action", {
-        skipped: true,
-        reason: "seer_dead_or_missing"
-      });
+    const seer = this.state.players.find((p) => p.role === ROLES.SEER);
+    if (!seer || !seer.alive) {
       return null;
     }
 
-    const alreadyChecked = new Set(
-      seer.knownInfo
-        .filter((info) => info.type === "seer_result")
-        .map((info) => info.targetId)
-    );
-    const candidates = this.getAlivePlayers()
-      .filter((player) => player.id !== seer.id)
-      .filter((player) => !alreadyChecked.has(player.id));
+    const target = this.getAlivePlayers()
+      .filter((p) => p.id !== seer.id)
+      .sort((a, b) => (seer.suspicionScores[b.id] ?? 0) - (seer.suspicionScores[a.id] ?? 0) || a.id.localeCompare(b.id))[0];
 
-    if (!candidates.length) {
-      this.addDeveloperLog("seer_action", {
-        skipped: true,
-        reason: "no_valid_target"
-      });
+    if (!target) {
       return null;
     }
-
-    const target = candidates
-      .map((candidate) => ({
-        candidate,
-        score: seer.suspicionScores[candidate.id] ?? 0
-      }))
-      .sort((a, b) => b.score - a.score || a.candidate.name.localeCompare(b.candidate.name))[0].candidate;
 
     const result = target.role === ROLES.WEREWOLF ? "werewolf" : "not_werewolf";
-    seer.knownInfo.push({
+    const info = {
       day: this.state.day,
       type: "seer_result",
       visibility: "private",
@@ -582,23 +547,13 @@ export class WerewolfGame {
       targetName: target.name,
       result,
       text: `占い結果: ${target.name}は${result === "werewolf" ? "人狼" : "人狼ではない"}。`
-    });
-    seer.privateMemory.push({
-      day: this.state.day,
-      type: "seer_action",
-      targetId: target.id,
-      result
-    });
-    seer.suspicionScores[target.id] = result === "werewolf" ? 8 : -2;
+    };
 
+    seer.knownInfo.push(info);
     this.addDeveloperLog("seer_action", {
       seerId: seer.id,
-      seerName: seer.name,
       targetId: target.id,
-      targetName: target.name,
-      result,
-      publicInfoAdded: false,
-      savedTo: "seer.knownInfo"
+      result
     });
 
     return {
@@ -609,51 +564,23 @@ export class WerewolfGame {
   }
 
   runWerewolfAttack() {
-    const werewolves = this.state.players.filter((player) => player.role === ROLES.WEREWOLF && player.alive);
-    if (!werewolves.length) {
-      this.addDeveloperLog("werewolf_attack", {
-        skipped: true,
-        reason: "no_alive_werewolf"
-      });
+    const werewolf = this.state.players.find((p) => p.role === ROLES.WEREWOLF);
+    if (!werewolf || !werewolf.alive) {
       return null;
     }
 
-    const werewolf = werewolves[0];
-    const candidates = this.getAlivePlayers().filter((player) => player.id !== werewolf.id);
-    if (!candidates.length) {
-      this.addDeveloperLog("werewolf_attack", {
-        skipped: true,
-        reason: "no_valid_target"
-      });
+    const target = this.getAlivePlayers()
+      .filter((p) => p.id !== werewolf.id)
+      .sort((a, b) => (werewolf.suspicionScores[b.id] ?? 0) - (werewolf.suspicionScores[a.id] ?? 0) || a.id.localeCompare(b.id))[0];
+
+    if (!target) {
       return null;
     }
 
-    const publicSeerClaim = this.state.publicInfo.find((info) => info.type === "public_claim" && info.claim?.role === ROLES.SEER);
-    const claimedSeer = publicSeerClaim ? this.getPlayer(publicSeerClaim.actorId) : null;
-    const target = claimedSeer?.alive
-      ? claimedSeer
-      : candidates
-        .map((candidate) => ({
-          candidate,
-          score: werewolf.suspicionScores[candidate.id] ?? 0
-        }))
-        .sort((a, b) => a.score - b.score || a.candidate.name.localeCompare(b.candidate.name))[0].candidate;
-
-    this.killPlayer(target.id, "werewolf_attack");
-    this.addPlayerLog(`夜が明けました。${target.name}が無残な姿で発見されました。`);
-    this.addPublicInfo({
-      type: "night_death",
-      targetId: target.id,
-      targetName: target.name,
-      text: `${target.name}が夜に死亡した。`
-    });
+    this.killPlayer(target.id, "attack");
     this.addDeveloperLog("werewolf_attack", {
       werewolfId: werewolf.id,
-      werewolfName: werewolf.name,
-      targetId: target.id,
-      targetName: target.name,
-      targetRole: target.role,
-      reason: claimedSeer?.alive ? "attacked_public_seer_claim" : "lowest_suspicion_target_to_keep_suspects_alive"
+      targetId: target.id
     });
 
     return {
@@ -662,158 +589,82 @@ export class WerewolfGame {
     };
   }
 
-  killPlayer(playerId, cause) {
-    const player = this.getPlayer(playerId);
-    if (!player || !player.alive) {
-      throw new Error(`Cannot kill invalid or dead player: ${playerId}`);
-    }
+  killPlayer(id, cause) {
+    const player = this.getPlayer(id);
+    if (player && player.alive) {
+      player.alive = false;
+      this.state.alivePlayers = this.state.alivePlayers.filter((pId) => pId !== id);
+      this.state.deadPlayers.push(id);
 
-    player.alive = false;
-    this.state.alivePlayers = this.state.alivePlayers.filter((id) => id !== playerId);
-    this.state.deadPlayers.push(playerId);
-    player.privateMemory.push({
-      day: this.state.day,
-      type: "death",
-      cause
-    });
+      const message = cause === "execution"
+        ? `${player.name}が処刑されました。`
+        : `${player.name}が襲撃されました。`;
+
+      this.addPlayerLog(message);
+      this.addPublicInfo({
+        type: cause === "execution" ? "execution_death" : "night_death",
+        actorId: id,
+        text: message
+      });
+
+      player.privateMemory.push({
+        day: this.state.day,
+        type: "death",
+        cause
+      });
+
+      this.addDeveloperLog(cause, {
+        executedId: cause === "execution" ? id : undefined,
+        executedName: cause === "execution" ? player.name : undefined,
+        attackedId: cause === "attack" ? id : undefined,
+        attackedName: cause === "attack" ? player.name : undefined,
+        role: player.role,
+        team: player.team
+      });
+    }
   }
 
   checkWin(source) {
     const alive = this.getAlivePlayers();
-    const werewolfCount = alive.filter((player) => player.team === TEAMS.WEREWOLF).length;
-    const villageCount = alive.filter((player) => player.team === TEAMS.VILLAGE).length;
-    let winner = null;
+    const werewolfCount = alive.filter((p) => p.role === ROLES.WEREWOLF).length;
+    const villageCount = alive.length - werewolfCount;
 
+    let winner = null;
     if (werewolfCount === 0) {
       winner = TEAMS.VILLAGE;
     } else if (werewolfCount >= villageCount) {
       winner = TEAMS.WEREWOLF;
     }
 
-    this.addDeveloperLog("win_check", {
-      source,
-      werewolfCount,
-      villageCount,
-      winner
-    });
-
     if (winner) {
       this.state.winner = winner;
-      const label = publicTeamName(winner);
-      this.addPlayerLog(`勝敗結果: ${label}の勝利です。`);
-      this.addPublicInfo({
-        type: "winner",
-        winner,
-        text: `${label}が勝利した。`
+      this.addPlayerLog(`ゲーム終了。${publicTeamName(winner)}の勝利です！`);
+      this.addDeveloperLog("win_check", {
+        source,
+        werewolfCount,
+        villageCount,
+        winner
       });
+    } else {
+        this.addDeveloperLog("win_check", {
+            source,
+            werewolfCount,
+            villageCount,
+            winner: null
+        });
     }
 
     return winner;
   }
 
-  createDeveloperSnapshot() {
-    return structuredClone({
-      day: this.state.day,
-      phase: this.state.phase,
-      alivePlayers: this.state.alivePlayers,
-      deadPlayers: this.state.deadPlayers,
-      winner: this.state.winner,
-      players: this.state.players.map((player) => ({
-        id: player.id,
-        name: player.name,
-        role: player.role,
-        team: player.team,
-        alive: player.alive,
-        knownInfo: player.knownInfo,
-        hiddenInfo: player.hiddenInfo,
-        suspicionScores: player.suspicionScores,
-        publicClaims: player.publicClaims,
-        privateMemory: player.privateMemory,
-        voteHistory: player.voteHistory,
-        conversationPolicy: player.conversationPolicy
-      }))
-    });
-  }
-
-  getDeveloperSnapshot() {
-    return this.createDeveloperSnapshot();
-  }
-
-  getDeveloperDiagnostics(options = {}) {
-    let logCursor = Number.isInteger(options.logCursor) ? options.logCursor : 0;
-    if (logCursor < 0) logCursor = 0;
-    if (logCursor > this.state.developerLog.length) logCursor = this.state.developerLog.length;
-
-    const entries = this.state.developerLog.slice(logCursor);
-
-    return {
-      snapshot: this.createDeveloperSnapshot(),
-      developerLogEntries: structuredClone(entries),
-      nextLogCursor: this.state.developerLog.length
-    };
-  }
-
-  getPublicSnapshot() {
-    return {
-      day: this.state.day,
-      phase: this.state.phase,
-      alivePlayers: [...this.state.alivePlayers],
-      deadPlayers: [...this.state.deadPlayers],
-      winner: this.state.winner,
-      players: this.state.players.map((player) => ({
-        id: player.id,
-        name: player.name,
-        aliases: [...(player.aliases ?? [])],
-        alive: player.alive,
-        personality: player.personality,
-        speechStyle: player.speechStyle,
-        publicClaims: player.publicClaims.map((claim) => ({
-          day: claim.day,
-          actorId: claim.actorId,
-          actorName: claim.actorName,
-          role: claim.role,
-          results: claim.results
-        })),
-        voteHistory: player.voteHistory.map((vote) => ({
-          day: vote.day,
-          targetId: vote.targetId,
-          reasonPublic: vote.reasonPublic
-        }))
-      })),
-      publicInfo: this.state.publicInfo.map((info) => ({ ...info })),
-      voteHistory: this.state.voteHistory.map((round) => ({
-        day: round.day,
-        votes: round.votes.map((vote) => ({
-          voterId: vote.voterId,
-          voterName: vote.voterName,
-          targetId: vote.targetId,
-          targetName: vote.targetName,
-          reasonPublic: vote.reasonPublic
-        })),
-        executedId: round.executedId,
-        tie: round.tie
-      })),
-      playerLog: this.state.playerLog.map((entry) => ({ ...entry }))
-    };
-  }
-
-  formatPlayerLog(fromIndex = 0) {
-    return this.state.playerLog.slice(fromIndex).map((entry) => {
-      return `[Day ${entry.day} / ${entry.phase}] ${entry.message}`;
-    }).join("\n");
+  formatPlayerLog(startIndex = 0) {
+    return this.state.playerLog.slice(startIndex).map((entry) => entry.message).join("\n");
   }
 
   formatDeveloperLog(options = {}) {
-    const entries = options.last
-      ? this.state.developerLog.slice(-options.last)
-      : this.state.developerLog;
-
-    return entries.map((entry, index) => {
-      return [
-        `#${index + 1} [Day ${entry.day} / ${entry.phase}] ${entry.kind}`,
-        JSON.stringify(entry.detail, null, 2)
-      ].join("\n");
-    }).join("\n\n");
+    const { last } = options;
+    const entries = last ? this.state.developerLog.slice(-last) : this.state.developerLog;
+    return entries.map((e, i) => `#${i + 1} [Day ${e.day} / ${e.phase}] ${e.kind}\n${JSON.stringify(e.detail, null, 2)}`).join("\n\n");
   }
 }
 
@@ -860,22 +711,6 @@ function createPlayerState(template, role) {
     conversationPolicy: createConversationPolicy(role)
   };
 
-  player.knownInfo.push({
-    day: 1,
-    type: "setup",
-    visibility: "public",
-    shareable: true,
-    text: "5人村の公開内訳は人狼1、占い師1、市民3。"
-  });
-  player.knownInfo.push({
-    day: 1,
-    type: "self_presence",
-    visibility: "private",
-    shareable: false,
-    targetId: player.id,
-    text: "自分は現在この村に参加している。"
-  });
-
   if (role === ROLES.WEREWOLF) {
     player.hiddenInfo.push({
       type: "werewolf_identity",
@@ -896,7 +731,6 @@ function createConversationPolicy(role) {
       forbidden: ["confess_werewolf", "change_game_state"]
     };
   }
-
   if (role === ROLES.SEER) {
     return {
       truthfulness: "honest_but_may_withhold_private_info",
@@ -905,7 +739,6 @@ function createConversationPolicy(role) {
       forbidden: ["invent_results", "change_game_state"]
     };
   }
-
   return {
     truthfulness: "honest_with_possible_mistakes",
     roleClaim: "avoid_unnecessary_claim",
@@ -915,68 +748,47 @@ function createConversationPolicy(role) {
 }
 
 function initializeSuspicion(players, rng, scenario) {
-  for (const player of players) {
-    for (const other of players) {
-      if (player.id !== other.id) {
-        player.suspicionScores[other.id] = 0;
+  players.forEach((player) => {
+    if (scenario === "sample") {
+      player.suspicionScores = { ...SAMPLE_SUSPICION[player.id] };
+    } else {
+      players.forEach((target) => {
+        if (player.id !== target.id) {
+          player.suspicionScores[target.id] = rng.int(3);
+        }
+      });
+    }
+
+    player.knownInfo.push({
+      day: 1,
+      type: "setup",
+      visibility: "public",
+      shareable: true,
+      text: "5人村の公開内訳は人狼1、占い師1、市民3。"
+    });
+
+    player.knownInfo.push({
+      day: 1,
+      type: "self_presence",
+      visibility: "private",
+      shareable: false,
+      targetId: player.id,
+      text: "自分は現在この村に参加している。"
+    });
+
+    // Add first impressions
+    players.forEach((target) => {
+      if (player.id !== target.id && (player.suspicionScores[target.id] ?? 0) >= 3) {
+        player.knownInfo.push({
+          day: 1,
+          type: "first_impression",
+          visibility: "private",
+          shareable: true,
+          targetId: target.id,
+          targetName: target.name,
+          text: `${target.name}の発言には少し違和感がある、という初日の印象を持っている。`
+        });
       }
-    }
-  }
-
-  if (scenario === "sample") {
-    for (const player of players) {
-      Object.assign(player.suspicionScores, SAMPLE_SUSPICION[player.id]);
-      addInitialImpression(player, players);
-    }
-    return;
-  }
-
-  for (const player of players) {
-    for (const other of players) {
-      if (player.id !== other.id) {
-        player.suspicionScores[other.id] = rng.int(3);
-      }
-    }
-    addInitialImpression(player, players);
-  }
-}
-
-function addInitialImpression(player, players) {
-  const top = Object.entries(player.suspicionScores)
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
-
-  if (!top || top[1] <= 0) {
-    return;
-  }
-
-  const target = players.find((candidate) => candidate.id === top[0]);
-  player.knownInfo.push({
-    day: 1,
-    type: "first_impression",
-    visibility: "private",
-    shareable: true,
-    targetId: target.id,
-    targetName: target.name,
-    text: `${target.name}の発言には少し違和感がある、という初日の印象を持っている。`
+    });
   });
-}
-
-function findPrivateVoteReason(voter, chosen) {
-  const privateSeerResult = voter.knownInfo.find((info) => {
-    return info.type === "seer_result" && info.targetId === chosen.id;
-  });
-
-  if (privateSeerResult) {
-    return `private seer result=${privateSeerResult.result}`;
-  }
-
-  const impression = voter.knownInfo.find((info) => {
-    return info.type === "first_impression" && info.targetId === chosen.id;
-  });
-
-  if (impression) {
-    return "first_impression";
-  }
-
-  return null;
 }

@@ -5,6 +5,7 @@ export class HttpResponseProvider {
   constructor(options = {}) {
     this.name = "http-provider";
     this.sessionManager = options.sessionManager;
+    this.isGuarded = true; // The server already guards the output
   }
 
   async generateResponse(request) {

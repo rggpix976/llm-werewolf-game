@@ -18,6 +18,7 @@
 - [ ] Improve natural language intent parsing.
 - [ ] Improve suspicion score updates from nuanced player questions and NPC responses.
 - [x] Add better validation for generated NPC utterances. (2026-07-02)
+- [x] Implement deterministic Utterance Guard safety layer. (2026-07-02)
 
 ## Later
 

@@ -262,7 +262,7 @@ function createProvider(config) {
   }
   // If the provider is already a GuardedResponseProvider (e.g. passed in via options),
   // do not wrap it again.
-  if (provider instanceof GuardedResponseProvider) {
+  if (provider.isGuarded) {
     return provider;
   }
   return new GuardedResponseProvider(provider);

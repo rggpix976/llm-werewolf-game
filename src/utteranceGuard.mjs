@@ -8,8 +8,19 @@ import { normalize } from "./textUtils.mjs";
 export const MAX_UTTERANCE_LENGTH = 240;
 
 /**
+ * Valid fields for provider diagnostics allowed to reach the developer log.
+ */
+const ALLOWED_DIAGNOSTIC_FIELDS = new Set([
+  "responseId",
+  "requestId",
+  "httpStatus",
+  "providerStatus",
+  "fallbackUsed",
+  "retryCount"
+]);
+
+/**
  * Builds a code-controlled contract from the production NPC response request.
- * This ensures we only use trusted information for validation.
  */
 export function buildUtteranceContract(request) {
   return {
@@ -19,7 +30,8 @@ export function buildUtteranceContract(request) {
     publicClaimAllowed: request.policyDecision.publicClaimAllowed,
     publicClaim: request.policyDecision.publicClaim,
     publicEvidence: request.context.publicEvidence,
-    privateStanceEvidence: request.context.privateStanceEvidence
+    privateStanceEvidence: request.context.privateStanceEvidence,
+    shareableKnownEvidence: request.context.shareableKnownEvidence
   };
 }
 
@@ -78,13 +90,11 @@ export function validateNpcUtterance({ request, text }) {
     violations.push({ code: "contains_role_prefix" });
   }
 
-  // Reject NPC name prefix (e.g., "Aoi: ...")
-  const namePrefixPattern = new RegExp(`^${contract.npcName}[:：\s]`, "i");
+  const namePrefixPattern = new RegExp(`^${contract.npcName}[:：\\s]`, "i");
   if (namePrefixPattern.test(trimmed)) {
     violations.push({ code: "contains_name_prefix" });
   }
 
-  // Stage directions or explanatory wrappers
   if (hasSuspiciousWrapper(trimmed) && !hasSuspiciousWrapper(contract.baseText)) {
     violations.push({ code: "contains_stage_direction_or_wrapper" });
   }
@@ -102,7 +112,9 @@ export function validateNpcUtterance({ request, text }) {
   const roleKeywords = {
     [ROLES.SEER]: ["占い師", "占いco", "seer"],
     [ROLES.CITIZEN]: ["市民", "村人"],
-    [ROLES.WEREWOLF]: ["人狼", "狼"]
+    [ROLES.WEREWOLF]: ["人狼", "狼"],
+    "knight": ["騎士", "狩人", "knight"],
+    "medium": ["霊媒師", "霊能者", "medium"]
   };
 
   const isAffirmativeClaim = (role) => {
@@ -114,77 +126,172 @@ export function validateNpcUtterance({ request, text }) {
         "私が" + kw,
         "私は" + kw
       ];
-      return patterns.some(p => normalized.includes(p)) && !isDenial(normalized, kw);
+      return patterns.some(p => {
+        const idx = normalized.indexOf(p);
+        if (idx === -1) return false;
+        const remaining = normalized.slice(idx + p.length);
+        return !isDenialSuffix(remaining);
+      });
     });
   };
 
-  const isDenial = (text, kw) => {
+  const isDenialSuffix = (text) => {
     const denialSuffixes = ["ではありません", "ではない", "ではないです", "じゃない"];
-    return denialSuffixes.some(suffix => text.includes(kw + suffix));
+    return denialSuffixes.some(suffix => text.startsWith(suffix));
   };
 
   if (!contract.publicClaimAllowed) {
-    if (isAffirmativeClaim(ROLES.SEER) || isAffirmativeClaim(ROLES.CITIZEN) || isAffirmativeClaim(ROLES.WEREWOLF)) {
-      violations.push({ code: "role_disclosure_not_allowed" });
-    }
-  } else {
-    const allowedRole = contract.publicClaim.role;
-    for (const role of Object.values(ROLES)) {
-      if (role !== allowedRole && isAffirmativeClaim(role)) {
-        violations.push({ code: "mismatched_role_claim" });
+    for (const role in roleKeywords) {
+      if (isAffirmativeClaim(role)) {
+        violations.push({ code: "role_disclosure_not_allowed" });
+        break;
       }
     }
-    // If it's a seer claim, verify target and result if possible
-    if (allowedRole === ROLES.SEER && contract.publicClaim.results) {
-        // We ensure that it doesn't invent DIFFERENT results than the approved ones.
-        // This is tricky with natural language, but we can at least check for mentions of other players + result.
+  } else {
+    if (!contract.publicClaim || !contract.publicClaim.role) {
+        violations.push({ code: "missing_approved_claim_data" });
+    } else {
+        const approvedRole = contract.publicClaim.role;
+        for (const role in roleKeywords) {
+            if (role !== approvedRole && isAffirmativeClaim(role)) {
+                violations.push({ code: "mismatched_role_claim" });
+                break;
+            }
+        }
     }
   }
 
-  // Private seer results disclosure
+  // Build Disclosure Patterns
+  const buildRevealPatterns = (name, result) => {
+    const isWolf = result === "werewolf" || result === "black";
+    const base = isWolf
+      ? [name + "は人狼", name + "は黒", name + "が人狼"]
+      : [name + "は市民", name + "は白", name + "は人狼ではありません", name + "は人狼ではない", name + "は人狼じゃない"];
+
+    const variations = [
+      ...base,
+      ...base.map(p => name + "さん" + p.slice(name.length)),
+      name + "の占い結果は" + (isWolf ? "人狼" : "白"),
+      name + "の占い結果は" + (isWolf ? "黒" : "白"),
+      name + "の占い結果は" + (isWolf ? "人狼" : "市民"),
+      name + "を占った結果、" + (isWolf ? "人狼" : "白"),
+      name + "を占った結果、" + (isWolf ? "黒" : "白"),
+      name + "を占った結果、" + (isWolf ? "人狼" : "市民")
+    ];
+
+    const withSan = variations.map(v => v.replace(name, name + "さん"));
+    return [...new Set([...variations, ...withSan])];
+  };
+
   const privateResults = contract.privateStanceEvidence.filter(e => e.type === "seer_result");
+  const approvedResults = (contract.publicClaimAllowed && contract.publicClaim?.role === ROLES.SEER)
+    ? (contract.publicClaim.results || [])
+    : [];
+
+  // Check private results for unauthorized disclosure
   for (const res of privateResults) {
     const targetName = normalize(res.targetName);
-    const isWolf = res.result === "werewolf";
+    const patterns = buildRevealPatterns(targetName, res.result);
 
-    const revealPatterns = isWolf
-      ? [targetName + "は人狼", targetName + "は黒", targetName + "が人狼"]
-      : [targetName + "は市民", targetName + "は白", targetName + "は人狼ではありません", targetName + "は人狼ではない", targetName + "は人狼じゃない", targetName + "は人狼ではな", targetName + "は人狼でな", targetName + "は人狼じゃな"];
-
-    if (revealPatterns.some(p => normalized.includes(p))) {
-      const isAllowedByClaim = contract.publicClaimAllowed &&
-        contract.publicClaim.role === ROLES.SEER &&
-        contract.publicClaim.results.some(r => normalize(r.targetId) === normalize(res.targetId) && r.result === res.result);
-
-      if (!isAllowedByClaim) {
+    if (patterns.some(p => normalized.includes(p))) {
+      const isApproved = approvedResults.some(r => r.targetId === res.targetId && r.result === res.result);
+      if (!isApproved) {
         violations.push({ code: "private_result_disclosure" });
       }
     }
   }
 
-  // Unsupported game-state claims
-  const highRiskPatterns = [
-    { pattern: "処刑されました", key: "execution" },
-    { pattern: "処刑された", key: "execution" },
-    { pattern: "襲撃されました", key: "attack" },
-    { pattern: "襲撃された", key: "attack" },
+  // Trusted targets and all potential subjects
+  const trustedTargets = contract.shareableKnownEvidence.filter(e => e.targetName).map(e => normalize(e.targetName));
+  const otherTargets = new Set();
+  privateResults.forEach(e => { if (e.targetName) otherTargets.add(normalize(e.targetName)); });
+  const allKnownTargets = [...new Set([...trustedTargets, ...otherTargets])];
+
+  // General unauthorized disclosure check (Section 4 reinforced)
+  // Check every alignment keyword associated with ANY target
+  const words = extractTokens(normalized);
+  for (const word of words) {
+      // Find matches for target names
+      const matchedKnownTarget = allKnownTargets.find(t => word.startsWith(t));
+      if (matchedKnownTarget) {
+          const name = matchedKnownTarget;
+          for (const resType of ["werewolf", "not_werewolf"]) {
+              const patterns = buildRevealPatterns(name, resType);
+              if (patterns.some(p => normalized.includes(p))) {
+                  const isApproved = approvedResults.some(r => {
+                      const rName = normalize(getNpcNameById(contract, r.targetId));
+                      return rName === name && r.result === resType;
+                  });
+
+                  const grounded = patterns.some(p => baseNormalized.includes(p)) ||
+                                   contract.publicEvidence.some(e => patterns.some(p => normalize(e.text).includes(p)));
+
+                  if (!isApproved && !grounded) {
+                      violations.push({ code: "unauthorized_disclosure" });
+                  }
+              }
+          }
+      }
+  }
+
+  // Structured Fact Grounding (Section 5)
+  const highRiskEvents = [
+    { pattern: "処刑され", key: "execution" },
+    { pattern: "襲撃され", key: "attack" },
     { pattern: "占いました", key: "seer_action" },
     { pattern: "占った", key: "seer_action" },
-    { pattern: "投票しました", key: "vote" },
-    { pattern: "投票した", key: "vote" },
-    { pattern: "勝利です", key: "winner" },
-    { pattern: "勝利した", key: "winner" },
-    { pattern: "死亡しました", key: "death" },
-    { pattern: "死亡した", key: "death" }
+    { pattern: "投票し", key: "vote" },
+    { pattern: "勝利", key: "winner" },
+    { pattern: "死亡", key: "death" }
   ];
 
-  for (const item of highRiskPatterns) {
-    if (normalized.includes(item.pattern)) {
-      const supportedByBase = baseNormalized.includes(item.pattern);
-      const supportedByPublic = contract.publicEvidence.some(e => normalize(e.text).includes(item.pattern));
-      if (!supportedByBase && !supportedByPublic) {
-        violations.push({ code: `unsupported_claim_${item.key}` });
-      }
+  for (const event of highRiskEvents) {
+    if (normalized.includes(event.pattern)) {
+        if (event.key === "winner") {
+             const supported = baseNormalized.includes(event.pattern) || contract.publicEvidence.some(e => normalize(e.text).includes(event.pattern));
+             if (!supported) violations.push({ code: "unsupported_claim_winner" });
+             continue;
+        }
+
+        let eventFoundInUtterance = false;
+
+        for (const word of words) {
+            const factPrefixes = [word + "は", word + "を", word + "に", word + "さんが", word + "さんを", word + "さんに", word + "さんは"];
+            const votePatterns = [word + "に投票", word + "さんに投票"];
+
+            const utteranceHasFact = factPrefixes.some(pref => normalized.includes(pref + event.pattern)) ||
+                                   (event.key === "vote" && votePatterns.some(p => normalized.includes(p)));
+
+            if (utteranceHasFact) {
+                eventFoundInUtterance = true;
+                const matchedTrustedTarget = trustedTargets.find(t => word.startsWith(t));
+
+                if (matchedTrustedTarget) {
+                    const tName = matchedTrustedTarget;
+                    const factPrefixesT = [tName + "は", tName + "を", tName + "に", tName + "さんが", tName + "さんを", tName + "さんに", tName + "さんは"];
+
+                    const supportedByBase = factPrefixesT.some(pref => baseNormalized.includes(pref + event.pattern)) ||
+                                            (event.key === "vote" && baseNormalized.includes(tName) && baseNormalized.includes("投票"));
+
+                    const supportedByPublic = contract.publicEvidence.some(e => {
+                        const n = normalize(e.text);
+                        return factPrefixesT.some(pref => n.includes(pref + event.pattern)) ||
+                               (event.key === "vote" && n.includes(tName) && n.includes("投票"));
+                    });
+
+                    if (!supportedByBase && !supportedByPublic) {
+                        violations.push({ code: `unsupported_claim_${event.key}` });
+                    }
+                } else {
+                    violations.push({ code: `unsupported_claim_${event.key}_invented_target` });
+                }
+            }
+        }
+
+        if (!eventFoundInUtterance) {
+             const supported = baseNormalized.includes(event.pattern) || contract.publicEvidence.some(e => normalize(e.text).includes(event.pattern));
+             if (!supported) violations.push({ code: `unsupported_claim_${event.key}_generic` });
+        }
     }
   }
 
@@ -194,6 +301,15 @@ export function validateNpcUtterance({ request, text }) {
     violations,
     metrics
   };
+}
+
+function getNpcNameById(contract, id) {
+    const evidence = contract.shareableKnownEvidence.find(e => e.targetId === id);
+    return evidence ? evidence.targetName : id;
+}
+
+function extractTokens(txt) {
+    return txt.split(/[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+|[はをにが行]/).filter(w => w.length > 1);
 }
 
 function hasSuspiciousWrapper(text) {
@@ -208,18 +324,13 @@ export function guardProviderResponse({ request, providerResult }) {
   try {
     validation = validateNpcUtterance({ request, text: providerResult.text });
   } catch (error) {
-    // Fail-closed on internal guard error
     return {
       text: generatePseudoResponseText(request),
       providerName: "pseudo",
       model: "template-v1",
-      usage: providerResult.usage,
-      notes: [
-        ...(providerResult.notes || []),
-        "utterance_safety_fallback"
-      ],
+      usage: null,
+      notes: ["utterance_safety_fallback"],
       diagnostics: {
-        ...providerResult.diagnostics,
         utteranceGuard: {
           status: "internal_error_fallback",
           safetyFallbackUsed: true,
@@ -231,12 +342,16 @@ export function guardProviderResponse({ request, providerResult }) {
     };
   }
 
+  let result;
   if (validation.ok) {
-    return {
-      ...providerResult,
+    result = {
       text: validation.normalizedText,
+      providerName: providerResult.providerName,
+      model: providerResult.model,
+      usage: sanitizeUsage(providerResult.usage),
+      notes: sanitizeNotes(providerResult.notes),
       diagnostics: {
-        ...providerResult.diagnostics,
+        ...sanitizeDiagnostics(providerResult.diagnostics),
         utteranceGuard: {
           status: "accepted",
           safetyFallbackUsed: false,
@@ -246,29 +361,80 @@ export function guardProviderResponse({ request, providerResult }) {
         }
       }
     };
+  } else {
+    result = {
+      text: generatePseudoResponseText(request),
+      providerName: "pseudo",
+      model: "template-v1",
+      usage: sanitizeUsage(providerResult.usage),
+      notes: sanitizeNotes(providerResult.notes, "utterance_safety_fallback"),
+      diagnostics: {
+        ...sanitizeDiagnostics(providerResult.diagnostics),
+        utteranceGuard: {
+          status: "rejected_and_replaced",
+          safetyFallbackUsed: true,
+          originalProviderName: providerResult.providerName,
+          replacementProviderName: "pseudo",
+          violationCodes: [...new Set(validation.violations.map(v => v.code))],
+          originalTextLength: validation.metrics.characterCount
+        }
+      }
+    };
   }
 
-  // Reject and replace
-  const safeText = generatePseudoResponseText(request);
-  return {
-    text: safeText,
-    providerName: "pseudo",
-    model: "template-v1",
-    usage: providerResult.usage,
-    notes: [
-      ...(providerResult.notes || []),
-      "utterance_safety_fallback"
-    ],
-    diagnostics: {
-      ...providerResult.diagnostics,
-      utteranceGuard: {
-        status: "rejected_and_replaced",
-        safetyFallbackUsed: true,
-        originalProviderName: providerResult.providerName,
-        replacementProviderName: "pseudo",
-        violationCodes: validation.violations.map(v => v.code),
-        originalTextLength: validation.metrics.characterCount
+  if (!validation.ok && providerResult.text) {
+      if (containsRejectedText(result, providerResult.text)) {
+           return {
+               text: result.text,
+               providerName: "pseudo",
+               model: "template-v1",
+               notes: ["utterance_safety_fallback", "emergency_leak_protection"],
+               diagnostics: {
+                   utteranceGuard: {
+                       status: "rejected_and_wiped",
+                       safetyFallbackUsed: true,
+                       originalProviderName: providerResult.providerName,
+                       replacementProviderName: "pseudo"
+                   }
+               }
+           };
       }
+  }
+
+  return result;
+}
+
+function containsRejectedText(obj, rejectedText) {
+    const serialized = JSON.stringify(obj);
+    return serialized.includes(rejectedText);
+}
+
+function sanitizeUsage(usage) {
+    if (!usage || typeof usage !== "object") return null;
+    const inputTokens = Number.isInteger(usage.inputTokens) ? usage.inputTokens : (Number.isInteger(usage.input_tokens) ? usage.input_tokens : null);
+    const outputTokens = Number.isInteger(usage.outputTokens) ? usage.outputTokens : (Number.isInteger(usage.output_tokens) ? usage.output_tokens : null);
+    const totalTokens = Number.isInteger(usage.totalTokens) ? usage.totalTokens : (Number.isInteger(usage.total_tokens) ? usage.total_tokens : null);
+
+    const result = {};
+    if (inputTokens !== null) result.inputTokens = inputTokens;
+    if (outputTokens !== null) result.outputTokens = outputTokens;
+    if (totalTokens !== null) result.totalTokens = totalTokens;
+    return Object.keys(result).length > 0 ? result : null;
+}
+
+function sanitizeNotes(notes, extra) {
+    const safe = Array.isArray(notes) ? notes.filter(n => typeof n === "string" && n.length < 100) : [];
+    if (extra) safe.push(extra);
+    return safe;
+}
+
+function sanitizeDiagnostics(diag) {
+    if (!diag || typeof diag !== "object") return {};
+    const safe = {};
+    for (const key of ALLOWED_DIAGNOSTIC_FIELDS) {
+        if (Object.hasOwn(diag, key)) {
+            safe[key] = diag[key];
+        }
     }
-  };
+    return safe;
 }
