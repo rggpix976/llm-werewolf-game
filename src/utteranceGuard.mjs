@@ -36,10 +36,17 @@ export function validateNpcUtteranceStructure(text) {
   if (normalizedUntrimmed.includes("\t")) {
     violations.push({ code: "tab_not_allowed" });
   }
+  if (normalizedUntrimmed.includes("\u2028") || normalizedUntrimmed.includes("\u2029")) {
+    violations.push({ code: "unicode_separator_not_allowed" });
+  }
+
+  // Invisible format characters
+  if (normalizedUntrimmed.includes("\u200B") || normalizedUntrimmed.includes("\uFEFF")) {
+    violations.push({ code: "invisible_character_not_allowed" });
+  }
 
   // General control characters (C0/C1)
-  // Excluding \n (\x0A), \r (\x0D), \t (\x09) which are explicitly handled above
-  // although they are technically control characters, we want distinct codes.
+  // Excluding explicitly handled chars
   const otherControlRegex = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
   if (otherControlRegex.test(normalizedUntrimmed)) {
     violations.push({ code: "control_characters_not_allowed" });
@@ -76,7 +83,8 @@ export function validateNpcUtteranceStructure(text) {
   }
 
   // HTML or script markup
-  if (/<[^>]+>/.test(ordinaryTrimmed)) {
+  // Refined to detect tag structures while allowing single < or >
+  if (/<[a-z/][^>]*>/i.test(ordinaryTrimmed)) {
     violations.push({ code: "html_markup_not_allowed" });
   }
 
@@ -98,20 +106,21 @@ export function validateNpcUtteranceStructure(text) {
     violations.push({ code: "markdown_list_not_allowed" });
   }
 
-  // Role prefixes
-  if (/^(assistant|system|user):\s*/i.test(ordinaryTrimmed)) {
+  // Role prefixes (detecting optional spaces before the colon)
+  // Colon is already normalized to ':' by NFKC if it was '：'
+  if (/^(assistant|system|user)\s*:\s*/i.test(ordinaryTrimmed)) {
     violations.push({ code: "role_prefix_not_allowed" });
   }
 
   // Explanatory prefaces
-  if (/^(回答|応答|発言):\s*/.test(ordinaryTrimmed)) {
+  if (/^(回答|応答|発言)\s*:\s*/.test(ordinaryTrimmed)) {
     violations.push({ code: "explanatory_preface_not_allowed" });
   }
 
   // Stage direction wrappers
-  // Only reject if it's a wrapper at the beginning or end of the string.
-  // Since we applied NFKC, full-width （ ） are normalized to ( ).
-  const stageDirectionRegex = /^(\([^)]+\)|\[[^\]]+\]|\*[^*]+\*)|(\([^)]+\)|\[[^\]]+\]|\*[^*]+\*)$/;
+  // Conservative detection of specific stage directions inside wrappers at boundaries.
+  const stageKeywords = "笑う|考え込む|ため息をつく|泣く|驚く|怒る|微笑む|頷く|首を振る";
+  const stageDirectionRegex = new RegExp(`^(\\((${stageKeywords})\\)|\\[(${stageKeywords})\\]|\\*(${stageKeywords})\\*)|(\\((${stageKeywords})\\)|\\[(${stageKeywords})\\]|\\*(${stageKeywords})\\*)$`);
   if (stageDirectionRegex.test(ordinaryTrimmed)) {
     violations.push({ code: "stage_direction_not_allowed" });
   }
