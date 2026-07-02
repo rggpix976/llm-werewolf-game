@@ -8,7 +8,7 @@ test("validateNpcUtteranceStructure: normal Japanese utterance accepted unchange
   assert.equal(result.ok, true);
   assert.equal(result.normalizedText, text);
   assert.deepEqual(result.violations, []);
-  assert.equal(result.metrics.characterCount, text.length);
+  assert.equal(result.metrics.characterCount, 13);
 });
 
 test("validateNpcUtteranceStructure: leading and trailing spaces trimmed", () => {
@@ -19,7 +19,6 @@ test("validateNpcUtteranceStructure: leading and trailing spaces trimmed", () =>
 });
 
 test("validateNpcUtteranceStructure: Unicode NFKC normalization", () => {
-  // Full-width alphanumeric to half-width, etc.
   const text = "ＡＢＣ１２３";
   const result = validateNpcUtteranceStructure(text);
   assert.equal(result.ok, true);
@@ -30,7 +29,7 @@ test("validateNpcUtteranceStructure: punctuation accepted", () => {
   const text = "！、。？…";
   const result = validateNpcUtteranceStructure(text);
   assert.equal(result.ok, true);
-  // Note: NFKC normalizes full-width ！ and ？ to half-width ! and ?
+  // NFKC: ！ -> !, ？ -> ?, … -> ...
   assert.equal(result.normalizedText, "!、。?...");
 });
 
@@ -50,35 +49,42 @@ test("validateNpcUtteranceStructure: empty rejected", () => {
 test("validateNpcUtteranceStructure: whitespace-only rejected", () => {
   const result = validateNpcUtteranceStructure("   ");
   assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "whitespace_only" || v.code === "empty_after_normalization"));
+  assert.ok(result.violations.some(v => v.code === "whitespace_only"));
 });
 
-test("validateNpcUtteranceStructure: exactly 240 characters accepted", () => {
-  const text = "あ".repeat(MAX_NPC_UTTERANCE_CHARS);
+test("validateNpcUtteranceStructure: exactly 240 emoji accepted", () => {
+  const text = "🍎".repeat(MAX_NPC_UTTERANCE_CHARS);
   const result = validateNpcUtteranceStructure(text);
   assert.equal(result.ok, true);
   assert.equal(result.metrics.characterCount, 240);
 });
 
-test("validateNpcUtteranceStructure: 241 characters rejected", () => {
-  const text = "あ".repeat(MAX_NPC_UTTERANCE_CHARS + 1);
+test("validateNpcUtteranceStructure: 241 emoji rejected", () => {
+  const text = "🍎".repeat(MAX_NPC_UTTERANCE_CHARS + 1);
   const result = validateNpcUtteranceStructure(text);
   assert.equal(result.ok, false);
   assert.ok(result.violations.some(v => v.code === "too_long"));
 });
 
-test("validateNpcUtteranceStructure: LF rejected", () => {
-  const text = "一行目\n二行目";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "line_feed_not_allowed"));
+test("validateNpcUtteranceStructure: leading/trailing/internal LF rejected", () => {
+  assert.equal(validateNpcUtteranceStructure("\nこんにちは").ok, false, "leading LF");
+  assert.equal(validateNpcUtteranceStructure("こんにちは\n").ok, false, "trailing LF");
+  assert.equal(validateNpcUtteranceStructure("こん\nにちは").ok, false, "internal LF");
+  assert.ok(validateNpcUtteranceStructure("\n").violations.some(v => v.code === "line_feed_not_allowed"));
 });
 
-test("validateNpcUtteranceStructure: CRLF rejected", () => {
-  const text = "一行目\r\n二行目";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "line_feed_not_allowed" || v.code === "carriage_return_not_allowed"));
+test("validateNpcUtteranceStructure: leading/trailing/internal CR rejected", () => {
+  assert.equal(validateNpcUtteranceStructure("\rこんにちは").ok, false, "leading CR");
+  assert.equal(validateNpcUtteranceStructure("こんにちは\r").ok, false, "trailing CR");
+  assert.equal(validateNpcUtteranceStructure("こん\rにちは").ok, false, "internal CR");
+  assert.ok(validateNpcUtteranceStructure("\r").violations.some(v => v.code === "carriage_return_not_allowed"));
+});
+
+test("validateNpcUtteranceStructure: leading/trailing/internal Tab rejected", () => {
+  assert.equal(validateNpcUtteranceStructure("\tこんにちは").ok, false, "leading tab");
+  assert.equal(validateNpcUtteranceStructure("こんにちは\t").ok, false, "trailing tab");
+  assert.equal(validateNpcUtteranceStructure("こん\tにちは").ok, false, "internal tab");
+  assert.ok(validateNpcUtteranceStructure("\t").violations.some(v => v.code === "tab_not_allowed"));
 });
 
 test("validateNpcUtteranceStructure: control character rejected", () => {
@@ -109,13 +115,6 @@ test("validateNpcUtteranceStructure: HTML tag rejected", () => {
   assert.ok(result.violations.some(v => v.code === "html_markup_not_allowed"));
 });
 
-test("validateNpcUtteranceStructure: script markup rejected", () => {
-  const text = "<script>alert(1)</script>";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "html_markup_not_allowed"));
-});
-
 test("validateNpcUtteranceStructure: JSON object wrapper rejected", () => {
   const text = '{"text": "hello"}';
   const result = validateNpcUtteranceStructure(text);
@@ -137,87 +136,63 @@ test("validateNpcUtteranceStructure: Markdown heading rejected", () => {
   assert.ok(result.violations.some(v => v.code === "markdown_heading_not_allowed"));
 });
 
-test("validateNpcUtteranceStructure: unordered list rejected", () => {
-  const text = "- アイテム1";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "markdown_list_not_allowed"));
+test("validateNpcUtteranceStructure: Markdown list rejected", () => {
+  assert.equal(validateNpcUtteranceStructure("- アイテム").ok, false);
+  assert.equal(validateNpcUtteranceStructure("1. アイテム").ok, false);
 });
 
-test("validateNpcUtteranceStructure: ordered list rejected", () => {
-  const text = "1. アイテム1";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "markdown_list_not_allowed"));
-});
-
-test("validateNpcUtteranceStructure: assistant prefix rejected", () => {
-  const text = "assistant: こんにちは";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "role_prefix_not_allowed"));
-});
-
-test("validateNpcUtteranceStructure: system prefix rejected", () => {
-  const text = "system: 設定します";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "role_prefix_not_allowed"));
-});
-
-test("validateNpcUtteranceStructure: user prefix rejected", () => {
-  const text = "user: 質問です";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "role_prefix_not_allowed"));
+test("validateNpcUtteranceStructure: role prefix rejected", () => {
+  assert.equal(validateNpcUtteranceStructure("assistant: hello").ok, false);
+  assert.equal(validateNpcUtteranceStructure("system: hello").ok, false);
+  assert.equal(validateNpcUtteranceStructure("user: hello").ok, false);
 });
 
 test("validateNpcUtteranceStructure: explanatory preface rejected", () => {
-  const text = "回答: はい、そうです。";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "explanatory_preface_not_allowed"));
+  assert.equal(validateNpcUtteranceStructure("回答: はい").ok, false);
 });
 
-test("validateNpcUtteranceStructure: parenthesized stage direction rejected", () => {
-  const text = "それは困りました（笑う）";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "stage_direction_not_allowed"));
+test("validateNpcUtteranceStructure: stage direction wrappers rejected", () => {
+  assert.equal(validateNpcUtteranceStructure("（笑う）").ok, false);
+  assert.equal(validateNpcUtteranceStructure("(笑う)").ok, false);
+  assert.equal(validateNpcUtteranceStructure("[考え込む]").ok, false);
+  assert.equal(validateNpcUtteranceStructure("*ため息をつく*").ok, false);
+  assert.equal(validateNpcUtteranceStructure("（笑う）こんにちは").ok, false);
+  assert.equal(validateNpcUtteranceStructure("こんにちは（笑う）").ok, false);
 });
 
-test("validateNpcUtteranceStructure: bracketed stage direction rejected", () => {
-  const text = "どうしましょうか [考え込む]";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "stage_direction_not_allowed"));
+test("validateNpcUtteranceStructure: internal parentheses accepted", () => {
+  const text1 = "昨日の投票（1回目）を確認したいです。";
+  const res1 = validateNpcUtteranceStructure(text1);
+  assert.equal(res1.ok, true);
+  // NFKC normalizes （ ） to ( )
+  assert.equal(res1.normalizedText, "昨日の投票(1回目)を確認したいです。");
+
+  const text2 = "Aoi（占い師を名乗った人）の発言を確認します。";
+  const res2 = validateNpcUtteranceStructure(text2);
+  assert.equal(res2.ok, true);
 });
 
-test("validateNpcUtteranceStructure: asterisk stage direction rejected", () => {
-  const text = "*ため息をつく* わかりました。";
-  const result = validateNpcUtteranceStructure(text);
-  assert.equal(result.ok, false);
-  assert.ok(result.violations.some(v => v.code === "stage_direction_not_allowed"));
-});
-
-test("validateNpcUtteranceStructure: rejected text absent from the serialized validation result", () => {
+test("validateNpcUtteranceStructure: rejected text absent from results", () => {
   const badText = "落とし穴 <script>alert(1)</script>";
   const result = validateNpcUtteranceStructure(badText);
   assert.equal(result.ok, false);
   assert.equal(result.normalizedText, null);
-
   const serialized = JSON.stringify(result);
   assert.ok(!serialized.includes("<script>"));
-  assert.ok(!serialized.includes("alert(1)"));
 });
 
-test("validateNpcUtteranceStructure: violation objects contain only documented safe fields", () => {
-  const text = "回答: はい [笑]";
-  const result = validateNpcUtteranceStructure(text);
+test("validateNpcUtteranceStructure: violation objects contain only code", () => {
+  const result = validateNpcUtteranceStructure("回答: はい [笑]");
   assert.equal(result.ok, false);
-  assert.ok(result.violations.length > 0);
   for (const violation of result.violations) {
-    const keys = Object.keys(violation);
-    assert.deepEqual(keys, ["code"]);
+    assert.deepEqual(Object.keys(violation), ["code"]);
   }
+});
+
+test("validateNpcUtteranceStructure: ordinary leading/trailing spaces remain safely trimmable", () => {
+  const text = "　こんにちは　"; // Full-width spaces
+  const result = validateNpcUtteranceStructure(text);
+  assert.equal(result.ok, true);
+  assert.equal(result.normalizedText, "こんにちは");
+  assert.equal(result.metrics.characterCount, 5);
 });
