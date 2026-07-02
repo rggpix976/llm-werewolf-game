@@ -70,20 +70,26 @@ export function validateNpcUtteranceStructure(text) {
     } else {
       violations.push({ code: "empty_string" });
     }
+  } else {
+    // 5. Reject whitespace-only utterances (any Unicode whitespace)
+    // We check if the remaining characters after ordinary trim are all Unicode whitespace.
+    // \s in JS with 'u' flag handles Unicode whitespace.
+    if (/^\s+$/u.test(ordinaryTrimmed)) {
+      violations.push({ code: "whitespace_only" });
+    }
   }
 
   if (characterCount > MAX_NPC_UTTERANCE_CHARS) {
     violations.push({ code: "too_long" });
   }
 
-  // 5. Structural checks on trimmed text
+  // 6. Structural checks on trimmed text
   // Markdown code fences
   if (ordinaryTrimmed.includes("```")) {
     violations.push({ code: "markdown_code_fence_not_allowed" });
   }
 
   // HTML or script markup
-  // Refined to detect tag structures while allowing single < or >
   if (/<[a-z/][^>]*>/i.test(ordinaryTrimmed)) {
     violations.push({ code: "html_markup_not_allowed" });
   }
@@ -102,12 +108,11 @@ export function validateNpcUtteranceStructure(text) {
   }
 
   // Markdown lists
-  if (/^[\*\+\-]\s/.test(ordinaryTrimmed) || /^\d+\.\s/.test(ordinaryTrimmed)) {
+  if (/^[\*\+\-]\s/.test(ordinaryTrimmed) || /^\d+\.\s?/.test(ordinaryTrimmed)) {
     violations.push({ code: "markdown_list_not_allowed" });
   }
 
   // Role prefixes (detecting optional spaces before the colon)
-  // Colon is already normalized to ':' by NFKC if it was '：'
   if (/^(assistant|system|user)\s*:\s*/i.test(ordinaryTrimmed)) {
     violations.push({ code: "role_prefix_not_allowed" });
   }
@@ -118,7 +123,6 @@ export function validateNpcUtteranceStructure(text) {
   }
 
   // Stage direction wrappers
-  // Conservative detection of specific stage directions inside wrappers at boundaries.
   const stageKeywords = "笑う|考え込む|ため息をつく|泣く|驚く|怒る|微笑む|頷く|首を振る";
   const stageDirectionRegex = new RegExp(`^(\\((${stageKeywords})\\)|\\[(${stageKeywords})\\]|\\*(${stageKeywords})\\*)|(\\((${stageKeywords})\\)|\\[(${stageKeywords})\\]|\\*(${stageKeywords})\\*)$`);
   if (stageDirectionRegex.test(ordinaryTrimmed)) {
