@@ -14,6 +14,7 @@ This repository is a prototype of an LLM-integrated Werewolf game. As an AI agen
 ## Core Principles
 
 - **LLMs Do Not Mutate Game State**: Role assignment, life/death status, voting results, seer results, werewolf attacks, and win conditions are handled strictly by code in `src/gameEngine.mjs`.
+- **Utterance Guard**: All provider-generated text is untrusted until it passes the deterministic Utterance Guard. Unsafe output must be replaced locally with a deterministic pseudo-response. Rejected text must never be logged or displayed.
 - **Separation of Concerns**: Keep player-facing logs and developer logs separate.
 - **Privacy**: Never add secret information (roles, hidden info, etc.) to the public snapshot returned by `getPublicSnapshot()`.
 - **API Boundary**: Use `getDeveloperDiagnostics()` for developer tools and `getPublicSnapshot()` for the public UI. Do not allow the UI to directly reference `game.state`.

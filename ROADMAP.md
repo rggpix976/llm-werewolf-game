@@ -37,6 +37,7 @@
 - Expand test suite to 95 tests covering edge cases and reliability. Done.
 - Add controlled real OpenAI smoke-test workflow for local verification. Done.
 - Perform first live OpenAI smoke test. Done (2026-07-01).
+- Add a code-controlled NPC utterance safety and quality gate. Done (2026-07-02).
 
 ## Phase 6: Game Expansion
 
@@ -47,4 +48,4 @@
 
 ## Current Priority
 
-Controlled local testing and refinement of NPC dialogue policies.
+NPC memory and natural language intent parsing improvements.

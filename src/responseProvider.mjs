@@ -1,4 +1,21 @@
 import { generatePseudoResponseText } from "./responseGenerator.mjs";
+import { guardProviderResponse } from "./utteranceGuard.mjs";
+
+export class GuardedResponseProvider {
+  constructor(innerProvider) {
+    this.innerProvider = innerProvider;
+    this.name = innerProvider.name || getProviderName(innerProvider);
+  }
+
+  async generateResponse(request, options = {}) {
+    const result = await this.innerProvider.generateResponse(request, options);
+    // Generic provider validation. Throws if fundamentally broken (e.g. empty text).
+    // This preserves existing provider-error behavior by not triggering safety fallback
+    // for broken provider responses that should be treated as system errors.
+    const validated = validateProviderResponse(result, this.name);
+    return guardProviderResponse({ request, providerResult: validated });
+  }
+}
 
 export class PseudoResponseProvider {
   constructor(options = {}) {

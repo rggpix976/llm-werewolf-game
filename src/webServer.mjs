@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseConfig, getRuntimeConfig } from "./config.mjs";
 import { OpenAIResponseProvider } from "./openaiProvider.mjs";
-import { PseudoResponseProvider, getProviderName } from "./responseProvider.mjs";
+import { PseudoResponseProvider, GuardedResponseProvider, getProviderName } from "./responseProvider.mjs";
 import { validateNpcResponseRequest } from "./validator.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -254,10 +254,18 @@ function createHttpError(status, message) {
 }
 
 function createProvider(config) {
+  let provider;
   if (config.provider === "openai") {
-    return new OpenAIResponseProvider(config.openai);
+    provider = new OpenAIResponseProvider(config.openai);
+  } else {
+    provider = new PseudoResponseProvider();
   }
-  return new PseudoResponseProvider();
+  // If the provider is already a GuardedResponseProvider (e.g. passed in via options),
+  // do not wrap it again.
+  if (provider instanceof GuardedResponseProvider) {
+    return provider;
+  }
+  return new GuardedResponseProvider(provider);
 }
 
 function createRateLimiter(config) {

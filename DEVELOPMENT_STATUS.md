@@ -17,23 +17,27 @@ Last updated: 2026-07-01
 - Configurable concurrency limit and RPM limit for OpenAI calls.
 - Transient error fallback to `PseudoResponseProvider` for game continuity.
 - Added a controlled one-call real OpenAI smoke-test workflow (`npm run smoke:openai`) for local verification.
+- Implemented a code-controlled, deterministic **Utterance Guard** for NPC safety and quality.
+- Every NPC response (from any provider) is validated against structural, role, secrecy, and factual grounding rules.
+- Added 40 automated tests specifically for utterance-guard rules and replacement behavior.
+- Enhanced security: Redacted private evidence when public claim is not allowed and ensured unsafe provider text never reaches player-facing logs or diagnostics.
 - UI-independent asynchronous action API is available through `await dispatchPlayerAction(action)`.
 - Public UI state can be read through `getPublicSnapshot()`.
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 95 automated tests.
+- Core game, response-provider invariants, developer diagnostics, configuration, request validation, API endpoints, and utterance-guard rules are covered by 135 automated tests.
 
 ## Last Verified
 
-- Date: 2026-07-01
+- Date: 2026-07-02
 - Commands:
   - `npm test`
   - `npm run sample`
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 95/95 tests passed. All .mjs files pass syntax check.
+- Result: 135/135 tests passed. All .mjs files pass syntax check.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01

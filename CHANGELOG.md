@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-02
+
+- Implemented a deterministic Utterance Guard safety layer for NPC responses.
+- Added `GuardedResponseProvider` wrapper to enforce safety rules across all provider types.
+- Implemented structural, role-secrecy, and factual grounding rules for NPC utterances.
+- Added safety fallback that replaces rejected text with deterministic pseudo-responses.
+- Ensured rejected text is never logged or displayed, even in diagnostics.
+- Expanded automated test suite from 95 to 135 tests.
+- Verified guard behavior in the browser using an enhanced mock provider.
+
 ## 2026-07-01
 
 - Recorded successful real OpenAI smoke-test result (`npm run smoke:openai`).

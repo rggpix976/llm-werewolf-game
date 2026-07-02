@@ -108,9 +108,22 @@ test("Integration: Full flow with real WerewolfGame request (Pseudo)", async () 
 });
 
 test("Integration: Full flow with mocked OpenAI raw contract", async () => {
-    const game = WerewolfGame.create({ seed: 1 });
+    const game = WerewolfGame.create({ seed: 1, scenario: "sample" });
     const npc = game.getPlayer("npc1");
-    const prepared = buildNpcResponseRequest(npc, game.state, "Who is the werewolf?");
+    // Add a seer result so the NPC is willing to claim
+    npc.knownInfo.push({
+        type: "seer_result",
+        targetId: "npc3",
+        targetName: "Chika",
+        result: "werewolf",
+        text: "Chikaは人狼だった。",
+        visibility: "private",
+        shareable: false,
+        day: 1
+    });
+    // Ensure the NPC is allowed to claim Seer so the utterance is not rejected
+    npc.conversationPolicy.roleClaim = "claim_when_directly_asked_after_result";
+    const prepared = buildNpcResponseRequest(npc, game.state, "占いCOしてください");
 
     let capturedBody;
     let capturedHeaders;

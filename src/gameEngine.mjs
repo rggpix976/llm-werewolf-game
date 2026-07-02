@@ -2,6 +2,7 @@ import { buildNpcResponseRequest } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
+  GuardedResponseProvider,
   validateProviderResponse
 } from "./responseProvider.mjs";
 import { PHASES, ROLES, TEAMS, publicRoleName, publicTeamName, teamForRole } from "./constants.mjs";
@@ -105,10 +106,12 @@ export class WerewolfGame {
       }
     };
 
-    const game = new WerewolfGame(
-      state,
-      options.responseProvider ?? new PseudoResponseProvider()
-    );
+    const rawProvider = options.responseProvider ?? new PseudoResponseProvider();
+    const guardedProvider = (rawProvider instanceof GuardedResponseProvider)
+      ? rawProvider
+      : new GuardedResponseProvider(rawProvider);
+
+    const game = new WerewolfGame(state, guardedProvider);
     game.addPublicInfo({
       type: "setup",
       text: "公開情報: 5人村。内訳は人狼1、占い師1、市民3。役職欠けなし。"
@@ -302,7 +305,8 @@ export class WerewolfGame {
       type: "npc_response",
       actorId: npc.id,
       actorName: npc.name,
-      text: `${npc.name}: ${result.text}`
+      text: `${npc.name}: ${result.text}`,
+      utteranceGuard: providerResult.diagnostics?.utteranceGuard
     });
     npc.privateMemory.push({
       day: this.state.day,

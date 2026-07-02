@@ -17,7 +17,7 @@
 - [x] Implement browser-side request cancellation and session management.
 - [ ] Improve natural language intent parsing.
 - [ ] Improve suspicion score updates from nuanced player questions and NPC responses.
-- [ ] Add better validation for generated NPC utterances.
+- [x] Add better validation for generated NPC utterances. (2026-07-02)
 
 ## Later
 
