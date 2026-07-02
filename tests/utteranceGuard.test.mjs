@@ -151,8 +151,17 @@ test("validateNpcUtteranceStructure: JSON and Markdown structural rejections", (
   assert.ok(validateNpcUtteranceStructure("```").violations.some(v => v.code === "markdown_code_fence_not_allowed"));
 
   assert.equal(validateNpcUtteranceStructure("# 見出し").ok, false, "heading");
-  assert.equal(validateNpcUtteranceStructure("1. アイテム").ok, false, "ordered list");
-  assert.ok(validateNpcUtteranceStructure("1. ").violations.some(v => v.code === "markdown_list_not_allowed"));
+
+  // Markdown list rejections (require whitespace)
+  assert.equal(validateNpcUtteranceStructure("1. 項目").ok, false, "ordered list single digit");
+  assert.equal(validateNpcUtteranceStructure("12. 項目").ok, false, "ordered list multiple digits");
+  assert.equal(validateNpcUtteranceStructure("- リスト").ok, false, "unordered list");
+});
+
+test("validateNpcUtteranceStructure: decimals and numbering without spaces accepted", () => {
+  assert.equal(validateNpcUtteranceStructure("1.23について確認します。").ok, true);
+  assert.equal(validateNpcUtteranceStructure("2026.07.01の記録です。").ok, true);
+  assert.equal(validateNpcUtteranceStructure("1.ではなく別案です。").ok, true);
 });
 
 test("validateNpcUtteranceStructure: role prefixes and prefaces with variants rejected", () => {

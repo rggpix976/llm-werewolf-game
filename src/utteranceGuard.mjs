@@ -105,7 +105,7 @@ export function validateNpcUtteranceStructure(text) {
   }
 
   // Markdown lists
-  if (/^[\*\+\-]\s/.test(ordinaryTrimmed) || /^\d+\.\s?/.test(ordinaryTrimmed)) {
+  if (/^[\*\+\-]\s/.test(ordinaryTrimmed) || /^\d+\.\s+/.test(ordinaryTrimmed)) {
     violations.push({ code: "markdown_list_not_allowed" });
   }
 
