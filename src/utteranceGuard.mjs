@@ -46,7 +46,6 @@ export function validateNpcUtteranceStructure(text) {
   }
 
   // General control characters (C0/C1)
-  // Excluding explicitly handled chars
   const otherControlRegex = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
   if (otherControlRegex.test(normalizedUntrimmed)) {
     violations.push({ code: "control_characters_not_allowed" });
@@ -72,8 +71,6 @@ export function validateNpcUtteranceStructure(text) {
     }
   } else {
     // 5. Reject whitespace-only utterances (any Unicode whitespace)
-    // We check if the remaining characters after ordinary trim are all Unicode whitespace.
-    // \s in JS with 'u' flag handles Unicode whitespace.
     if (/^\s+$/u.test(ordinaryTrimmed)) {
       violations.push({ code: "whitespace_only" });
     }
