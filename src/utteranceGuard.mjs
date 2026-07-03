@@ -5,9 +5,6 @@ export const MAX_NPC_UTTERANCE_CHARS = 240;
 
 /**
  * Validates the structural shape of an NPC utterance.
- *
- * @param {any} text The text to validate.
- * @returns {object} The validation result.
  */
 export function validateNpcUtteranceStructure(text) {
   const violations = [];
@@ -22,364 +19,314 @@ export function validateNpcUtteranceStructure(text) {
     };
   }
 
-  // 1. Normalization
-  // Apply Unicode NFKC normalization
   const normalizedUntrimmed = text.normalize("NFKC");
 
-  // 2. Inspect the normalized untrimmed value for disallowed characters
-  if (normalizedUntrimmed.includes("\n")) {
-    violations.push({ code: "line_feed_not_allowed" });
-  }
-  if (normalizedUntrimmed.includes("\r")) {
-    violations.push({ code: "carriage_return_not_allowed" });
-  }
-  if (normalizedUntrimmed.includes("\t")) {
-    violations.push({ code: "tab_not_allowed" });
-  }
-  if (normalizedUntrimmed.includes("\u2028") || normalizedUntrimmed.includes("\u2029")) {
-    violations.push({ code: "unicode_separator_not_allowed" });
-  }
+  if (normalizedUntrimmed.includes("\n")) violations.push({ code: "line_feed_not_allowed" });
+  if (normalizedUntrimmed.includes("\r")) violations.push({ code: "carriage_return_not_allowed" });
+  if (normalizedUntrimmed.includes("\t")) violations.push({ code: "tab_not_allowed" });
+  if (normalizedUntrimmed.includes("\u2028") || normalizedUntrimmed.includes("\u2029")) violations.push({ code: "unicode_separator_not_allowed" });
+  if (normalizedUntrimmed.includes("\u200B") || normalizedUntrimmed.includes("\uFEFF")) violations.push({ code: "invisible_character_not_allowed" });
 
-  // Invisible format characters
-  if (normalizedUntrimmed.includes("\u200B") || normalizedUntrimmed.includes("\uFEFF")) {
-    violations.push({ code: "invisible_character_not_allowed" });
-  }
-
-  // General control characters (C0/C1)
   const otherControlRegex = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
-  if (otherControlRegex.test(normalizedUntrimmed)) {
-    violations.push({ code: "control_characters_not_allowed" });
-  }
+  if (otherControlRegex.test(normalizedUntrimmed)) violations.push({ code: "control_characters_not_allowed" });
 
-  // Bidi overrides or isolation characters
-  if (/[\u202A-\u202E\u2066-\u2069]/.test(normalizedUntrimmed)) {
-    violations.push({ code: "bidi_characters_not_allowed" });
-  }
+  if (/[\u202A-\u202E\u2066-\u2069]/.test(normalizedUntrimmed)) violations.push({ code: "bidi_characters_not_allowed" });
 
-  // 3. Trim only explicitly permitted ordinary surrounding spaces (U+0020 Space and U+3000 Ideographic Space)
   const ordinaryTrimmed = normalizedUntrimmed.replace(/^[ \u3000]+|[ \u3000]+$/g, "");
-
-  // 4. Character count using Unicode code points
   const characterCount = [...ordinaryTrimmed].length;
 
-  // Empty and whitespace checks
   if (characterCount === 0) {
-    if (normalizedUntrimmed.length > 0) {
-      violations.push({ code: "whitespace_only" });
-    } else {
-      violations.push({ code: "empty_string" });
-    }
-  } else {
-    // 5. Reject whitespace-only utterances (any Unicode whitespace)
-    if (/^\s+$/u.test(ordinaryTrimmed)) {
-      violations.push({ code: "whitespace_only" });
-    }
+    if (normalizedUntrimmed.length > 0) violations.push({ code: "whitespace_only" });
+    else violations.push({ code: "empty_string" });
+  } else if (/^\s+$/u.test(ordinaryTrimmed)) {
+    violations.push({ code: "whitespace_only" });
   }
 
-  if (characterCount > MAX_NPC_UTTERANCE_CHARS) {
-    violations.push({ code: "too_long" });
-  }
+  if (characterCount > MAX_NPC_UTTERANCE_CHARS) violations.push({ code: "too_long" });
 
-  // 6. Structural checks on trimmed text
-  // Markdown code fences
-  if (ordinaryTrimmed.includes("```")) {
-    violations.push({ code: "markdown_code_fence_not_allowed" });
-  }
+  if (ordinaryTrimmed.includes("```")) violations.push({ code: "markdown_code_fence_not_allowed" });
+  if (/<[a-z/][^>]*>/i.test(ordinaryTrimmed)) violations.push({ code: "html_markup_not_allowed" });
+  if (/^\{.*\}$/.test(ordinaryTrimmed)) violations.push({ code: "json_object_not_allowed" });
+  if (/^\[.*\]$/.test(ordinaryTrimmed)) violations.push({ code: "json_array_not_allowed" });
+  if (/^#+\s/.test(ordinaryTrimmed)) violations.push({ code: "markdown_heading_not_allowed" });
+  if (/^[\*\+\-]\s/.test(ordinaryTrimmed) || /^\d+\.\s+/.test(ordinaryTrimmed)) violations.push({ code: "markdown_list_not_allowed" });
+  if (/^(assistant|system|user)\s*:\s*/i.test(ordinaryTrimmed)) violations.push({ code: "role_prefix_not_allowed" });
+  if (/^(回答|応答|発言)\s*:\s*/.test(ordinaryTrimmed)) violations.push({ code: "explanatory_preface_not_allowed" });
 
-  // HTML or script markup
-  if (/<[a-z/][^>]*>/i.test(ordinaryTrimmed)) {
-    violations.push({ code: "html_markup_not_allowed" });
-  }
-
-  // JSON object or array wrappers
-  if (/^\{.*\}$/.test(ordinaryTrimmed)) {
-    violations.push({ code: "json_object_not_allowed" });
-  }
-  if (/^\[.*\]$/.test(ordinaryTrimmed)) {
-    violations.push({ code: "json_array_not_allowed" });
-  }
-
-  // Markdown headings
-  if (/^#+\s/.test(ordinaryTrimmed)) {
-    violations.push({ code: "markdown_heading_not_allowed" });
-  }
-
-  // Markdown lists
-  if (/^[\*\+\-]\s/.test(ordinaryTrimmed) || /^\d+\.\s+/.test(ordinaryTrimmed)) {
-    violations.push({ code: "markdown_list_not_allowed" });
-  }
-
-  // Role prefixes (detecting optional spaces before the colon)
-  if (/^(assistant|system|user)\s*:\s*/i.test(ordinaryTrimmed)) {
-    violations.push({ code: "role_prefix_not_allowed" });
-  }
-
-  // Explanatory prefaces
-  if (/^(回答|応答|発言)\s*:\s*/.test(ordinaryTrimmed)) {
-    violations.push({ code: "explanatory_preface_not_allowed" });
-  }
-
-  // Stage direction wrappers
   const stageKeywords = "笑う|考え込む|ため息をつく|泣く|驚く|怒る|微笑む|頷く|首を振る";
   const stageDirectionRegex = new RegExp(`^(\\((${stageKeywords})\\)|\\[(${stageKeywords})\\]|\\*(${stageKeywords})\\*)|(\\((${stageKeywords})\\)|\\[(${stageKeywords})\\]|\\*(${stageKeywords})\\*)$`);
-  if (stageDirectionRegex.test(ordinaryTrimmed)) {
-    violations.push({ code: "stage_direction_not_allowed" });
-  }
+  if (stageDirectionRegex.test(ordinaryTrimmed)) violations.push({ code: "stage_direction_not_allowed" });
 
   const ok = violations.length === 0;
-
-  return {
-    ok,
-    normalizedText: ok ? ordinaryTrimmed : null,
-    violations,
-    metrics: {
-      characterCount,
-    },
-  };
+  return { ok, normalizedText: ok ? ordinaryTrimmed : null, violations, metrics: { characterCount } };
 }
 
 /**
- * Validates NPC utterance role claims and secrecy.
- *
- * @param {object} params Validation parameters.
- * @returns {object} The validation result.
+ * Pure helpers for schema validation.
  */
-export function validateNpcUtteranceRoleAndSecrecy({
-  text,
-  speaker,
-  publicPlayers,
-  publicClaimAllowed,
-  publicClaim,
-  privateSeerResults,
-}) {
-  // 1. Layering: Structural validation first
-  const structuralResult = validateNpcUtteranceStructure(text);
-  if (!structuralResult.ok) {
-    return structuralResult;
-  }
+const isPlainObject = (v) => v && typeof v === "object" && !Array.isArray(v);
+const isBoundedString = (v, min, max) => typeof v === "string" && v.length >= min && v.length <= max;
 
-  const normalizedText = structuralResult.normalizedText;
-  const violations = [];
+function validateSpeakerSchema(s) {
+  try {
+    if (!isPlainObject(s)) return false;
+    if (!isBoundedString(s.id, 1, 64) || !isBoundedString(s.name, 1, 64)) return false;
+    return ["citizen", "seer", "werewolf"].includes(s.role);
+  } catch { return false; }
+}
 
-  // Defensive validation of input data (fail closed if malformed)
-  let rosterOk = true;
-  if (!Array.isArray(publicPlayers)) {
-    rosterOk = false;
-  } else {
+function validateRosterSchema(p) {
+  try {
+    if (!Array.isArray(p)) return false;
     const ids = new Set();
     const names = new Set();
-    for (const p of publicPlayers) {
-      try {
-        if (!p || typeof p !== "object" || typeof p.id !== "string" || !p.id || typeof p.name !== "string" || !p.name) {
-          rosterOk = false;
-          break;
-        }
-        if (ids.has(p.id) || names.has(p.name)) {
-          rosterOk = false;
-          break;
-        }
-        ids.add(p.id);
-        names.add(p.name);
-      } catch (e) {
-        rosterOk = false;
-        break;
-      }
+    for (const player of p) {
+      if (!isPlainObject(player)) return false;
+      if (!isBoundedString(player.id, 1, 64) || !isBoundedString(player.name, 1, 64)) return false;
+      if (ids.has(player.id) || names.has(player.name)) return false;
+      ids.add(player.id);
+      names.add(player.name);
     }
-  }
-
-  // Patterns for role detection
-  const ROLE_TERMS = ["人狼", "狼", "占い師", "騎士", "狩人", "霊媒師", "霊能者", "村人", "市民"];
-  const SELF_PRONOUNS = "私|自分|俺|僕";
-
-  /**
-   * Checks if the text contains an affirmative claim of a role.
-   * @param {string} txt
-   * @param {string} roleName
-   * @param {string} actorName
-   * @returns {boolean}
-   */
-  const containsAffirmativeClaim = (txt, roleName, actorName) => {
-    const actorPart = actorName ? `|${actorName}` : "";
-    const affirmativePatterns = [
-      new RegExp(`(${SELF_PRONOUNS}${actorPart})[はが].*${roleName}(です|だ)`),
-      new RegExp(`${roleName}CO`),
-    ];
-
-    const denialPatterns = [
-      new RegExp(`(${SELF_PRONOUNS}${actorPart})[はが].*${roleName}では(ありません|ない)`),
-      new RegExp(`${roleName}COはしません`),
-      new RegExp(`${roleName}ではありません`),
-    ];
-
-    for (const pattern of affirmativePatterns) {
-      const matches = [...txt.matchAll(new RegExp(pattern, "g"))];
-      for (const match of matches) {
-        const matchText = match[0];
-        const matchIndex = match.index;
-
-        let isDenial = false;
-        for (const denial of denialPatterns) {
-          const denialMatches = [...txt.matchAll(new RegExp(denial, "g"))];
-          if (denialMatches.some(dm => dm.index <= matchIndex && dm.index + dm[0].length >= matchIndex + matchText.length)) {
-            isDenial = true;
-            break;
-          }
-        }
-        if (!isDenial) return true;
-      }
-    }
-    return false;
-  };
-
-  /**
-   * Detects if the text contains a seer-result-like claim for a target.
-   * @param {string} txt
-   * @param {string} targetName
-   * @param {string} result "human" | "werewolf"
-   * @returns {boolean}
-   */
-  const containsSeerResultClaim = (txt, targetName, result) => {
-    const escapedName = targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const suffix = "(さんは|さんが|は|が|を|さんを)";
-
-    const werewolfPatterns = [
-      "黒です", "人狼でした", "占い結果は黒です", "を占った結果、人狼でした",
-      "黒", "人狼だった", "の占い結果は黒", "を占った結果、人狼"
-    ];
-    const humanPatterns = [
-      "白です", "村人でした", "人狼ではありません", "占い結果は白です", "を占った結果、村人でした",
-      "白", "村人だった", "の占い結果は白", "を占った結果、村人", "を占った結果、人狼ではなかった"
-    ];
-
-    const patterns = result === "werewolf" ? werewolfPatterns : humanPatterns;
-
-    for (const p of patterns) {
-      if (p.startsWith("の") || p.startsWith("を")) {
-        if (new RegExp(`${escapedName}${p}([。!！？…\\s]|$)`).test(txt)) return true;
-        // Formal prefix matching
-        if (p.includes("占い結果は")) {
-            if (new RegExp(`${escapedName}の占い結果は${result === "werewolf" ? "黒" : "白"}`).test(txt)) return true;
-        }
-        if (p.includes("占った結果")) {
-            if (new RegExp(`${escapedName}(さん)?を占った結果、${result === "werewolf" ? "人狼" : "(村人|人狼ではなかった)"}`).test(txt)) return true;
-        }
-      } else if (p === "黒" || p === "白" || p === "人狼だった" || p === "村人だった" || p === "人狼でした" || p === "村人でした") {
-        if (new RegExp(`${escapedName}${suffix}${p}([。!！？…\\s]|$)`).test(txt)) return true;
-      } else {
-        if (new RegExp(`${escapedName}${suffix}${p}`).test(txt)) return true;
-      }
-    }
-    return false;
-  };
-
-  const anyRoleClaimed = ROLE_TERMS.find(rt => containsAffirmativeClaim(normalizedText, rt, speaker?.name));
-
-  let claimedResults = [];
-  if (rosterOk) {
-    for (const player of publicPlayers) {
-      if (containsSeerResultClaim(normalizedText, player.name, "werewolf")) {
-        claimedResults.push({ targetId: player.id, targetName: player.name, result: "werewolf" });
-      }
-      if (containsSeerResultClaim(normalizedText, player.name, "human")) {
-        claimedResults.push({ targetId: player.id, targetName: player.name, result: "human" });
-      }
-    }
-  }
-
-  // 2. Werewolf confession rule
-  if (speaker?.role === "werewolf") {
-    if (containsAffirmativeClaim(normalizedText, "人狼", speaker.name) || containsAffirmativeClaim(normalizedText, "狼", speaker.name)) {
-      violations.push({ code: "werewolf_confession_not_allowed" });
-    }
-  }
-
-  // 4. Approved public Seer claim (and secrecy)
-  const checkPublicClaimContract = () => {
-    if (!publicClaim || typeof publicClaim !== "object") return "public_claim_contract_invalid";
-    try {
-      if (typeof publicClaim.actorId !== "string" || !publicClaim.actorId) return "public_claim_contract_invalid";
-      if (typeof publicClaim.actorName !== "string" || !publicClaim.actorName) return "public_claim_contract_invalid";
-      if (publicClaim.actorId !== speaker?.id) return "public_claim_actor_mismatch";
-      if (publicClaim.role !== "seer") return "public_claim_role_mismatch";
-      if (!Array.isArray(publicClaim.results) || publicClaim.results.length === 0) return "public_claim_contract_invalid";
-
-      const seenTargets = new Set();
-      for (const res of publicClaim.results) {
-        if (!res || typeof res !== "object") return "public_claim_contract_invalid";
-        if (typeof res.targetId !== "string" || !res.targetId) return "public_claim_contract_invalid";
-        if (typeof res.targetName !== "string" || !res.targetName) return "public_claim_contract_invalid";
-        if (res.result !== "human" && res.result !== "werewolf") return "public_claim_contract_invalid";
-        if (seenTargets.has(res.targetId)) return "public_claim_contract_invalid";
-        seenTargets.add(res.targetId);
-
-        if (!rosterOk) return "public_claim_contract_invalid";
-        if (!publicPlayers.some(p => p.id === res.targetId && p.name === res.targetName)) return "public_claim_target_mismatch";
-      }
-    } catch (e) {
-      return "public_claim_contract_invalid";
-    }
-    return null;
-  };
-
-  if (publicClaimAllowed === true) {
-    if (anyRoleClaimed || claimedResults.length > 0) {
-      const contractError = checkPublicClaimContract();
-      if (contractError) {
-        violations.push({ code: contractError });
-      } else {
-        if (anyRoleClaimed && anyRoleClaimed !== "占い師") {
-          violations.push({ code: "public_claim_role_mismatch" });
-        }
-
-        const approvedResults = publicClaim.results;
-        for (const claimed of claimedResults) {
-          const approved = approvedResults.find(r => r.targetId === claimed.targetId);
-          if (!approved) {
-            violations.push({ code: "public_claim_extra_result" });
-          } else if (approved.result !== claimed.result) {
-            violations.push({ code: "public_claim_result_mismatch" });
-          }
-        }
-      }
-    }
-  } else {
-    // 3. Unauthorized role claims
-    if (anyRoleClaimed) {
-      violations.push({ code: "role_claim_not_allowed" });
-    }
-  }
-
-  // 5. Private Seer-result disclosure
-  if (Array.isArray(privateSeerResults)) {
-    for (const privateRes of privateSeerResults) {
-      if (containsSeerResultClaim(normalizedText, privateRes.targetName, privateRes.result)) {
-        let authorized = false;
-        if (publicClaimAllowed && publicClaim && Array.isArray(publicClaim.results)) {
-          const approved = publicClaim.results.find(r => r.targetId === privateRes.targetId);
-          if (approved && approved.result === privateRes.result) {
-            authorized = true;
-          }
-        }
-        if (!authorized) {
-          violations.push({ code: "private_seer_result_disclosure" });
-          break;
-        }
-      }
-    }
-  }
-
-  if (!rosterOk && (anyRoleClaimed || (rosterOk && claimedResults.length > 0) || containsAffirmativeClaim(normalizedText, "占い師", speaker?.name))) {
-    if (!violations.some(v => v.code === "public_claim_contract_invalid" || v.code === "role_claim_not_allowed" || v.code === "private_seer_result_disclosure" || v.code === "werewolf_confession_not_allowed")) {
-      violations.push({ code: "public_claim_contract_invalid" });
-    }
-  }
-
-  const ok = violations.length === 0;
-
-  return {
-    ok,
-    normalizedText: ok ? normalizedText : null,
-    violations: violations.map(v => ({ code: v.code })),
-    metrics: structuralResult.metrics,
-  };
+    return true;
+  } catch { return false; }
 }
+
+function validateClaimSchema(c) {
+  try {
+    if (!isPlainObject(c)) return false;
+    if (!isBoundedString(c.actorId, 1, 64) || !isBoundedString(c.actorName, 1, 64)) return false;
+    if (c.role !== "seer") return false;
+    if (!Array.isArray(c.results) || c.results.length === 0) return false;
+    for (const r of c.results) {
+      if (!isPlainObject(r)) return false;
+      if (!isBoundedString(r.targetId, 1, 64) || !isBoundedString(r.targetName, 1, 64)) return false;
+      if (r.result !== "human" && r.result !== "werewolf") return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * Validates role claims and secrecy.
+ */
+export function validateNpcUtteranceRoleAndSecrecy(input) {
+  try {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return createInvalidInputResult();
+
+    const { text, speaker, publicPlayers, publicClaimAllowed, publicClaim, privateSeerResults } = input;
+
+    const structuralResult = validateNpcUtteranceStructure(text);
+    if (!structuralResult.ok) return structuralResult;
+
+    const normalizedText = structuralResult.normalizedText;
+
+    if (!validateSpeakerSchema(speaker) || !validateRosterSchema(publicPlayers)) {
+      return createInvalidInputResult(structuralResult.metrics);
+    }
+
+    // 1. Disclosure check (highest priority)
+    const disclosureViolation = checkPrivateDisclosure(normalizedText, privateSeerResults, publicClaim, publicClaimAllowed, speaker);
+    if (disclosureViolation) return createViolationResult(disclosureViolation, structuralResult.metrics);
+
+    // 2. Werewolf confession check
+    if (speaker.role === "werewolf" && isAffirmativeRoleClaim(normalizedText, "werewolf", speaker.name)) {
+      return createViolationResult("werewolf_confession_not_allowed", structuralResult.metrics);
+    }
+
+    // 3. Unauthorized role claim check
+    const restrictedRoles = ["seer", "knight", "hunter", "medium", "citizen"];
+    for (const role of restrictedRoles) {
+      if (isAffirmativeRoleClaim(normalizedText, role, speaker.name)) {
+        if (!publicClaimAllowed || role !== "seer") {
+          return createViolationResult("role_claim_not_allowed", structuralResult.metrics);
+        }
+      }
+    }
+
+    // 4. Seer result claims
+    const claimAnalysis = analyzeSeerResultClaims(normalizedText, publicPlayers);
+    if (claimAnalysis.hasClaim) {
+      if (!publicClaimAllowed) return createViolationResult("role_claim_not_allowed", structuralResult.metrics);
+      const contractViolation = validateClaimAgainstContract(claimAnalysis.claims, publicClaim, speaker);
+      if (contractViolation) return createViolationResult(contractViolation, structuralResult.metrics);
+    }
+
+    return structuralResult;
+  } catch (err) {
+    return createInvalidInputResult();
+  }
+}
+
+function createInvalidInputResult(metrics = { characterCount: 0 }) {
+  return { ok: false, normalizedText: null, violations: [{ code: "validation_input_invalid" }], metrics };
+}
+
+function createViolationResult(code, metrics) {
+  return { ok: false, normalizedText: null, violations: [{ code }], metrics };
+}
+
+const DENIAL_ENDINGS = ["ではない", "ではありません", "ではないです", "はしません", "ではないと言いましたが", "ではありませんでした", "ではなかった"];
+const SPECULATION_ENDINGS = ["かもしれない", "かもしれません", "だと思う", "と思っています", "の可能性がある", "を考えています", "だと断定するには早いです"];
+const AFFIRMATIVE_ENDINGS = ["です", "だ", "である", "でした", "だった", "だといいます", "ですが"];
+
+function isDenied(text) { return DENIAL_ENDINGS.some(e => text.startsWith(e)); }
+function isSpeculation(text) { return SPECULATION_ENDINGS.some(e => text.startsWith(e)); }
+function isAffirmative(text) {
+  if (AFFIRMATIVE_ENDINGS.some(e => text.startsWith(e))) return true;
+  if (/^[、。！？ 　]/.test(text) || text === "") return true;
+  return false;
+}
+
+function getTermsForRole(role) {
+  switch (role) {
+    case "werewolf": return ["人狼", "狼"];
+    case "seer": return ["占い師"];
+    case "knight": return ["騎士", "狩人"];
+    case "medium": return ["霊媒師", "霊能者"];
+    case "citizen": return ["村人", "市民"];
+    default: return [];
+  }
+}
+
+/**
+ * Detection logic for generic result claims (targets may not be in roster).
+ */
+function analyzeSeerResultClaims(text, players) {
+  const claims = [];
+  let hasClaim = isAffirmativeRoleClaim(text, "seer");
+
+  // Recognize patterns like: [Target] (さん)? (は|が|の|を) ... (黒|白|人狼|狼|村人|市民)
+  const prefix = "(?:(?:さん)?(?:を占った結果(?:、|は)?|の占い結果は|は|が|の|を)(?:、|は)?)";
+  const resultTerms = "(黒|白|人狼|狼|村人|市民)";
+  const genericRegex = new RegExp(`([^\\s、。！？ 　]{1,64})${prefix}${resultTerms}`, "g");
+
+  let m;
+  while ((m = genericRegex.exec(text)) !== null) {
+    const matchedFullPrefix = m[0].slice(m[1].length);
+    let targetName = m[1];
+    let term = m[2];
+
+    // Refine targetName if it accidentally included part of the formal prefix
+    if (targetName.endsWith("の占い結果") && matchedFullPrefix.startsWith("は")) {
+        targetName = targetName.slice(0, -5);
+    } else if (targetName.endsWith("を占った結果") && (matchedFullPrefix.startsWith("は") || matchedFullPrefix.startsWith("、"))) {
+        targetName = targetName.slice(0, -6);
+    }
+
+    const after = text.slice(m.index + m[0].length);
+    if (isSpeculation(after)) continue;
+
+    let res = null;
+    if (["黒", "人狼", "狼"].includes(term)) {
+      res = isDenied(after) ? "human" : (isAffirmative(after) ? "werewolf" : null);
+    } else {
+      res = isDenied(after) ? "werewolf" : (isAffirmative(after) ? "human" : null);
+    }
+
+    if (res) {
+      hasClaim = true;
+      const player = players.find(p => p.name === targetName);
+      claims.push({
+        targetId: player ? player.id : `unknown-${targetName}`,
+        targetName,
+        result: res
+      });
+    }
+  }
+
+  return { hasClaim, claims };
+}
+
+function checkPrivateDisclosure(text, privateResults, publicClaim, publicClaimAllowed, speaker) {
+  if (!Array.isArray(privateResults)) return null;
+
+  for (const res of privateResults) {
+    const name = escapeRegex(res.targetName);
+    const prefix = "(?:(?:さん)?(?:を占った結果(?:、|は)?|の占い結果は|は|が|の|を)(?:、|は)?)";
+    const resultTerms = "(黒|白|人狼|狼|村人|市民)";
+    const regex = new RegExp(`${name}${prefix}${resultTerms}`, "g");
+
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+      const term = m[1];
+      const after = text.slice(m.index + m[0].length);
+      if (isSpeculation(after)) continue;
+
+      let detectedResult = null;
+      if (["黒", "人狼", "狼"].includes(term)) {
+        detectedResult = isDenied(after) ? "human" : (isAffirmative(after) ? "werewolf" : null);
+      } else {
+        detectedResult = isDenied(after) ? "werewolf" : (isAffirmative(after) ? "human" : null);
+      }
+
+      if (detectedResult === res.result) {
+        if (!isAuthorizedDisclosure(res, detectedResult, publicClaim, publicClaimAllowed, speaker)) {
+          return "private_seer_result_disclosure";
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function isAuthorizedDisclosure(privateRes, detectedResult, publicClaim, publicClaimAllowed, speaker) {
+  if (!publicClaimAllowed || !validateClaimSchema(publicClaim)) return false;
+  if (publicClaim.actorId !== speaker.id || publicClaim.actorName !== speaker.name) return false;
+  const approved = publicClaim.results.find(r => r.targetId === privateRes.targetId);
+  return approved && approved.targetName === privateRes.targetName && approved.result === detectedResult;
+}
+
+function validateClaimAgainstContract(detectedClaims, publicClaim, speaker) {
+  if (!validateClaimSchema(publicClaim)) return "public_claim_contract_invalid";
+  if (publicClaim.actorId !== speaker.id || publicClaim.actorName !== speaker.name) return "public_claim_actor_mismatch";
+
+  const contractTargets = new Map();
+  for (const res of publicClaim.results) {
+    if (contractTargets.has(res.targetId)) return "public_claim_contract_invalid";
+    contractTargets.set(res.targetId, res);
+  }
+
+  const detectedByTarget = new Map();
+  for (const dc of detectedClaims) {
+    if (!detectedByTarget.has(dc.targetId)) detectedByTarget.set(dc.targetId, []);
+    detectedByTarget.get(dc.targetId).push(dc);
+  }
+
+  if (detectedByTarget.size > contractTargets.size) {
+    for (const tid of detectedByTarget.keys()) {
+      if (!contractTargets.has(tid)) return "public_claim_target_mismatch";
+    }
+    return "public_claim_extra_result";
+  }
+
+  for (const [tid, claims] of detectedByTarget) {
+    const expected = contractTargets.get(tid);
+    if (!expected) return "public_claim_target_mismatch";
+    for (const dc of claims) {
+      if (expected.result !== dc.result) return "public_claim_result_mismatch";
+      if (expected.targetName !== dc.targetName) return "public_claim_target_mismatch";
+    }
+  }
+  return null;
+}
+
+function isAffirmativeRoleClaim(text, role, speakerName) {
+  const roleTerms = getTermsForRole(role);
+  const selfRefs = ["私", "自分", "俺", "僕", "本当", "実際"];
+  if (speakerName) selfRefs.push(speakerName);
+
+  for (const rt of roleTerms) {
+    if (new RegExp(`${escapeRegex(rt)}CO(?:[、。！？ 　]|$)`).test(text)) return true;
+    for (const sr of selfRefs) {
+      const p = new RegExp(`${escapeRegex(sr)}(?:は|が)${escapeRegex(rt)}`, "g");
+      let m;
+      while ((m = p.exec(text)) !== null) {
+        const after = text.slice(m.index + m[0].length);
+        if (isAffirmative(after) && !isDenied(after)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function escapeRegex(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
