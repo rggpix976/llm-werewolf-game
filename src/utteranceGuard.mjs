@@ -155,20 +155,15 @@ const ROLE_TERMS = {
   citizen: ["村人", "市民"],
 };
 
-const RESULT_TERMS = {
-  werewolf: ["黒"],
-  human: ["白"],
-};
-
-const AMBIGUOUS_TERMS = {
-  werewolf: ["人狼", "狼"],
-  human: ["村人", "市民"],
+const ALIGNMENT_TERMS = {
+  werewolf: ["黒", "人狼", "狼"],
+  human: ["白", "村人", "市民"],
 };
 
 const SELF_PRONOUNS = ["私", "自分", "俺", "僕"];
-const DENIAL_ENDINGS = ["ではない", "ではありません", "ではないです", "はしません", "ではないと言いましたが", "ではありませんでした", "ではなかった"];
+const DENIAL_ENDINGS = ["ではない", "ではありません", "ではないです", "はしません", "ではありませんでした", "ではなかった", "ではないと言いましたが"];
 const SPECULATION_ENDINGS = ["かもしれない", "かもしれません", "だと思う", "っています", "の可能性がある", "を考えています", "だと断定するには早いです"];
-const AFFIRMATIVE_ENDINGS = ["です", "だ", "である", "でした", "だった", "だといいます", "ですが"];
+const AFFIRMATIVE_ENDINGS = ["です", "だ", "である", "でした", "だった", "だといいます", "ですが", "します", "しました", "判定です", "判定でした", "判定だった"];
 
 /**
  * Validates role claims and secrecy.
@@ -195,16 +190,16 @@ export function validateNpcUtteranceRoleAndSecrecy(input) {
         return createViolationResult("validation_input_invalid", structuralResult.metrics);
       }
     }
-    if (privateSeerResults !== undefined && !validatePrivateResultsSchema(privateSeerResults)) {
+    if (privateSeerResults !== undefined && !validatePrivateResultsSchema(privateSeerResults, publicPlayers)) {
       return createViolationResult("validation_input_invalid", structuralResult.metrics);
     }
 
     const claims = getAllClaims(normalizedText, speaker, publicPlayers);
 
     // 1. Werewolf confession (highest priority safety check)
-    if (speaker.role === "werewolf") {
-      const confession = claims.find(c => c.type === "role" && c.role === "werewolf" && c.actorId === speaker.id && c.status === "affirmative");
-      if (confession) return createViolationResult("werewolf_confession_not_allowed", structuralResult.metrics);
+    const selfWerewolfClaim = claims.find(c => c.type === "role" && c.role === "werewolf" && c.actorId === speaker.id && c.status === "affirmative");
+    if (speaker.role === "werewolf" && selfWerewolfClaim) {
+      return createViolationResult("werewolf_confession_not_allowed", structuralResult.metrics);
     }
 
     // 2. Secrecy disclosure
@@ -212,27 +207,24 @@ export function validateNpcUtteranceRoleAndSecrecy(input) {
       for (const res of privateSeerResults) {
         const disclosure = claims.find(c => c.type === "result" && c.targetId === res.targetId && c.result === res.result && c.status === "affirmative");
         if (disclosure) {
-          if (!isAuthorizedDisclosure(res, publicClaim, publicClaimAllowed, speaker)) {
+          if (!isAuthorizedDisclosure(res, disclosure.result, publicClaim, publicClaimAllowed, speaker)) {
             return createViolationResult("private_seer_result_disclosure", structuralResult.metrics);
           }
         }
       }
     }
 
-    // 3. Unauthorized role claims and Public claim consistency
+    // 3. Unauthorized role/result claims or Contract violations
     if (publicClaimAllowed === false) {
-      const selfRoleClaim = claims.find(c => c.type === "role" && c.actorId === speaker.id && c.status === "affirmative");
-      if (selfRoleClaim) {
-        if (speaker.role === "werewolf" && selfRoleClaim.role === "werewolf") return createViolationResult("werewolf_confession_not_allowed", structuralResult.metrics);
+      if (claims.some(c => (c.type === "role" || c.type === "result") && c.status === "affirmative")) {
+        const confession = claims.find(c => c.type === "role" && c.role === "werewolf" && c.actorId === speaker.id && c.status === "affirmative");
+        if (speaker.role === "werewolf" && confession) return createViolationResult("werewolf_confession_not_allowed", structuralResult.metrics);
         return createViolationResult("role_claim_not_allowed", structuralResult.metrics);
       }
-
-      const resultClaim = claims.find(c => c.type === "result" && c.status === "affirmative");
-      if (resultClaim) return createViolationResult("role_claim_not_allowed", structuralResult.metrics);
     } else {
       // publicClaimAllowed is true
       if (claims.some(c => c.status === "affirmative")) {
-        const violation = validateClaimsAgainstContract(claims, publicClaim, speaker);
+        const violation = validateDetectedClaimsAgainstContract(claims, publicClaim, speaker);
         if (violation) return createViolationResult(violation, structuralResult.metrics);
       }
     }
@@ -247,44 +239,39 @@ function getAllClaims(text, speaker, roster) {
   const claims = [];
   const selfRefs = [...SELF_PRONOUNS, "本当", "実際", speaker.name];
   const escapedSelfRefs = selfRefs.map(escapeRegex).sort((a, b) => b.length - a.length);
-  const rosterNames = roster.map(p => p.name);
-  const escapedRosterNames = rosterNames.map(escapeRegex).sort((a, b) => b.length - a.length);
+  const escapedRosterNames = roster.map(p => escapeRegex(p.name)).sort((a, b) => b.length - a.length);
 
   const matchedSpans = [];
 
   const roleTerms = Object.values(ROLE_TERMS).flat();
   const escapedRoleTerms = roleTerms.map(escapeRegex).sort((a, b) => b.length - a.length);
-  const alignmentTerms = Object.values(AMBIGUOUS_TERMS).flat();
-  const resultTerms = [...Object.values(RESULT_TERMS).flat(), ...alignmentTerms];
-  const escapedResultTerms = resultTerms.map(escapeRegex).sort((a, b) => b.length - a.length);
+  const escapedAlignmentTerms = Object.values(ALIGNMENT_TERMS).flat().map(escapeRegex).sort((a, b) => b.length - a.length);
+
+  const nameCapturePattern = `(${escapedRosterNames.length > 0 ? escapedRosterNames.join("|") + "|" : ""}[^\\s、。！？ 　]{1,64}?)`;
 
   // 1. Explicit Seer-result syntax (always wins)
   const explicitResultPrefix = "(?:(?:さん)?(?:を占った結果(?:、|は)?|の占い結果は))";
-  const explicitResultRegex = new RegExp(`([^\\s、。！？ 　]{1,64})${explicitResultPrefix}(${escapedResultTerms.join("|")})`, "g");
+  const explicitResultRegex = new RegExp(`${nameCapturePattern}${explicitResultPrefix}(${escapedAlignmentTerms.join("|")})`, "g");
   let m;
   while ((m = explicitResultRegex.exec(text)) !== null) {
     const target = resolveActor(m[1], speaker, roster);
-    const result = getResultFromTerm(m[2]);
-    if (!target) {
-        claims.push({ type: "result", targetId: null, targetName: m[1], result, status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
-        matchedSpans.push({ start: m.index, end: m.index + m[0].length });
-        continue;
-    }
-    claims.push({ type: "result", targetId: target.id, targetName: target.name, result, status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
+    const baseAlignment = getAlignmentFromTerm(m[2]);
+    const status = getStatus(text, m.index + m[0].length);
+    const { result, finalStatus } = applyAlignmentInversion(baseAlignment, status, true);
+    claims.push({ type: "result", targetId: target ? target.id : null, targetName: target ? target.name : m[1], result, status: finalStatus, start: m.index, end: m.index + m[0].length });
     matchedSpans.push({ start: m.index, end: m.index + m[0].length });
   }
 
   // 2. Bare CO forms
-  const bareCoRegex = new RegExp(`(?:^|[、。！？ 　])(${escapedRoleTerms.join("|")})CO(?:[、。！？ 　]|$)`, "g");
+  const bareCoRegex = new RegExp(`(?:^|[、。！？ 　])(${escapedRoleTerms.join("|")})CO(?![a-zA-Z0-9])`, "g");
   while ((m = bareCoRegex.exec(text)) !== null) {
     if (isOverlapping(m.index, m.index + m[0].length, matchedSpans)) continue;
     claims.push({ type: "role", actorId: speaker.id, actorName: speaker.name, role: getRoleFromTerm(m[1]), status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
     matchedSpans.push({ start: m.index, end: m.index + m[0].length });
   }
 
-  // 3. Self-subject claims (Role claims)
-  const selfSubjectPattern = `(${escapedSelfRefs.join("|")})(?:は|が)(${escapedRoleTerms.join("|")})`;
-  const selfSubjectRegex = new RegExp(selfSubjectPattern, "g");
+  // 3. Self-subject role claims
+  const selfSubjectRegex = new RegExp(`(${escapedSelfRefs.join("|")})(?:は|が)(${escapedRoleTerms.join("|")})`, "g");
   while ((m = selfSubjectRegex.exec(text)) !== null) {
     if (isOverlapping(m.index, m.index + m[0].length, matchedSpans)) continue;
     claims.push({ type: "role", actorId: speaker.id, actorName: speaker.name, role: getRoleFromTerm(m[2]), status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
@@ -292,36 +279,41 @@ function getAllClaims(text, speaker, roster) {
   }
 
   // 4. Another-player alignment result
-  const alignmentRegex = new RegExp(`(${escapedRosterNames.join("|")}|[^\\s、。！？ 　]{1,64}(?=(?:さん)?[はが]))(?:さん)?(?:は|が)(${escapedResultTerms.join("|")})`, "g");
+  const alignmentRegex = new RegExp(`${nameCapturePattern}(?:さん)?(?:は|が)(${escapedAlignmentTerms.join("|")})`, "g");
   while ((m = alignmentRegex.exec(text)) !== null) {
     if (isOverlapping(m.index, m.index + m[0].length, matchedSpans)) continue;
     const target = resolveActor(m[1], speaker, roster);
-    const result = getResultFromTerm(m[2]);
-    if (!target) {
-        claims.push({ type: "result", targetId: null, targetName: m[1], result, status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
-        matchedSpans.push({ start: m.index, end: m.index + m[0].length });
-        continue;
-    }
-    if (target.id !== speaker.id) {
-        claims.push({ type: "result", targetId: target.id, targetName: target.name, result, status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
+    const baseAlignment = getAlignmentFromTerm(m[2]);
+    const status = getStatus(text, m.index + m[0].length);
+
+    if (target && target.id === speaker.id) {
+        // Self ambiguous term -> Role claim
+        claims.push({ type: "role", actorId: speaker.id, actorName: speaker.name, role: getRoleFromTerm(m[2]), status, start: m.index, end: m.index + m[0].length });
     } else {
-        claims.push({ type: "role", actorId: speaker.id, actorName: speaker.name, role: getRoleFromTerm(m[2]), status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
+        const { result, finalStatus } = applyAlignmentInversion(baseAlignment, status, true);
+        claims.push({ type: "result", targetId: target ? target.id : null, targetName: target ? target.name : m[1], result, status: finalStatus, start: m.index, end: m.index + m[0].length });
     }
     matchedSpans.push({ start: m.index, end: m.index + m[0].length });
   }
 
   // 5. Unambiguous actor-prefixed role claim
   const unambiguousRoles = ["占い師", "騎士", "狩人", "霊媒師", "霊能者"];
-  const unambiguousRoleRegex = new RegExp(`([^\\s、。！？ 　]{1,64})(?:は|が)(${unambiguousRoles.join("|")})`, "g");
+  const unambiguousRoleRegex = new RegExp(`${nameCapturePattern}(?:さん)?(?:は|が)(${unambiguousRoles.join("|")})`, "g");
   while ((m = unambiguousRoleRegex.exec(text)) !== null) {
     if (isOverlapping(m.index, m.index + m[0].length, matchedSpans)) continue;
     const actor = resolveActor(m[1], speaker, roster);
-    if (!actor) continue;
-    claims.push({ type: "role", actorId: actor.id, actorName: actor.name, role: getRoleFromTerm(m[2]), status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
+    claims.push({ type: "role", actorId: actor ? actor.id : null, actorName: actor ? actor.name : m[1], role: getRoleFromTerm(m[2]), status: getStatus(text, m.index + m[0].length), start: m.index, end: m.index + m[0].length });
     matchedSpans.push({ start: m.index, end: m.index + m[0].length });
   }
 
   return claims;
+}
+
+function applyAlignmentInversion(baseAlignment, status, allowInversion) {
+  if (allowInversion && status === "denied") {
+    return { result: (baseAlignment === "werewolf" ? "human" : "werewolf"), finalStatus: "affirmative" };
+  }
+  return { result: baseAlignment, finalStatus: status };
 }
 
 function isOverlapping(start, end, spans) {
@@ -329,7 +321,7 @@ function isOverlapping(start, end, spans) {
 }
 
 function resolveActor(name, speaker, roster) {
-  if (SELF_PRONOUNS.includes(name) || name === speaker.name || name === "本当" || name === "実際") {
+  if (name === speaker.name || SELF_PRONOUNS.includes(name) || name === "本当" || name === "実際") {
     return { id: speaker.id, name: speaker.name };
   }
   const p = roster.find(p => p.name === name);
@@ -355,51 +347,51 @@ function isAffirmative(text) {
 
 function getRoleFromTerm(term) {
   for (const [role, terms] of Object.entries(ROLE_TERMS)) if (terms.includes(term)) return role;
-  for (const [role, terms] of Object.entries(AMBIGUOUS_TERMS)) if (terms.includes(term)) return role;
+  if (ALIGNMENT_TERMS.werewolf.includes(term)) return "werewolf";
+  if (ALIGNMENT_TERMS.human.includes(term)) return "citizen";
   return null;
 }
 
-function getResultFromTerm(term) {
-  for (const [res, terms] of Object.entries(RESULT_TERMS)) if (terms.includes(term)) return res;
-  for (const [res, terms] of Object.entries(AMBIGUOUS_TERMS)) if (terms.includes(term)) return res;
+function getAlignmentFromTerm(term) {
+  if (ALIGNMENT_TERMS.werewolf.includes(term)) return "werewolf";
+  if (ALIGNMENT_TERMS.human.includes(term)) return "human";
   return null;
 }
 
-function isAuthorizedDisclosure(res, publicClaim, publicClaimAllowed, speaker) {
-  if (!publicClaimAllowed || !isPlainObject(publicClaim)) return false;
-  if (publicClaim.actorId !== speaker.id || publicClaim.actorName !== speaker.name) return false;
+function isAuthorizedDisclosure(res, detectedResult, publicClaim, publicClaimAllowed, speaker) {
+  if (publicClaimAllowed !== true || !isPlainObject(publicClaim)) return false;
+  if (publicClaim.actorId !== speaker.id || publicClaim.actorName !== speaker.name || publicClaim.role !== "seer") return false;
   if (!Array.isArray(publicClaim.results)) return false;
   const approved = publicClaim.results.find(r => r.targetId === res.targetId);
-  return approved && approved.result === res.result;
+  return approved && approved.targetName === res.targetName && approved.result === detectedResult;
 }
 
-function validateClaimsAgainstContract(claims, publicClaim, speaker) {
+function validateDetectedClaimsAgainstContract(claims, publicClaim, speaker) {
+  const affirmativeClaims = claims.filter(c => c.status === "affirmative");
+  if (affirmativeClaims.length === 0) return null;
+
+  for (const c of affirmativeClaims) {
+    if (c.type === "role" && c.actorId !== speaker.id) return "public_claim_actor_mismatch";
+  }
+
   if (!isPlainObject(publicClaim)) return "public_claim_contract_invalid";
   if (publicClaim.actorId !== speaker.id || publicClaim.actorName !== speaker.name) return "public_claim_actor_mismatch";
   if (publicClaim.role !== "seer") return "public_claim_role_mismatch";
   if (!Array.isArray(publicClaim.results)) return "public_claim_contract_invalid";
 
-  const affirmativeClaims = claims.filter(c => c.status === "affirmative");
-  if (affirmativeClaims.length === 0) return null;
-
   const contractTargets = new Map();
-  for (const res of publicClaim.results) {
-    if (contractTargets.has(res.targetId)) return "public_claim_contract_invalid";
-    contractTargets.set(res.targetId, res);
-  }
+  for (const res of publicClaim.results) contractTargets.set(res.targetId, res);
 
   for (const c of affirmativeClaims) {
     if (c.type === "role") {
-      if (c.actorId !== speaker.id) return "public_claim_actor_mismatch";
       if (c.role !== "seer") return "public_claim_role_mismatch";
     } else {
+      if (!c.targetId) return "public_claim_target_mismatch";
       const expected = contractTargets.get(c.targetId);
       if (!expected) return "public_claim_extra_result";
-      if (expected.result !== c.result) return "public_claim_result_mismatch";
-      if (expected.targetName !== c.targetName) return "public_claim_target_mismatch";
+      if (expected.result !== c.result || expected.targetName !== c.targetName) return "public_claim_result_mismatch";
     }
   }
-
   return null;
 }
 
@@ -444,11 +436,9 @@ function validateClaimSchema(c, roster, privateResults) {
   for (const r of c.results) {
     if (!isPlainObject(r) || !isStrictBoundedString(r.targetId, 1, MAX_ID_NAME_CHARS) || !isStrictBoundedString(r.targetName, 1, MAX_ID_NAME_CHARS) || (r.result !== "human" && r.result !== "werewolf")) return false;
     if (tids.has(r.targetId) || tnames.has(r.targetName)) return false;
-    if (roster && roster.length > 0) {
-      const player = roster.find(p => p.id === r.targetId && p.name === r.targetName);
-      if (!player) return false;
-    }
-    if (privateResults && Array.isArray(privateResults) && privateResults.length > 0) {
+    const player = roster.find(p => p.id === r.targetId);
+    if (!player || player.name !== r.targetName) return false;
+    if (privateResults && Array.isArray(privateResults)) {
       const pr = privateResults.find(p => p.targetId === r.targetId);
       if (pr && pr.result !== r.result) return false;
     }
@@ -457,12 +447,14 @@ function validateClaimSchema(c, roster, privateResults) {
   return true;
 }
 
-function validatePrivateResultsSchema(pr) {
+function validatePrivateResultsSchema(pr, roster) {
   if (!Array.isArray(pr) || pr.length > MAX_PRIVATE_RESULTS) return false;
   const tids = new Set(), tnames = new Set();
   for (const r of pr) {
     if (!isPlainObject(r) || !isStrictBoundedString(r.targetId, 1, MAX_ID_NAME_CHARS) || !isStrictBoundedString(r.targetName, 1, MAX_ID_NAME_CHARS) || (r.result !== "human" && r.result !== "werewolf")) return false;
     if (tids.has(r.targetId) || tnames.has(r.targetName)) return false;
+    const player = roster.find(p => p.id === r.targetId);
+    if (!player || player.name !== r.targetName) return false;
     tids.add(r.targetId); tnames.add(r.targetName);
   }
   return true;
