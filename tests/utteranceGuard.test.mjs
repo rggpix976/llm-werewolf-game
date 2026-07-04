@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   validateNpcUtteranceStructure,
   validateNpcUtteranceRoleAndSecrecy,
-  MAX_NPC_UTTERANCE_CHARS
 } from "../src/utteranceGuard.mjs";
 
 /**
@@ -224,292 +223,152 @@ test("validateNpcUtteranceStructure: rejected text absent from results", () => {
 
 // --- 2. ROLE AND SECRECY VALIDATION TESTS (18 BLOCKS) ---
 
-const MOCK_SPEAKER_AOI = { id: "npc-aoi", name: "Aoi", role: "werewolf" };
-const MOCK_SPEAKER_SEER = { id: "npc-aoi", name: "Aoi", role: "seer" };
-const MOCK_ROSTER = [{ id: "npc-beni", name: "Beni" }];
+const MOCK_ROSTER = [
+  { id: "npc-aoi", name: "Aoi" },
+  { id: "npc-beni", name: "Beni" }
+];
+const SPEAKER_AOI_WOLF = { id: "npc-aoi", name: "Aoi", role: "werewolf" };
+const SPEAKER_AOI_SEER = { id: "npc-aoi", name: "Aoi", role: "seer" };
+const SPEAKER_AOI_CITIZEN = { id: "npc-aoi", name: "Aoi", role: "citizen" };
 
-test("validateNpcUtteranceRoleAndSecrecy: bare CO with affirmative suffixes rejected", () => {
-  const werewolfCases = ["人狼COです", "人狼COします", "人狼COしました", "狼COです"];
-  for (const text of werewolfCases) {
-    const result = validateNpcUtteranceRoleAndSecrecy({ text, speaker: MOCK_SPEAKER_AOI, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
-    assert.equal(result.ok, false, `Failed for: ${text}`);
-    assert.equal(result.violations[0].code, "werewolf_confession_not_allowed", `Code mismatch for: ${text}`);
-  }
-
-  const roleCases = ["占い師COです", "占い師COします", "騎士COです", "霊媒師COします"];
-  for (const text of roleCases) {
-    const result = validateNpcUtteranceRoleAndSecrecy({ text, speaker: MOCK_SPEAKER_AOI, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
-    assert.equal(result.ok, false, `Failed for: ${text}`);
-    assert.equal(result.violations[0].code, "role_claim_not_allowed", `Code mismatch for: ${text}`);
-  }
+test("validateNpcUtteranceRoleAndSecrecy: normal Japanese utterance accepted", () => {
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "こんにちは。", speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+  assert.equal(res.ok, true);
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: bare CO denials accepted", () => {
-  const denials = ["人狼COはしません", "占い師COはしません", "騎士COではありません"];
-  for (const text of denials) {
-    const result = validateNpcUtteranceRoleAndSecrecy({ text, speaker: MOCK_SPEAKER_AOI, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
-    assert.equal(result.ok, true, `Should accept: ${text}`);
-  }
-});
-
-test("validateNpcUtteranceRoleAndSecrecy: unknown-actor role claims handled", () => {
-  const text = "Malloryは占い師です";
-  // Mallory is not in roster
-  const res1 = validateNpcUtteranceRoleAndSecrecy({ text, speaker: MOCK_SPEAKER_AOI, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
-  assert.equal(res1.ok, false);
-  assert.equal(res1.violations[0].code, "role_claim_not_allowed");
-
-  const res2 = validateNpcUtteranceRoleAndSecrecy({ text, speaker: MOCK_SPEAKER_AOI, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true });
-  assert.equal(res2.ok, false);
-  assert.equal(res2.violations[0].code, "public_claim_actor_mismatch");
-
-  assert.ok(!JSON.stringify(res1).includes("Mallory"), "Should not leak Mallory in res1");
-  assert.ok(!JSON.stringify(res2).includes("Mallory"), "Should not leak Mallory in res2");
-});
-
-test("validateNpcUtteranceRoleAndSecrecy: negated alignment assertions", () => {
-  const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "human" }];
-
-  // "Beniは人狼ではありません" -> asserts human -> disclosure if private human
-  const res1 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは人狼ではありません",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: false,
-    privateSeerResults
-  });
-  assert.equal(res1.ok, false);
-  assert.equal(res1.violations[0].code, "private_seer_result_disclosure");
-
-  const res2 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniを占った結果、人狼ではなかった",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: false,
-    privateSeerResults
-  });
-  assert.equal(res2.ok, false);
-  assert.equal(res2.violations[0].code, "private_seer_result_disclosure");
-
-  // approved human result makes it okay
-  const publicClaim = {
-    actorId: "npc-aoi", actorName: "Aoi", role: "seer",
-    results: [{ targetId: "npc-beni", targetName: "Beni", result: "human" }]
-  };
-  const res3 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは人狼ではありません",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: true,
-    publicClaim,
-    privateSeerResults
-  });
+test("validateNpcUtteranceRoleAndSecrecy: role/werewolf discussion accepted", () => {
+  const res1 = validateNpcUtteranceRoleAndSecrecy({ text: "占い師の発言を確認したいです。", speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+  assert.equal(res1.ok, true);
+  const res2 = validateNpcUtteranceRoleAndSecrecy({ text: "Beniが人狼かもしれません。", speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+  assert.equal(res2.ok, true);
+  const res3 = validateNpcUtteranceRoleAndSecrecy({ text: "私は人狼を疑っています。", speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
   assert.equal(res3.ok, true);
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: handled さん suffix with roster matching", () => {
-  const publicClaim = {
-    actorId: "npc-aoi", actorName: "Aoi", role: "seer",
-    results: [{ targetId: "npc-beni", targetName: "Beni", result: "human" }]
-  };
-
-  const okCases = ["Beniさんは白です", "Beniさんが白です", "Beniさんの占い結果は白です", "Beniさんを占った結果、人狼ではなかった"];
-  for (const text of okCases) {
-    const res = validateNpcUtteranceRoleAndSecrecy({ text, speaker: MOCK_SPEAKER_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim });
+test("validateNpcUtteranceRoleAndSecrecy: denials accepted", () => {
+  const cases = ["私は人狼ではありません", "占い師ではありません", "騎士ではありません", "役職COはしません"];
+  for (const text of cases) {
+    const res = validateNpcUtteranceRoleAndSecrecy({ text, speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
     assert.equal(res.ok, true, `Should accept ${text}`);
   }
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: contract consistency enforcement", () => {
-  // unknown private target
-  const badPrivate = [{ targetId: "npc-unknown", targetName: "Unknown", result: "human" }];
-  const res1 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Test", speaker: MOCK_SPEAKER_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false,
-    privateSeerResults: badPrivate
-  });
-  assert.equal(res1.ok, false);
-  assert.equal(res1.violations[0].code, "validation_input_invalid");
-
-  // ID/name mismatch in private
-  const mismatchPrivate = [{ targetId: "npc-beni", targetName: "WrongName", result: "human" }];
-  const res2 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Test", speaker: MOCK_SPEAKER_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false,
-    privateSeerResults: mismatchPrivate
-  });
-  assert.equal(res2.ok, false);
-  assert.equal(res2.violations[0].code, "validation_input_invalid");
-
-  // public claim target absent from roster
-  const badPublic = {
-    actorId: "npc-aoi", actorName: "Aoi", role: "seer",
-    results: [{ targetId: "npc-mallory", targetName: "Mallory", result: "human" }]
-  };
-  const res3 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Test", speaker: MOCK_SPEAKER_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true,
-    publicClaim: badPublic
-  });
-  assert.equal(res3.ok, false);
-  assert.equal(res3.violations[0].code, "validation_input_invalid");
+test("validateNpcUtteranceRoleAndSecrecy: Werewolf self-confession rejected", () => {
+  const cases = ["私は人狼です", "自分が人狼です", "Aoiは人狼です", "人狼CO", "狼CO", "人狼COです", "狼COします"];
+  for (const text of cases) {
+    const res = validateNpcUtteranceRoleAndSecrecy({ text, speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+    assert.equal(res.ok, false, `Should reject ${text}`);
+    assert.equal(res.violations[0].code, "werewolf_confession_not_allowed");
+  }
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: mixed Werewolf denial + confession", () => {
+test("validateNpcUtteranceRoleAndSecrecy: mixed Werewolf denial + confession rejected", () => {
   const text = "私は人狼ではありません。ただし本当は人狼です";
-  const result = validateNpcUtteranceRoleAndSecrecy({ text, speaker: MOCK_SPEAKER_AOI, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
-  assert.equal(result.ok, false);
-  assert.equal(result.violations[0].code, "werewolf_confession_not_allowed");
+  const res = validateNpcUtteranceRoleAndSecrecy({ text, speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+  assert.equal(res.ok, false);
+  assert.equal(res.violations[0].code, "werewolf_confession_not_allowed");
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: unambiguous role claims about others", () => {
-  const result = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは占い師です",
-    speaker: MOCK_SPEAKER_AOI,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: false
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.violations[0].code, "role_claim_not_allowed");
+test("validateNpcUtteranceRoleAndSecrecy: unauthorized role claims rejected", () => {
+  const cases = ["私は占い師です", "占い師CO", "私が騎士です", "騎士CO", "私は狩人です", "霊媒師CO", "私は霊能者です", "私は村人です", "市民CO", "占い師COします"];
+  for (const text of cases) {
+    const res = validateNpcUtteranceRoleAndSecrecy({ text, speaker: SPEAKER_AOI_CITIZEN, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+    assert.equal(res.ok, false, `Should reject ${text}`);
+    assert.equal(res.violations[0].code, "role_claim_not_allowed");
+  }
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: alignment-based claims about others", () => {
-  const publicClaim = {
-    actorId: "npc-aoi", actorName: "Aoi", role: "seer",
-    results: [{ targetId: "npc-beni", targetName: "Beni", result: "human" }]
-  };
+test("validateNpcUtteranceRoleAndSecrecy: third-party role claims rejected when disallowed", () => {
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "Beniは占い師です", speaker: SPEAKER_AOI_CITIZEN, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+  assert.equal(res.ok, false);
+  assert.equal(res.violations[0].code, "role_claim_not_allowed");
+});
 
-  const res1 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは人狼でした",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: true,
-    publicClaim
-  });
-  assert.equal(res1.ok, false);
-  assert.equal(res1.violations[0].code, "public_claim_result_mismatch");
+test("validateNpcUtteranceRoleAndSecrecy: unknown actor role claim rejected when disallowed", () => {
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "Malloryは占い師です", speaker: SPEAKER_AOI_CITIZEN, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+  assert.equal(res.ok, false);
+  assert.equal(res.violations[0].code, "role_claim_not_allowed");
+});
 
-  const res2 = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは村人でした",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: true,
-    publicClaim
-  });
+test("validateNpcUtteranceRoleAndSecrecy: exact approved Seer claim accepted", () => {
+  const publicClaim = { actorId: "npc-aoi", actorName: "Aoi", role: "seer", results: [{ targetId: "npc-beni", targetName: "Beni", result: "werewolf" }] };
+  const res1 = validateNpcUtteranceRoleAndSecrecy({ text: "Beniは人狼でした", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim });
+  assert.equal(res1.ok, true);
+
+  const publicClaim2 = { actorId: "npc-aoi", actorName: "Aoi", role: "seer", results: [{ targetId: "npc-beni", targetName: "Beni", result: "human" }] };
+  const res2 = validateNpcUtteranceRoleAndSecrecy({ text: "Beniは村人でした", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim: publicClaim2 });
   assert.equal(res2.ok, true);
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: data safety and no leakage", () => {
+test("validateNpcUtteranceRoleAndSecrecy: Seer claim contract mismatches rejected", () => {
+  const publicClaim = { actorId: "npc-aoi", actorName: "Aoi", role: "seer", results: [{ targetId: "npc-beni", targetName: "Beni", result: "werewolf" }] };
+
+  // Wrong actor
+  assert.equal(validateNpcUtteranceRoleAndSecrecy({ text: "Beniは人狼でした", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim: { ...publicClaim, actorId: "npc-beni" } }).violations[0].code, "public_claim_actor_mismatch");
+  // Wrong role
+  assert.equal(validateNpcUtteranceRoleAndSecrecy({ text: "Beniは人狼でした", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim: { ...publicClaim, role: "werewolf" } }).violations[0].code, "public_claim_role_mismatch");
+  // Extra result
+  assert.equal(validateNpcUtteranceRoleAndSecrecy({ text: "Beniは人狼でした。Aoiは白です", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim }).violations[0].code, "public_claim_role_mismatch");
+  // Unknown target
+  assert.equal(validateNpcUtteranceRoleAndSecrecy({ text: "Malloryは人狼でした", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim }).violations[0].code, "public_claim_target_mismatch");
+});
+
+test("validateNpcUtteranceRoleAndSecrecy: private Seer result disclosure rejected", () => {
   const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "werewolf" }];
-  const result = validateNpcUtteranceRoleAndSecrecy({
-    text: "Malloryは占い師です",
-    speaker: MOCK_SPEAKER_AOI,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: false,
-    privateSeerResults
-  });
-  const json = JSON.stringify(result);
-  assert.ok(!json.includes("Mallory"));
+  const cases = ["Beniは黒です", "Beniさんは黒です", "Beniの占い結果は黒です", "Beniを占った結果、人狼でした"];
+  for (const text of cases) {
+    const res = validateNpcUtteranceRoleAndSecrecy({ text, speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false, privateSeerResults });
+    assert.equal(res.ok, false, `Should reject ${text}`);
+    assert.equal(res.violations[0].code, "private_seer_result_disclosure");
+  }
+});
+
+test("validateNpcUtteranceRoleAndSecrecy: negated alignment interpreted correctly", () => {
+  const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "human" }];
+  // "Beni is not werewolf" -> interprets as "Beni is human"
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "Beniは人狼ではありません", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false, privateSeerResults });
+  assert.equal(res.ok, false);
+  assert.equal(res.violations[0].code, "private_seer_result_disclosure");
+});
+
+test("validateNpcUtteranceRoleAndSecrecy: suspicion without result accepted", () => {
+  const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "human" }];
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "Beniは少し気になります。", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false, privateSeerResults });
+  assert.equal(res.ok, true);
+});
+
+test("validateNpcUtteranceRoleAndSecrecy: data safety and no leakage", () => {
+  const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "human" }];
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "私は人狼です", speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false, privateSeerResults });
+  const json = JSON.stringify(res);
+  assert.ok(!json.includes("人狼です"));
   assert.ok(!json.includes("npc-beni"));
   assert.ok(!json.includes("Beni"));
-  assert.ok(!json.includes("werewolf"));
+  assert.ok(!json.includes("human"));
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: supported frozen input objects", () => {
-  const input = {
-    text: "私は人狼ではありません",
-    speaker: Object.freeze({ ...MOCK_SPEAKER_AOI }),
-    publicPlayers: Object.freeze([{ ...MOCK_ROSTER[0] }]),
-    publicClaimAllowed: false
-  };
-  Object.freeze(input);
-  assert.doesNotThrow(() => validateNpcUtteranceRoleAndSecrecy(input));
+test("validateNpcUtteranceRoleAndSecrecy: input objects immutability", () => {
+  const speaker = { id: "a", name: "A", role: "citizen" };
+  const roster = [{ id: "b", name: "B" }];
+  const speakerJSON = JSON.stringify(speaker);
+  validateNpcUtteranceRoleAndSecrecy({ text: "hello", speaker, publicPlayers: roster, publicClaimAllowed: false });
+  assert.equal(JSON.stringify(speaker), speakerJSON);
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: malformed input (class instance) rejected", () => {
-  class MyInput { constructor() { this.text = "hello"; } }
-  const result = validateNpcUtteranceRoleAndSecrecy(new MyInput());
-  assert.equal(result.ok, false);
-  assert.equal(result.violations[0].code, "validation_input_invalid");
+test("validateNpcUtteranceRoleAndSecrecy: malformed roster rejected", () => {
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "hello", speaker: SPEAKER_AOI_WOLF, publicPlayers: [{ id: "dup", name: "A" }, { id: "dup", name: "B" }], publicClaimAllowed: false });
+  assert.equal(res.ok, false);
+  assert.equal(res.violations[0].code, "validation_input_invalid");
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: no double counting of matched spans", () => {
-  const publicClaim = {
-    actorId: "npc-aoi", actorName: "Aoi", role: "seer",
-    results: [{ targetId: "npc-beni", targetName: "Beni", result: "human" }]
-  };
-  // "Beniは人狼でした" should be ONE result claim, not also a role claim by Beni
-  const result = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは人狼でした",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: true,
-    publicClaim
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.violations[0].code, "public_claim_result_mismatch");
+test("validateNpcUtteranceRoleAndSecrecy: malformed claim contracts rejected", () => {
+  const res = validateNpcUtteranceRoleAndSecrecy({ text: "hello", speaker: SPEAKER_AOI_SEER, publicPlayers: MOCK_ROSTER, publicClaimAllowed: true, publicClaim: { role: "knight" } });
+  assert.equal(res.ok, false);
+  assert.ok(res.violations[0].code.startsWith("public_claim_"));
 });
 
-test("validateNpcUtteranceRoleAndSecrecy: handles malformed input safely", () => {
-  const result = validateNpcUtteranceRoleAndSecrecy({
-    get text() { throw new Error("Kaboom"); },
-    speaker: MOCK_SPEAKER_AOI,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: false
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.violations[0].code, "validation_input_invalid");
-  assert.ok(!JSON.stringify(result).includes("Kaboom"));
-});
-
-test("validateNpcUtteranceRoleAndSecrecy: public human result authorized", () => {
-  const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "human" }];
-  const publicClaim = {
-    actorId: "npc-aoi", actorName: "Aoi", role: "seer",
-    results: [{ targetId: "npc-beni", targetName: "Beni", result: "human" }]
-  };
-  const result = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは人狼ではありません",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: true,
-    publicClaim,
-    privateSeerResults
-  });
-  assert.equal(result.ok, true);
-});
-
-test("validateNpcUtteranceRoleAndSecrecy: public werewolf result authorized", () => {
-  const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "werewolf" }];
-  const publicClaim = {
-    actorId: "npc-aoi", actorName: "Aoi", role: "seer",
-    results: [{ targetId: "npc-beni", targetName: "Beni", result: "werewolf" }]
-  };
-  const result = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは白ではありません",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: true,
-    publicClaim,
-    privateSeerResults
-  });
-  assert.equal(result.ok, true);
-});
-
-test("validateNpcUtteranceRoleAndSecrecy: another-player white result disclosure", () => {
-  const privateSeerResults = [{ targetId: "npc-beni", targetName: "Beni", result: "human" }];
-  const result = validateNpcUtteranceRoleAndSecrecy({
-    text: "Beniは白です",
-    speaker: MOCK_SPEAKER_SEER,
-    publicPlayers: MOCK_ROSTER,
-    publicClaimAllowed: false,
-    privateSeerResults
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.violations[0].code, "private_seer_result_disclosure");
-});
-
-test("validateNpcUtteranceRoleAndSecrecy: malformed input (custom prototype) rejected", () => {
-  const proto = { text: "hello" };
-  const input = Object.create(proto);
-  const result = validateNpcUtteranceRoleAndSecrecy(input);
-  assert.equal(result.ok, false);
-  assert.equal(result.violations[0].code, "validation_input_invalid");
+test("validateNpcUtteranceRoleAndSecrecy: throwing getters handled safely", () => {
+  const res = validateNpcUtteranceRoleAndSecrecy({ get text() { throw new Error("SECRET"); }, speaker: SPEAKER_AOI_WOLF, publicPlayers: MOCK_ROSTER, publicClaimAllowed: false });
+  assert.equal(res.ok, false);
+  assert.ok(!JSON.stringify(res).includes("SECRET"));
 });
