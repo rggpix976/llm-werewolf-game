@@ -3,77 +3,80 @@
 ## 1. Executive decision summary
 
 - **Decision:** Replace the current natural-language-centered conversation pipeline with a browser-authoritative structured-event pipeline.
-- **Rationale:** The current system allows divergence between displayed text and game state. Moving authority to the browser-side game engine ensures that all state mutations (Claims, suspicion, etc.) are derived from validated structured events.
-- **Rejected alternative:** Server-side authoritative state. This was rejected because it would require a massive rewrite of the existing rule engine and session management, violating the constraint to preserve the current engine and proxy-only server architecture.
-- **Consequences:** The browser remains the sole owner of the authoritative game state. All validations of game legality occur in the browser. The server remains a stateless proxy for AI providers.
+- **Rationale:** The current system allows divergence between displayed NPC utterances and the underlying game state. Moving the authority for state changes and claim generation into the browser-side game engine ensures that all game actions are explicitly validated and recorded before being rendered as natural language.
+- **Rejected alternative:** Server-side authoritative state. This was rejected because it would require a complete rewrite of the `WerewolfGame` engine and the HTTP layer, violating the goal of preserving the existing browser-based engine and simple proxy server.
+- **Consequences:** The browser remains the sole owner of the authoritative game state. The server remains a stateless proxy for AI providers. All game rule validations and state updates occur in the browser.
 
 ## 2. Current architecture analysis
 
-### End-to-End Execution Boundaries
+### Execution Boundaries (Verified Repository Facts)
 
-1.  **Authoritative State Holder:** The `WerewolfGame` class in `src/gameEngine.mjs`. In the browser, the instance is held in the `game` variable in `public/browserApp.mjs`.
-2.  **Game Creation:** `WerewolfGame.create()` is called in `public/browserApp.mjs` (init) and `src/cli.mjs`.
-3.  **Player Input Flow:** `browserApp.mjs` listens for `askForm` submit -> calls `dispatch()` -> calls `game.dispatchPlayerAction()`.
-4.  **State Mutation (Pre-AI):** `handlePlayerQuestion` in `src/gameEngine.mjs` immediately updates `phase`, `playerLog`, and calls `applyQuestionPressure()` (updating `npc.suspicionScores`) *before* calling the provider.
-5.  **Plan Generation:** `buildNpcResponseRequest()` in `src/responseGenerator.mjs` is called. It uses `classifyIntent()` (regex/keyword matching) to decide if a claim should be made.
-6.  **Claim Creation:** `maybeCreateRoleClaim()` in `src/responseGenerator.mjs` pre-creates a `publicClaim` object.
-7.  **Response Plan:** A `responsePlan.baseText` is generated as the "canonical" Japanese content.
-8.  **Communication:** `public/httpResponseProvider.mjs` calls `/api/npc-response` (POST).
-9.  **Server Validation:** `src/webServer.mjs` calls `validateNpcResponseRequest()` in `src/validator.mjs` for schema validation.
-10. **Provider:** `src/openaiProvider.mjs` (or `PseudoResponseProvider`) is called. It paraphrases `baseText` into natural language.
-11. **Server-side Response Validation:** `validateProviderResponse()` in `src/responseProvider.mjs` checks the envelope.
-12. **Fallback:** `OpenAIResponseProvider` falls back to `PseudoResponseProvider` on transient errors if `fallbackToPseudo` is true.
-13. **Claim Registration:** Upon response return, `handlePlayerQuestion` registers the pre-created `publicClaim` into `npc.publicClaims` and `publicInfo`.
-14. **UI Display:** `browserApp.mjs` calls `render()` using `game.getPublicSnapshot()`.
+- **Authoritative State Holder:** The `WerewolfGame` class in `src/gameEngine.mjs`. In the browser application, the game instance is held in the `game` variable within `public/browserApp.mjs`.
+- **Game Instance Creation:** `WerewolfGame.create()` is called in `public/browserApp.mjs` (for the UI) and `src/cli.mjs` (for the CLI).
+- **Player Input Entry Point:** `WerewolfGame.dispatchPlayerAction()` receives actions from the UI or CLI.
+- **Server Role:** `src/webServer.mjs` acts as a stateless proxy for AI requests via the `/api/npc-response` endpoint. It performs HTTP and JSON schema validation (`src/validator.mjs`) but holds no game state (no current turn, no roster, no claims).
+- **Session Management:** `SessionManager` in `public/httpResponseProvider.mjs` manages browser-side request lifecycles. It uses `AbortController` to cancel pending requests when a new game starts and prevents stale responses from updating the current game UI (`isCurrentGame`). It does NOT represent a server-side game session.
 
-### Key Observations
-1.  **State Location:** Authoritative state is exclusively in the browser. The server holds NO game state (no current turn, no alive/dead status, no claim history).
-2.  **Session Management:** `SessionManager` in `public/httpResponseProvider.mjs` manages the lifecycle of browser-side fetch requests using `AbortController`. It ensures responses from old game instances are ignored (`isCurrentGame`). It does NOT represent a server-side session.
-3.  **Divergence:** `publicClaim` registration is separated from AI text rendering.
-4.  **Utterance Guard:** `src/utteranceGuard.mjs` exists but is not used in the production flow.
-5.  **Divergence point:** The `publicClaim` is registered even if the AI output fails to express it.
+### Current Conversation Flow (Verified Repository Facts)
+
+1.  **Input:** `browserApp.mjs` calls `game.dispatchPlayerAction({ type: 'ask_npc', targetId, input })`.
+2.  **Processing:** `WerewolfGame.handlePlayerQuestion` (`src/gameEngine.mjs`):
+    - Sets phase to `player_question`. (**State Mutation**)
+    - Appends to `playerLog`. (**State Mutation**)
+    - Calls `applyQuestionPressure(questionText)`, which immediately updates `npc.suspicionScores` based on keyword matching. (**State Mutation**)
+    - Calls `buildNpcResponseRequest(npc, gameState, playerInput)` in `src/responseGenerator.mjs`.
+3.  **Plan Generation:** `buildNpcResponseRequest` classifies intent via `classifyIntent` (regex/keyword matching) and **pre-creates** a `publicClaim` object and a `responsePlan.baseText`.
+4.  **Provider Call:** `public/httpResponseProvider.mjs` sends the request to `/api/npc-response`.
+5.  **Server Validation:** `src/webServer.mjs` uses `validateNpcResponseRequest()` in `src/validator.mjs` to check the envelope.
+6.  **AI Rendering:** The AI provider (e.g., `src/openaiProvider.mjs`) paraphrases the `baseText` into natural Japanese.
+7.  **Completion:** `handlePlayerQuestion` receives the AI text.
+    - Appends response to `playerLog` and `publicInfo`. (**State Mutation**)
+    - **Registration:** If a `publicClaim` was generated in Step 3, it is registered in `npc.publicClaims` and `publicInfo`. (**State Mutation**)
+8.  **Divergence:** The `publicClaim` is registered even if the AI output fails to express it. The `utteranceGuard.mjs` validator is **not currently used** in the production flow.
 
 ## 3. Confirmed problems
 
-- **Inconsistency:** State mutation and display content are not synchronized.
-- **Brittle Parsing:** Keywords-based suspicion update is unreliable.
-- **Pre-AI Mutation:** Suspicion and phase change happen even if the interpretation fails.
-- **Lack of Atomicity:** No single "commit" point for a conversation-driven state change.
+1.  **Inconsistency:** Claims are registered in the game state based on an engine-generated plan, not the actual text displayed to the user.
+2.  **Shadow Claims:** The AI can express unauthorized claims that are not registered in the game state.
+3.  **Fragile Intent Detection:** suspicion updates and intent classification rely on brittle keyword matching in raw natural language.
+4.  **Premature Mutation:** State changes (suspicion, logs) occur before the AI response is validated or even successfully returned.
 
 ## 4. Scope and non-scope
 
-- **Scope:** Redesigning the conversation flow between browser and AI providers using structured events.
-- **Non-scope:** Moving the game engine to the server, adding a database, changing game rules (voting, execution, roles).
+- **In Scope:** `SpeechActCandidate` schemas, AI Interpreter/Renderer contracts, browser-side validation and atomicity logic, phased migration plan.
+- **Out of Scope:** Moving the game engine to the server, adding server-side persistence, changing core game rules (roles, phases).
 
 ## 5. Terminology
 
-- **SpeechActCandidate:** Untrusted interpretation of natural language by AI.
-- **AcceptedSpeechAct:** Engine-validated structured communication event.
-- **NpcReactionPlan:** Structured instructions for the NPC utterance.
-- **CanonicalClaim:** The single source of truth for a claim.
+- **SpeechActCandidate:** An untrusted, structured interpretation of natural language produced by the AI.
+- **AcceptedSpeechAct:** An engine-validated and bound communication event that represents an authoritative action.
+- **NpcReactionPlan:** Structured instructions from the engine to the AI for rendering an NPC's response.
+- **CanonicalClaim:** The single source of truth for a role or result claim.
 
 ## 6. Responsibility boundaries
 
 ### Browser-side Game Engine (Authority)
-- **Validation:** Final authority on whether a SpeechAct is legal.
-- **Commit:** Atomic update of game history, claims, and NPC memory.
-- **Planning:** Generates the `NpcReactionPlan` and canonical segments.
-- **Idempotency:** Tracks `requestId` and `stateVersion` to prevent duplicate or stale updates.
+- Holds authoritative game state, turn IDs, and state versions.
+- Validates `SpeechActCandidate` against game rules, phase, and roster.
+- Generates `AcceptedSpeechAct` and `PublicEvent` only after successful validation.
+- Performs atomic state updates (claims, suspicion, history).
+- Generates `NpcReactionPlan` containing engine-rendered canonical segments.
+- Manages idempotency and stale response detection using `requestId` and `turnId`.
 
 ### Server (Proxy)
-- **Transport:** Proxies calls to AI providers.
-- **Schema Check:** Validates JSON envelopes and HTTP protocol.
-- **Safety:** Isolates API keys and performs rate limiting.
-- **No-Go:** Does NOT validate game rules or maintain session state.
+- Proxies requests to AI providers.
+- Validates HTTP request/response envelopes.
+- Normalizes errors (timeouts, provider failures).
+- Does NOT validate game rules or maintain session state.
 
-### AI (Interpreter/Renderer)
-- **Interpreter:** Natural language -> `SpeechActCandidate`.
-- **Renderer:** `NpcReactionPlan` -> Commentary text.
+### AI (Interpreter & Renderer)
+- **Interpreter:** Natural language -> `SpeechActCandidate` alternatives.
+- **Renderer:** `NpcReactionPlan` -> Natural language commentary.
+- Does NOT decide legality or mutate state.
 
 ## 7. `SpeechActCandidate` Schema
 
-Decision: The AI Interpreter returns a `SpeechActCandidate` object containing alternatives. AI does NOT decide the `actorId`.
-Rationale: Separation of concerns; interpretation is untrusted, validation is authoritative.
+The AI Interpreter returns a `SpeechActCandidate` object. It contains one or more interpreted alternatives.
 
 ```json
 {
@@ -87,11 +90,11 @@ Rationale: Separation of concerns; interpretation is untrusted, validation is au
         },
         {
           "type": "result_claim",
-          "targetId": "npc1",
+          "targetId": "npc-beni",
           "result": "werewolf"
         }
       ],
-      "confidence": 0.9
+      "confidence": 0.95
     }
   ],
   "interpretationFailure": null
@@ -100,29 +103,24 @@ Rationale: Separation of concerns; interpretation is untrusted, validation is au
 
 ### Discriminated Union Types for `speechActs`
 
-| Type | Required Fields | State Impact | Phase Constraints |
+| Type | Required Fields | State-Changing | Phase Constraint |
 | :--- | :--- | :--- | :--- |
-| `non_game_statement` | `text` | None (Chatter) | None |
-| `question` | `targetId`, `topic` | None (Triggers response) | `day_discussion` |
-| `suspicion` | `targetId` | Updates `suspicionScores` | `day_discussion` |
-| `vote_declaration` | `targetId` | Updates suspicion/NPC memory | `day_discussion` |
-| `role_claim` | `role` | Registers `CanonicalClaim` | `day_discussion` |
-| `result_claim` | `targetId`, `result` | Registers `CanonicalClaim` | `day_discussion` |
-| `information_request` | `topic` | None (Triggers help) | None |
-
-### `interpretationFailure` Type
-Used when AI cannot form candidates.
-- `reason`: "ambiguous", "unsupported_language", "gibberish".
-- `explanation`: Natural language explanation for diagnostics.
+| `non_game_statement` | `text` | No | None |
+| `question` | `targetId`, `topic` | No | `day_discussion` |
+| `suspicion` | `targetId` | Yes (Suspicion scores) | `day_discussion` |
+| `vote_declaration` | `targetId` | Yes (Memory/UI) | `day_discussion` |
+| `role_claim` | `role` | Yes (Registers Claim) | `day_discussion` |
+| `result_claim` | `targetId`, `result` | Yes (Registers Claim) | `day_discussion` |
+| `information_request` | `topic` | No | None |
 
 ### Engine Validation Rules
 - **All-or-Nothing:** An alternative is rejected if ANY `speechAct` within it is invalid.
-- **Order:** The order of `speechActs` within an alternative is preserved as the sequence of intended acts.
-- **Partial Acceptance:** Rejected. Partial acceptance leads to confusing game states where only half of a player's sentence "happened".
+- **Order:** The sequence of `speechActs` is preserved as the sequence of intended actions.
+- **Interpretation Uniqueness:** If the confidence margin between the top two alternatives is < 0.2, the engine rejects the update and triggers a clarification fallback.
 
 ## 8. `AcceptedSpeechAct` Schema
 
-The authoritative object created by the browser-side engine after validation.
+The authoritative object created by the browser engine after validation.
 
 ```json
 {
@@ -137,17 +135,18 @@ The authoritative object created by the browser-side engine after validation.
     "role": "seer"
   },
   "validationMetadata": {
-    "confidence": 0.9,
+    "confidence": 0.95,
     "alternativeIndex": 0
   },
   "causationId": null
 }
 ```
 
+- **Note:** The `actorId` is bound by the engine based on the current game context, not provided by the AI.
+
 ## 9. `CanonicalClaim` Schema
 
-Decision: `CanonicalClaim` is the single source of truth for registration, history, memory, and display.
-Rationale: Guarantees that what is recorded in the state is exactly what is displayed and remembered.
+The single source of truth for any public claim.
 
 ```json
 {
@@ -165,21 +164,15 @@ Rationale: Guarantees that what is recorded in the state is exactly what is disp
 }
 ```
 
-### Derived Rendering (Pure Functions)
-
-- **UI Display:** `renderClaimForUI(claim)` -> "Claim: seer (npc1: werewolf)"
-- **Logs:** `renderClaimForLog(claim)` -> "npc2が占い師COをした。"
-- **Reaction Segments:** `renderClaimForSegment(claim)` -> "私は占い師です。npc1は人狼でした。"
-
-### Claim vs. Truth (Validation Rules)
-1.  **Assertion Independence:** The engine registers any validated claim even if it contradicts the NPC's secret `role`.
-2.  **Permission Check:** NPCs can only claim if authorized by the `NpcReactionPlan`.
-3.  **Contradiction Detection:** New claims with different roles from previous ones are marked `isContradiction: true` and increase suspicion.
-4.  **Repeat Detection:** Identical claims are recorded but marked as repeats.
+### Pure Rendering Functions
+All representations derive from structured data:
+- `renderClaimForUI(claim)` -> "Claim: seer (npc1: werewolf)"
+- `renderClaimForLog(claim)` -> "npc2が占い師COをした。"
+- `renderClaimForSegment(claim)` -> "私は占い師です。npc1は人狼でした。"
 
 ## 10. `NpcReactionPlan` Schema
 
-The `NpcReactionPlan` contains NO private facts.
+The engine generates the plan for an NPC's response. It contains NO private game facts.
 
 ```json
 {
@@ -220,88 +213,69 @@ The `NpcReactionPlan` contains NO private facts.
 ## 11. Input Interpreter Contract
 
 - **Endpoint:** `POST /api/interpret-player-input`
-- **Decision:** AI produces `SpeechActCandidate`. Engine validates and binds.
-- **Ambiguity:** Difference in confidence < 0.2 triggers clarification.
-- **Unchanged:** Server remains a stateless proxy.
+- **Validation:** If interpretations are ambiguous (low confidence margin) or invalid, the engine triggers a clarification response without updating state.
 
 ## 12. NPC Utterance Renderer Contract
 
 - **Endpoint:** `POST /api/render-npc-utterance`
-- **Decision:** AI renders commentary; engine assembles final text.
-- **Rationale:** Prevents AI from modifying the authoritative "canonical" part of the message.
+- **Text Composition:** The browser engine assembles the final UI text by concatenating the AI's `commentary` with its own `canonicalSegments` based on the `compositionStrategy`.
 
-## 13. Operational Logic
+## 13. Claim and Game Truth
+
+- **Asserted vs Actual:** Separate `assertedClaim` from `actualGameTruth`.
+- **Lies:** Allowed and recorded as `CanonicalClaim`.
+- **Validation:** Verification check if the NPC is *allowed* by policy to make such a claim, NOT if it's true.
+
+## 14. Operational Logic
 
 ### Authoritative Transaction Boundary (Atomicity)
-Decision: The browser-side `WerewolfGame` is the sole authority.
-Rationale: Prevents "ghost" state mutations if AI interpretation fails.
-Rejected alternative: Partial mutation before AI response.
-Consequences:
-1.  **Commit Phase:** `AcceptedSpeechAct` + `PublicEvent` + `CanonicalClaim` + state increment happen in a single browser-side atomic block.
-2.  **Failure:** If Interpreter or validation fails, no authoritative state changes occur.
+The browser-side `WerewolfGame` is the sole transaction authority.
+1.  **Input Phase:** Capture player input.
+2.  **AI Phase:** Interpreter request (stateless proxy).
+3.  **Commit Phase:** Single atomic update in browser (AcceptedSpeechAct, PublicEvent, CanonicalClaim, State increment).
+4.  **Reaction Phase:** Planning and Renderer request.
 
-### Idempotency and Stale Response Management
-Decision: Managed by the browser engine using `requestId` and `turnId`.
-Rationale: Server cannot track state across refreshes.
-Consequences:
-1.  **Processed Requests:** Engine tracks `processedRequestIds` to return cached results for duplicates.
-2.  **Turn Tracking:** Response is discarded if `turnId` has already progressed.
+### Idempotency & Stale Responses
+- **Owner:** Browser engine.
+- **Mechanism:** Track `processedRequestIds` and discard responses if `turnId` has already progressed.
 
-### Fallback & Ambiguity Handling
-1.  **Uniqueness:** Engine triggers clarification if confidence is tied.
-2.  **All-or-Nothing:** Partial acceptance is rejected.
-3.  **Renderer Fallback:** If AI commentary rendering fails, engine displays `canonicalSegments` only.
+## 15. Provider & HTTP Contracts
 
-## 14. Provider & HTTP Contracts
+- **Endpoints:** Separate `POST /api/interpret-player-input` and `POST /api/render-npc-utterance`.
+- **Responsibility:** Server remains a stateless proxy.
 
-Decision: Separate interfaces and endpoints for Interpreter and Renderer.
-Rationale: Different input/output shapes and safety requirements.
+## 16. Migration Plan
 
-- `POST /api/interpret-player-input` (SpeechAct interpretation)
-- `POST /api/render-npc-utterance` (Commentary rendering)
-
-## 15. Migration Plan
-
-### Phase 1: Pure schemas and validators (Recommended First PR)
-- **Objective:** Establish data types and rendering logic without affecting production flow.
+### Phase 1: Pure schemas, validators, and canonical renderers (Recommended First PR)
+- **Objective:** Establish the data foundation.
 - **Files:** `src/schemas.mjs` (new), `src/validator.mjs`.
-- **Action:** Implement validators and `renderClaimForSegment` pure functions.
-- **Unchanged:** Production flow, provider logic, HTTP endpoints.
+- **Action:** Implement validators and `renderClaimForSegment` functions.
 - **Tests:** Unit tests for schemas.
-- **Rollback:** Zero risk (new code only).
+- **Risk:** Zero. Independent deployment possible.
 
-### Phase 2: Interpreter transport
-- **Action:** Implement `POST /api/interpret-player-input`.
+### Phase 2-9: Incremental Integration
+- Progress through shadow mode, atomic commit, and gradual replacement of legacy logic.
 
-### Phase 3-4: Candidate validation & Atomic Commit
-- **Action:** Wire up Interpreter (Shadow Mode) then move mutation authority.
+## 17. Finalized Design Decisions
 
-### Phase 5-9: Migration and Cleanup
-- Replace keyword logic and `baseText`. Remove obsolete paths.
+- **Authoritative State:** Held in Browser.
+- **Server:** Stateless Proxy.
+- **Confidence Handling:** Margins < 0.2 trigger clarification.
+- **Lies:** Allowed and recorded as `CanonicalClaim`.
+- **Renderer Data:** Private facts strictly prohibited; use policies.
 
-## 16. Finalized Design Decisions
+## 18. Open Design Questions
 
-### ID Management
-Decision: Use deterministic hash-based IDs for `claimId` and `speechActId` where possible, or engine-generated sequence IDs.
-Rationale: Aids in consistency and debugging.
+- **UI Highlights:** How to visually distinguish canonical segments from AI commentary?
+- **Contradictory Input:** Rejection of "I am the Seer and the Werewolf" acts.
 
-### Multiple Roles
-Decision: Allow an NPC to claim multiple roles as a valid game action (amendment).
-Rationale: Permits strategic lying and deception.
+## 19. Test Strategy
+- Unit tests for all JSON schemas.
+- Mock AI providers for deterministic pipeline testing.
 
-### Clarification UX
-Decision: Clarification does not progress the game turn.
-Rationale: Prevents "skipping" turns due to AI misunderstanding.
+## 20. Security Boundary
+- AI Interpreter never sees private role data.
+- AI Renderer never sees private game truth.
 
-## 17. Open Design Questions
-
-1.  **Contradictory Claims in one turn:** Should the engine automatically reject "I am the Seer and the Werewolf"?
-    - **Recommendation:** Yes, reject the alternative as "Invalid Logic".
-2.  **UI Highlights:** How to visually distinguish canonical text from AI commentary?
-    - **Recommendation:** Use a specific CSS class for canonical segments (e.g., bold or different background).
-
-## 18. Observability and Diagnostics
-
-- **causationId:** Trace NPC response to player input.
-- **correlationId:** Track all API calls in a turn.
-- **Diagnostic Log:** Engine `developerLog` records all rejected candidates and AI failures.
+## 21. First Implementation PR
+- **Scope:** Phase 1 (Schemas and Validators).
