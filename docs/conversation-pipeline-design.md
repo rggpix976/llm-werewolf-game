@@ -70,18 +70,28 @@
 - Does NOT validate game rules or maintain session state.
 
 ### AI (Interpreter & Renderer)
-- **Interpreter:** Natural language -> `InterpretationResult`.
-- **Renderer:** `NpcReactionPlan` -> Natural language commentary.
+- **Interpreter:** Natural language -> `InterpreterModelOutput`.
+- **Renderer:** `RendererRequest` -> `RendererModelOutput`.
 - Does NOT decide legality or mutate state.
 
-## 7. `InterpretationResult` Schema (AI Output)
+## 7. `InterpreterModelOutput` Schema (AI Output)
 
-The AI Interpreter converts raw natural language into structured `InterpretationResult`. It separates successful semantic mapping into alternatives from system-level failures.
+The AI Interpreter model produces only the structured interpretation content. Diagnostics and envelope metadata are handled by the provider wrapper.
+
+### InterpretationModelOutput
+- **schemaVersion**: 1 (Integer, Required)
+- **alternatives**: Array of `SpeechActAlternative` (Required, Max 3)
+- **additionalProperties**: false
+
+### SpeechActAlternative
+- **alternativeId**: String (Required)
+- **speechActs**: Array of `SpeechActCandidate` (Required, Max 4)
+- **confidence**: Number (Required, 0.0 to 1.0)
+- **additionalProperties**: false
 
 ```json
 {
   "schemaVersion": 1,
-  "requestId": "req-123",
   "alternatives": [
     {
       "alternativeId": "alt-0",
@@ -94,22 +104,15 @@ The AI Interpreter converts raw natural language into structured `Interpretation
       ],
       "confidence": 0.84
     }
-  ],
-  "interpretationFailure": null
+  ]
 }
 ```
-
-### Mutual Exclusivity Rules
-- **Successful interpretation:** `alternatives` has at least 1 item; `interpretationFailure` is `null`.
-- **Interpreter failure:** `alternatives` is `[]`; `interpretationFailure` is an object.
-- **Validation:** The engine rejects any response where both fields are populated or both are empty.
 
 ### Interpretation Outcomes
 - **Uniqueness Requirement:** The engine only proceeds to state mutation if `alternatives.length === 1`.
 - **Ambiguity Handling:** If `alternatives.length > 1`, it is treated as an ambiguity failure and triggers a `ClarificationOutcome`.
 - **No Guessing:** confidence is diagnostic only. Automatic adoption of top alternatives is prohibited.
-- **Uninterpretable Case:** `UninterpretableCandidate` is used when the AI successfully categorizes the input as incoherent or out-of-scope for the game rules. It must be the sole alternative and sole act.
-  - **Outcome:** No `PublicEvent` or `AcceptedSpeechAct` is created. No state mutation occurs. Triggers deterministic clarification or guidance.
+- **Uninterpretable Case:** `UninterpretableCandidate` is used when the AI model successfully categorizes the input as incoherent or out-of-scope for the game rules.
 
 ## 8. `SpeechActCandidate` Types (Strict Discriminated Union)
 
@@ -132,349 +135,135 @@ All candidate types follow a strict `additionalProperties: false` policy. Unknow
 
 #### 1. NonGameStatementCandidate
 - `type`: "non_game_statement" (Discriminator)
-- `text` (Required, String)
+- `text` (Required, String, 1-500 chars)
 - Forbidden: `targetId`, `topic`, `claimedRole`, `result`
+- `additionalProperties`: false
 
 #### 2. QuestionCandidate
 - `type`: "question"
-- `targetId` (Required, String): Must be alive NPC
+- `targetId` (Required, String): Validated ID from `publicRoster`
 - `topic` (Required, Enum): "role", "vote", "opinion", "reason"
 - Forbidden: `claimedRole`, `result`
+- `additionalProperties`: false
 
 #### 3. SuspicionCandidate
 - `type`: "suspicion"
-- `targetId` (Required, String): Must be alive NPC
-- `reason` (Optional, String)
+- `targetId` (Required, String): Validated ID from `publicRoster`
+- `reason` (Optional, String, 0-500 chars)
 - Forbidden: `claimedRole`, `result`
+- `additionalProperties`: false
 
 #### 4. VoteDeclarationCandidate
 - `type`: "vote_declaration"
-- `targetId` (Required, String): Must be alive NPC
+- `targetId` (Required, String): Validated ID from `publicRoster`
 - Forbidden: `topic`, `claimedRole`, `result`
+- `additionalProperties`: false
 
 #### 5. RoleClaimCandidate
 - `type`: "role_claim"
 - `claimedRole` (Required, Enum): "seer", "werewolf", "citizen"
 - Forbidden: `targetId`, `result`
+- `additionalProperties`: false
 
 #### 6. ResultClaimCandidate
 - `type`: "result_claim"
-- `targetId` (Required, String)
+- `targetId` (Required, String): Validated ID from `publicRoster`
 - `result` (Required, Enum): "werewolf", "not_werewolf"
 - Forbidden: `claimedRole`
+- `additionalProperties`: false
 
 #### 7. InformationRequestCandidate
 - `type`: "information_request"
 - `topic` (Required, Enum): "rules", "commands", "history"
 - Forbidden: `targetId`, `claimedRole`
+- `additionalProperties`: false
 
 #### 8. UninterpretableCandidate
 - `type`: "uninterpretable"
 - `reason` (Required, Enum): "gibberish", "missing_required_reference", "unsupported_intent", "off_topic"
-- `explanation` (Optional, String): Natural language for diagnostics.
-- Forbidden: All state-changing fields.
-- **Note on "off_topic":** Used when input is coherent but pertains to a context outside of the werewolf game rules.
+- `explanation` (Optional, String, 0-500 chars)
+- Forbidden: All state-changing fields
+- `additionalProperties`: false
 
 ## 9. `AcceptedSpeechAct` Types (Strict Discriminated Union)
 
-The engine-generated representation of a bound act. It follows a strict `additionalProperties: false` policy. Unknown fields are rejected.
+The engine-generated representation of a bound act.
 
 ### Common Metadata (All Accepted Types)
 - `schemaVersion`: 1 (Integer, Required)
-- `speechActId`: Engine-generated opaque ID (String, Required)
-- `requestId`: Link to player request (String, Required)
-- `acceptedTurnId`: Turn ID when accepted (String, Required)
-- `acceptedStateVersion`: `stateVersion` used as validation precondition (Integer, Required)
-- `actorId`: Authoritative ID bound by the engine (String, Required)
-- `causationId`: `requestId` or `eventId` (String, Required)
-- `correlationId`: Logical thread ID (String, Required)
-- `idempotencyKey`: `requestId` + alternative index + act index (String, Required)
+- `speechActId`: String (Required)
+- `requestId`: String (Required)
+- `acceptedTurnId`: String (Required)
+- `acceptedStateVersion`: Integer (Required)
+- `actorId`: String (Required, Bound by engine)
+- `causationId`: String (Required)
+- `correlationId`: String (Required)
+- `idempotencyKey`: String (Required)
+- `additionalProperties`: false
 
-### Individual Type Definitions
-
-#### 1. AcceptedNonGameStatement
-- `type`: "accepted_non_game_statement"
-- `text` (Required, String)
-- Forbidden: `targetId`, `topic`, `claimedRole`, `result`, `validationMetadata`
-
-#### 2. AcceptedQuestion
-- `type`: "accepted_question"
-- `targetId` (Required, String): Validated alive NPC
-- `topic` (Required, Enum): "role", "vote", "opinion", "reason"
-- Forbidden: `claimedRole`, `result`, `validationMetadata`
-
-#### 3. AcceptedSuspicion
-- `type`: "accepted_suspicion"
-- `targetId` (Required, String): Validated alive NPC
-- `reason` (Optional, String)
-- Forbidden: `claimedRole`, `result`, `validationMetadata`
-
-#### 4. AcceptedVoteDeclaration
-- `type`: "accepted_vote_declaration"
-- `targetId` (Required, String): Validated alive NPC
-- Forbidden: `topic`, `claimedRole`, `result`, `validationMetadata`
-
-#### 5. AcceptedRoleClaim
-- `type`: "accepted_role_claim"
-- `claimedRole` (Required, Enum): "seer", "werewolf", "citizen"
-- Forbidden: `targetId`, `result`, `validationMetadata`
-
-#### 6. AcceptedResultClaim
-- `type`: "accepted_result_claim"
-- `targetId` (Required, String)
-- `result` (Required, Enum): "werewolf", "not_werewolf"
-- Forbidden: `claimedRole`, `validationMetadata`
-
-#### 7. AcceptedInformationRequest
-- `type`: "accepted_information_request"
-- `topic` (Required, Enum): "rules", "commands", "history"
-- Forbidden: `targetId`, `claimedRole`, `validationMetadata`
-
-### Accepted Schema Examples
-
-**AcceptedResultClaim**
-```json
-{
-  "schemaVersion": 1,
-  "type": "accepted_result_claim",
-  "speechActId": "act-1001",
-  "requestId": "req-123",
-  "acceptedTurnId": "day-1-turn-4",
-  "acceptedStateVersion": 17,
-  "actorId": "player",
-  "causationId": "req-123",
-  "correlationId": "conversation-44",
-  "idempotencyKey": "req-123:alt-0:act-0",
-  "targetId": "npc-beni",
-  "result": "werewolf"
-}
-```
-
-**AcceptedRoleClaim**
-```json
-{
-  "schemaVersion": 1,
-  "type": "accepted_role_claim",
-  "speechActId": "act-2001",
-  "requestId": "req-456",
-  "acceptedTurnId": "day-1-turn-4",
-  "acceptedStateVersion": 17,
-  "actorId": "npc-beni",
-  "causationId": "event-1001",
-  "correlationId": "conversation-44",
-  "idempotencyKey": "req-456:alt-0:act-0",
-  "claimedRole": "seer"
-}
-```
+[Individual types follow the same schema as candidates but with engine-bound metadata]
 
 ## 10. `PublicEvent` Types (Strict Discriminated Union)
 
-Authoritative public records following an `additionalProperties: false` policy. Unknown fields are rejected.
+Authoritative public records.
 
-### Common Event Metadata (All Event Types)
+### Common Event Metadata
 - `schemaVersion`: 1 (Integer, Required)
-- `eventId`: Engine-generated opaque ID (String, Required)
-- `requestId`: Link to player request (String, Required)
-- `turnId`: Current logical turn (String, Required)
-- `stateVersion`: Resulting `stateVersion` after this event is committed (Integer, Required)
-- `actorId`: Authoritative performer ID (String, Required)
-- `acceptedSpeechActId`: Link to source act (String, Required)
-- `causationId`: `requestId` or `eventId` (String, Required)
-- `correlationId`: Logical thread ID (String, Required)
-- `idempotencyKey`: `source AcceptedSpeechAct key` + event kind (String, Required)
-- `createdOrder`: Global incrementing counter (Integer, Unique, Required)
+- `eventId`: String (Required)
+- `requestId`: String (Required)
+- `turnId`: String (Required)
+- `stateVersion`: Integer (Required)
+- `actorId`: String (Required)
+- `acceptedSpeechActId`: String (Required)
+- `causationId`: String (Required)
+- `correlationId`: String (Required)
+- `idempotencyKey`: String (Required)
+- `createdOrder`: Integer (Unique, Required)
+- `additionalProperties`: false
 
-### Individual Event Type Definitions
-
-#### 1. PublicStatementRecordedEvent
-- `eventType`: "public_statement_recorded"
-- `text` (Required, String)
-- Forbidden: `targetId`, `topic`, `claimId`, `display`
-
-#### 2. PublicQuestionRecordedEvent
-- `eventType`: "public_question_recorded"
-- `targetId` (Required, String)
-- `topic` (Required, Enum)
-- Forbidden: `claimId`, `display`
-
-#### 3. SuspicionExpressedEvent
-- `eventType`: "suspicion_expressed"
-- `targetId` (Required, String)
-- `reason` (Optional, String)
-- Forbidden: `claimId`, `display`
-- Gameplay Effect: `suspicion_update`
-
-#### 4. VoteDeclaredEvent
-- `eventType`: "vote_declared"
-- `targetId` (Required, String)
-- Forbidden: `claimId`, `display`
-- Gameplay Effect: `memory_update`
-
-#### 5. RoleClaimRecordedEvent
-- `eventType`: "role_claim_recorded"
-- `claimId` (Required, String)
-- `display`: { "kind": "canonical_claim", "claimId": "claim-2001" } (Required)
-- Forbidden: `targetId`, `topic`, `claimedRole`, `result`
-- **Constraint:** `display.claimId` must exactly match the event's `claimId`.
-- Gameplay Effect: `claim_registration`
-
-#### 6. ResultClaimRecordedEvent
-- `eventType`: "result_claim_recorded"
-- `claimId` (Required, String)
-- `display`: { "kind": "canonical_claim", "claimId": "claim-1001" } (Required)
-- Forbidden: `targetId`, `result`, `claimedRole`, `topic`
-- **Constraint:** `display.claimId` must exactly match the event's `claimId`.
-- Gameplay Effect: `claim_registration`
-
-### Event Schema Examples
-
-**ResultClaimRecordedEvent**
-```json
-{
-  "schemaVersion": 1,
-  "eventId": "event-1001",
-  "eventType": "result_claim_recorded",
-  "requestId": "req-123",
-  "turnId": "day-1-turn-4",
-  "stateVersion": 18,
-  "actorId": "player",
-  "acceptedSpeechActId": "act-1001",
-  "causationId": "req-123",
-  "correlationId": "conversation-44",
-  "idempotencyKey": "req-123:alt-0:act-0:result_claim_recorded",
-  "createdOrder": 142,
-  "claimId": "claim-1001",
-  "display": {
-    "kind": "canonical_claim",
-    "claimId": "claim-1001"
-  }
-}
-```
-
-**RoleClaimRecordedEvent**
-```json
-{
-  "schemaVersion": 1,
-  "eventId": "event-2001",
-  "eventType": "role_claim_recorded",
-  "requestId": "req-456",
-  "turnId": "day-1-turn-4",
-  "stateVersion": 19,
-  "actorId": "npc-beni",
-  "acceptedSpeechActId": "act-2001",
-  "causationId": "event-1001",
-  "correlationId": "conversation-44",
-  "idempotencyKey": "req-456:alt-0:act-0:role_claim_recorded",
-  "createdOrder": 143,
-  "claimId": "claim-2001",
-  "display": {
-    "kind": "canonical_claim",
-    "claimId": "claim-2001"
-  }
-}
-```
-
-- **Replay Policy:** Event replay uses `eventId` and `idempotencyKey` for deduplication. Applying a previously processed event is a NO-OP. Ordering is strictly enforced by `createdOrder`. State changes (suspicion, claims, NPC memory, history) are never re-applied during replay.
+[Individual types defined with `additionalProperties: false`]
 
 ## 11. `CanonicalClaim` Types (Strict Discriminated Union)
 
-`CanonicalClaim` is the single source of truth for assertions. It follows an `additionalProperties: false` policy. Unknown fields are rejected.
+`CanonicalClaim` is the single source of truth for assertions.
 
-### Common Metadata (All Claims)
+### Common Metadata
 - `schemaVersion`: 1 (Integer, Required)
-- `claimId`: Engine-generated opaque ID (String, Required)
-- `claimRevision`: 1 for new claims; `prev + 1` for amendments (Integer, Required)
-- `actorId`: Authoritative ID of the claimant (String, Required)
-- `sourceSpeechActIds`: List of unique `AcceptedSpeechAct` IDs (Array of String, Required, No Duplicates)
-- `idempotencyKey`: `source AcceptedSpeechAct key` + claim kind (String, Required)
-- `createdTurnId`: Turn ID when first created (String, Required)
-- `createdStateVersion`: Resulting `stateVersion` after atomic commit (Integer, Required)
-- `repeatsClaimId`: Original claim ID or `null` (String | null, Required)
-- `supersedesClaimId`: Amended claim ID or `null` (String | null, Required)
-- `contradictsClaimIds`: List of unique conflicting claim IDs (Array of String, Required, No Duplicates)
-- `status`: "asserted" (Enum, Required)
+- `claimId`: String (Required)
+- `claimRevision`: Integer (Required)
+- `actorId`: String (Required)
+- `sourceSpeechActIds`: Array of String (Required)
+- `idempotencyKey`: String (Required)
+- `createdTurnId`: String (Required)
+- `createdStateVersion`: Integer (Required)
+- `repeatsClaimId`: String | null (Required)
+- `supersedesClaimId`: String | null (Required)
+- `contradictsClaimIds`: Array of String (Required)
+- `status`: Enum "asserted" (Required)
+- `additionalProperties`: false
 
-### Union Type Definitions
-
-#### 1. RoleCanonicalClaim
-- `type`: "role_claim" (Discriminator)
-- `claimedRole` (Required, Enum): "seer", "werewolf", "citizen"
-- Forbidden: `targetId`, `result`
-
-#### 2. ResultCanonicalClaim
-- `type`: "result_claim" (Discriminator)
-- `targetId` (Required, String): Validated ID from roster.
-- `result` (Required, Enum): "werewolf", "not_werewolf"
-- Forbidden: `claimedRole`
-
-### Union Type Examples
-
-**RoleCanonicalClaim**
-```json
-{
-  "schemaVersion": 1,
-  "type": "role_claim",
-  "claimId": "claim-2001",
-  "claimRevision": 1,
-  "actorId": "npc-beni",
-  "claimedRole": "seer",
-  "sourceSpeechActIds": [
-    "act-2001"
-  ],
-  "idempotencyKey": "req-456:alt-0:act-0:role_claim",
-  "createdTurnId": "day-1-turn-4",
-  "createdStateVersion": 19,
-  "repeatsClaimId": null,
-  "supersedesClaimId": null,
-  "contradictsClaimIds": [],
-  "status": "asserted"
-}
-```
-
-**ResultCanonicalClaim**
-```json
-{
-  "schemaVersion": 1,
-  "type": "result_claim",
-  "claimId": "claim-1001",
-  "claimRevision": 1,
-  "actorId": "player",
-  "targetId": "npc-beni",
-  "result": "werewolf",
-  "sourceSpeechActIds": [
-    "act-1001"
-  ],
-  "idempotencyKey": "req-123:alt-0:act-0:result_claim",
-  "createdTurnId": "day-1-turn-4",
-  "createdStateVersion": 18,
-  "repeatsClaimId": null,
-  "supersedesClaimId": null,
-  "contradictsClaimIds": [],
-  "status": "asserted"
-}
-```
-
-### Claim Management Rules
-
-- **Revision and Relations:**
-  - **New Assertion:** `claimRevision = 1`, all relation fields empty/null.
-  - **Repeat:** New `claimId`, `claimRevision = 1`, `repeatsClaimId` set. `supersedesClaimId` must be `null`.
-  - **Amendment:** New `claimId`, `claimRevision = prev + 1`, `supersedesClaimId` set. `repeatsClaimId` must be `null`.
-  - **Contradiction:** New `claimId`, `claimRevision = 1`, `contradictsClaimIds` set. `repeatsClaimId` and `supersedesClaimId` must be `null`.
-- **Exclusivity:** A single claim record cannot be both a Repeat and an Amendment. A single record cannot be both a Repeat and a Contradiction. Amendment and Contradiction mixing is prohibited.
-- **Constraints:** Relations must point to existing Claims by the same `actorId` within the current session.
-- **Assertion vs. Truth:** Validation checks if the NPC is *permitted* by policy to make the claim, NOT if it matches internal knownInfo. Strategic deception is engine-controlled.
-- **Atomic Creation:** If an utterance contains both role and result claims, two `CanonicalClaim` and two `PublicEvent` objects are created in the same logical commit.
-- **No Circularity:** Reference order: `AcceptedSpeechAct` -> `CanonicalClaim` -> `PublicEvent`.
+[Individual types defined with `additionalProperties: false`]
 
 ## 12. `NpcReactionPlan` Schema
 
-The engine generates the plan for an NPC's response. It contains NO private game facts. All planned claims are explicitly listed in `intendedSpeechActs` and `canonicalSegments`.
+The engine generates the plan for an NPC's response. It enforces the boundary between canonical state-changing content and free-form commentary.
+
+### NpcReactionPlan
+- **schemaVersion**: 1 (Integer, Required)
+- **npcId**: String (Required)
+- **renderMode**: Enum "canonical_only" | "free_commentary" (Required)
+- **intendedSpeechActs**: Array of `SpeechActDescriptor` (Required)
+- **policies**: Array of String (Required)
+- **canonicalSegments**: Array of `CanonicalSegment` (Allowed only if `renderMode` is `canonical_only`)
+- **commentaryPlan**: `CommentaryPlan` (Allowed only if `renderMode` is `free_commentary`)
+- **maxChars**: 240 (Integer, Required)
+- **additionalProperties**: false
 
 ```json
 {
   "schemaVersion": 1,
   "npcId": "npc-beni",
+  "renderMode": "canonical_only",
   "intendedSpeechActs": [
     {
       "type": "role_claim",
@@ -483,9 +272,6 @@ The engine generates the plan for an NPC's response. It contains NO private game
   ],
   "policies": [
     "do_not_invent_additional_claims",
-    "do_not_modify_canonical_segments",
-    "do_not_reference_private_facts",
-    "do_not_add_unplanned_vote_declarations",
     "stay_in_character"
   ],
   "canonicalSegments": [
@@ -495,60 +281,30 @@ The engine generates the plan for an NPC's response. It contains NO private game
       "claimId": "claim-2001"
     }
   ],
-  "commentaryPlan": {
-    "intent": "defend_self",
-    "authorizedPublicFacts": [
-      "I was asked about my role",
-      "Beni is suspected of being a werewolf"
-    ],
-    "styleHint": "calm"
-  },
-  "maxChars": 240,
-  "compositionStrategy": {
-    "order": [
-      "commentary",
-      "canonical_segments"
-    ],
-    "joiner": " "
-  }
+  "maxChars": 240
 }
 ```
 
-- **Note on AI Role:** The AI Renderer must not add, change, or remove `canonicalSegments`. All NPC "lies" or "truth" claims must be planned by the engine.
+### Rendering Modes
+- **canonical_only:** Used when the plan includes any state-changing acts (Claims, votes, etc.). The engine renders the text entirely from canonical segments. The Renderer is NOT called.
+- **free_commentary:** Used for non-state-changing reactive speech. The Renderer is called to generate `commentaryText`. `canonicalSegments` must be empty.
 
 ## 13. `InterpretationOutcome` and `ClarificationOutcome`
 
-Clarification requests do NOT generate `PublicEvent` or `AcceptedSpeechAct` objects and are not recorded in the public history.
-
-### InterpretationOutcome
-A non-persistent transient object describing the engine's initial triage of an `InterpretationResult`.
-- **Match:** `alternatives.length === 1`. Proceed to validation.
-- **Ambiguity Handling:** `alternatives.length > 1`. Proceed to `ClarificationOutcome`.
-- **System Failure:** `interpretationFailure` is present. Triggers a system error message.
-
-### ClarificationOutcome
-A deterministic engine response when player input is ambiguous.
-- **State Impact:** None. `turnId` and `stateVersion` do not progress.
-- **UI Behavior:** Displays a button or text asking the user to choose or rephrase.
-- **Deterministic:** The response is generated by the engine, not an AI Renderer.
+Clarification requests do NOT generate `PublicEvent` or `AcceptedSpeechAct` objects.
 
 ## 14. Input Interpreter Detailed Contract
 
 ### 14.1 Provider Interface
 ```js
-interpretPlayerInput(request)
+interpretPlayerInput(request, { signal })
 ```
 - **Input:** `InterpreterRequest`
-- **Output:** `InterpreterResponse`
-- **Exceptions:**
-  - `ProviderTimeoutError`: The AI did not respond within 15 seconds.
-  - `ProviderConnectionError`: Network or protocol failure.
-  - `ProviderRateLimitError`: Upstream rate limit exceeded.
-  - `ProviderAuthError`: Credentials invalid or expired.
-  - `ProviderException`: Unexpected upstream error.
+- **Context:** `signal` (AbortSignal, Optional)
+- **Output:** `InterpreterProviderResult`
+- **Exceptions:** Normalized provider-level errors (Timeout, Connection, etc.).
 
 ### 14.2 Interpreter Request Schema (`InterpreterRequest`)
-The browser engine prepares this structured request. It contains no private information.
 
 ```json
 {
@@ -559,7 +315,8 @@ The browser engine prepares this structured request. It contains no private info
   "locale": "ja-JP",
   "rawText": "私は占い師です。Beniは人狼でした。",
   "playerContext": {
-    "actorId": "player"
+    "schemaVersion": 1,
+    "playerRole": "citizen"
   },
   "phase": "day_discussion",
   "publicRoster": [
@@ -583,6 +340,8 @@ The browser engine prepares this structured request. It contains no private info
   "publicContext": {
     "recentEvents": [],
     "publicClaims": [],
+    "publicVoteHistory": [],
+    "publicExecutionHistory": [],
     "publicHistoryWindow": 10
   },
   "limits": {
@@ -592,89 +351,82 @@ The browser engine prepares this structured request. It contains no private info
 }
 ```
 
-### 14.3 Interpreter Response Schema (`InterpreterResponse`)
-The provider must return this strict envelope.
+#### Detailed Schemas
+- **playerContext:** `{ schemaVersion: 1, playerRole: Enum, additionalProperties: false }`
+- **publicRoster entry:** `{ id: String, displayName: String, alive: Boolean, publiclyKnownStatus: Enum "normal"|"suspected"|"executed"|"attacked", additionalProperties: false }`
+- **publicContext:** `{ recentEvents: Array, publicClaims: Array, publicVoteHistory: Array, publicExecutionHistory: Array, publicHistoryWindow: Integer, additionalProperties: false }`
+- **limits:** `{ maximumAlternatives: Integer, maximumSpeechActsPerAlternative: Integer, additionalProperties: false }`
 
-```json
-{
-  "schemaVersion": 1,
-  "requestId": "req-123",
-  "result": {
-    "schemaVersion": 1,
-    "requestId": "req-123",
-    "alternatives": [
-      {
-        "alternativeId": "alt-0",
-        "speechActs": [
-          {
-            "type": "role_claim",
-            "claimedRole": "seer"
-          },
-          {
-            "type": "result_claim",
-            "targetId": "npc-beni",
-            "result": "werewolf"
-          }
-        ],
-        "confidence": 0.95
-      }
-    ],
-    "interpretationFailure": null
-  },
-  "diagnostics": {
-    "providerName": "openai",
-    "model": "gpt-4o",
-    "latencyMs": 1200
-  }
-}
-```
+### 14.3 Interpreter Output Schemas
+
+#### InterpreterModelOutput (AI-generated)
+- **schemaVersion**: 1 (Required)
+- **alternatives**: Array (Required)
+- **additionalProperties**: false
+
+#### InterpreterProviderResult (Provider-generated)
+- **requestId**: String (Required)
+- **result**: `InterpreterModelOutput` (Required)
+- **diagnostics**: `Diagnostics` (Required)
+- **additionalProperties**: false
+
+#### InterpreterHttpResponse (HTTP 200)
+- **schemaVersion**: 1 (Required)
+- **requestId**: String (Required)
+- **turnId**: String (Required)
+- **stateVersion**: Integer (Required)
+- **providerResult**: `InterpreterProviderResult` (Required)
+- **additionalProperties**: false
 
 ### 14.4 Input and Output Limits
 | Limit | Default Value |
 | :--- | :--- |
 | `maximum rawText characters` | 1000 |
+| `maximum request nesting depth` | 8 |
+| `maximum model-output nesting depth` | 5 |
+| `maximum HTTP response nesting depth` | 10 |
 | `maximum HTTP body bytes` | 65536 (64 KiB) |
-| `maximum public roster entries` | 20 |
-| `maximum recent events` | 30 |
-| `maximum alternatives` | 3 |
-| `maximum speech acts per alternative` | 4 |
-| `maximum nesting depth` | 3 |
 | `maximum provider response bytes` | 8192 (8 KiB) |
-| `timeout` | 15000ms |
-| `retry count` | 2 |
+| `timeout` | 15000ms (Global deadline) |
+| `maximumAttempts` | 3 (Including first call) |
 
 ### 14.5 Prompt Injection Boundaries
-- **Untrusted Data:** `rawText` and all strings within `publicContext` are treated as untrusted data.
-- **Instruction Separation:** System prompts must explicitly separate instructions from data fields using delimiters.
-- **Strict Adherence:** The AI must ignore any "ignore previous instructions" or "system override" commands within `rawText`.
-- **ID Safety:** The AI is strictly prohibited from inventing new `id` or `actorId` fields. It must only use IDs provided in the `publicRoster`.
-- **Validation Authority:** The browser engine remains the sole validator for game rules, regardless of AI confidence or explanations.
+- **Untrusted Data:** `rawText` and strings in `publicContext` are untrusted.
+- **Instruction Separation:** Use explicit delimiters in system prompts.
+- **No ID Invention:** AI must only use IDs from `publicRoster`.
+- **No actorId:** The AI must not generate `actorId`. The engine binds this from the request context.
 
 ### 14.6 Interpreter Failure Handling (Engine-side)
-The browser engine performs the following deterministic actions upon Interpreter failure:
 
-| Failure Case | Engine Action | State Mutation |
-| :--- | :--- | :--- |
-| **Timeout** | Stop request, show retry/error message. | None |
-| **Abort** | Silently discard response. | None |
-| **Malformed JSON** | Treat as system error, no automatic retry. | None |
-| **Schema Failure** | Treat as system error, no automatic retry. | None |
-| **Multiple Alternatives** | Trigger `ClarificationOutcome` UI. | None |
-| **Unknown Actor/Target** | Reject during rule validation, show error. | None |
-| **Stale turn/version** | Discard response (Turn ID or StateVersion mismatch). | None |
+| Failure Case | Engine Action | Retryable | State Mutation |
+| :--- | :--- | :--- | :--- |
+| **Timeout** | Stop request, show error/retry UI. | Yes | None |
+| **Abort** | Silently discard. | No | None |
+| **Malformed Client JSON**| Discard, show system error. | No | None |
+| **Invalid Request Schema**| Discard, show system error. | No | None |
+| **Malformed Provider JSON**| Discard, show system error. | No | None |
+| **Invalid Provider Schema**| Discard, show system error. | No | None |
+| **Wrong requestId** | Discard (security rejection). | No | None |
+| **Multiple Alternatives** | Trigger `ClarificationOutcome`. | No | None |
+| **Stale turn/version** | Discard (Context mismatch). | No | None |
+
+**Retry Policy:**
+- **Retryable:** Connection failure, rate limit (429), provider 5xx, timeout.
+- **Backoff:** Linear (1s, 2s).
+- **Deadline:** All attempts must complete within the 15s global timeout.
 
 ## 15. NPC Utterance Renderer Detailed Contract
 
 ### 15.1 Provider Interface
 ```js
-renderNpcUtterance(request)
+renderNpcUtterance(request, { signal })
 ```
 - **Input:** `RendererRequest`
-- **Output:** `RendererResponse`
+- **Output:** `RendererProviderResult`
 - **Exceptions:** Same as Interpreter.
 
 ### 15.2 Renderer Request Schema (`RendererRequest`)
-The engine projects the `NpcReactionPlan` into this public request.
+Used only when `renderMode` is `free_commentary`.
 
 ```json
 {
@@ -683,19 +435,19 @@ The engine projects the `NpcReactionPlan` into this public request.
   "turnId": "day-1-turn-4",
   "stateVersion": 19,
   "reactionPlanId": "reaction-1001",
+  "renderMode": "free_commentary",
   "npcActor": {
     "id": "npc-beni",
     "name": "Beni",
     "personality": "Quiet and analytical",
     "speechStyle": "Formal Japanese"
   },
-  "commentaryPlan": {
-    "intent": "defend_self",
+  "commentaryIntent": {
+    "intent": "ponder",
     "authorizedPublicFacts": [
-      "I was asked about my role",
-      "I am claiming to be the Seer"
-    ],
-    "styleHint": "calm"
+      "I was asked about the rules",
+      "It is currently Day 1"
+    ]
   },
   "allowedPublicReferences": {
     "roster": ["player", "npc-beni"],
@@ -705,97 +457,65 @@ The engine projects the `NpcReactionPlan` into this public request.
   "limits": {
     "maxChars": 240
   },
-  "policies": ["do_not_invent_claims", "stay_in_character"],
+  "policies": ["stay_in_character"],
   "locale": "ja-JP"
 }
 ```
 
-### 15.3 Renderer Allowlist (Information Boundary)
-**Authorized Information (Allowlist):**
-- NPC's own public `id`, `name`, `personality`, and `speechStyle`.
-- Current public `phase`, `turnId`, and `stateVersion`.
-- Content of `authorizedPublicFacts`.
-- `id` and `displayName` of participants from `publicRoster`.
-- Publicly recorded `PublicEvent` and `CanonicalClaim` objects.
+#### Prohibited Information (Denylist)
+- **Planned Claims:** renderer call is skipped if claims are planned.
+- **Claim Content:** No role, result, or target of planned claims is sent.
+- **Private Facts:** Hidden roles, wolf identities, inspection results, private memory.
+- **Canonical segments:** No placeholders or本文 are sent.
 
-**Prohibited Information (Denylist):**
-- NPC's actual `role` or `team` (unless publicly revealed).
-- Secret werewolf identities.
-- Private Seer/Medium inspection results.
-- Internal `suspicionScores` or rationale.
-- NPC private memory.
-- Unplanned or unrevealed claim plans.
-- Original raw player inputs from other turns.
-- API keys or system authorization tokens.
+### 15.3 Renderer Output Schemas
 
-### 15.4 Renderer Response Schema (`RendererResponse`)
-The provider must return a strict JSON object with `additionalProperties: false`.
+#### RendererModelOutput
+- **commentaryText**: String (Required, 1-240 chars)
+- **additionalProperties**: false
 
 ```json
 {
-  "schemaVersion": 1,
-  "requestId": "render-123",
-  "reactionPlanId": "reaction-1001",
-  "commentaryText": "私は占い師です。嘘はついていません。",
-  "diagnostics": {
-    "providerName": "openai",
-    "model": "gpt-4o",
-    "latencyMs": 800
-  }
+  "commentaryText": "少し考えさせてください。"
 }
 ```
 
-### 15.5 Structural Validation and Fallback
-The engine performs structural validation on `commentaryText` using `validateNpcUtteranceStructure` (from `src/utteranceGuard.mjs`).
+#### RendererProviderResult
+- **requestId**: String (Required)
+- **reactionPlanId**: String (Required)
+- **result**: `RendererModelOutput` (Required)
+- **diagnostics**: `Diagnostics` (Required)
+- **additionalProperties**: false
 
-**Structural Checks:**
-- Must be a string.
-- Length <= 240 code points.
-- No control characters, newlines, or tabs.
-- No HTML, Markdown, or JSON-like fragments.
-- No illegal Unicode or NUL characters.
+#### RendererHttpResponse
+- **schemaVersion**: 1 (Required)
+- **requestId**: String (Required)
+- **reactionPlanId**: String (Required)
+- **providerResult**: `RendererProviderResult` (Required)
+- **additionalProperties**: false
+
+### 15.4 Structural Validation and Fallback
+The engine performs structural validation on `commentaryText`.
 
 **Failure Handling (Engine-side):**
-- **Validation Rejection:** The commentary is discarded. The engine uses a fallback string (e.g., "（沈黙している）").
-- **Provider Failure (Timeout/Error):** Same as validation rejection.
-- **Preservation:** Canonical segments are **never** discarded due to renderer failure. They are always displayed.
-- **Idempotency:** The engine ensures only one commentary is displayed per `reactionPlanId`.
+- **Mode: canonical_only:** Renderer not called. Display canonical text only.
+- **Mode: free_commentary:**
+  - On failure (timeout, schema, validation rejection), use deterministic fallback: `（沈黙している）` or empty string.
+  - Turn/State are NOT rolled back.
 
 ## 16. Claim and Game Truth
 
 - **Asserted vs Actual:** Separate `assertedClaim` from `actualGameTruth`.
 - **Lies:** Allowed and recorded as `CanonicalClaim`.
-- **Validation:** Verification check if the NPC is *allowed* by policy to make such a claim, NOT if it's true.
 
 ## 17. Operational Logic
 
 ### Authoritative Transaction Boundary (Atomicity)
-The browser-side `WerewolfGame` is the sole transaction authority.
-1.  **Input Phase:** Capture player input.
-2.  **AI Phase:** Interpreter request (stateless proxy).
-3.  **Phase 3:** Engine validation of Candidate.
-4.  **Phase 4:** **Atomic Commit** in the browser:
-    - Register `AcceptedSpeechAct`, `PublicEvent`, `CanonicalClaim`.
-    - Update history, suspicion, and memory.
-    - Increment `turnId` and `stateVersion`.
-5.  **Phase 5:** Reaction Planning and Renderer request.
-6.  **Phase 6:** **Final UI Composition** in the browser:
-    - The engine renders each canonical segment using `renderCanonicalClaim(claim, roster, locale)`.
-    - The engine assembles the `validated commentary` and the `engine-rendered canonical segments`.
-    - `FinalText = compositionStrategy(commentary, segments)`.
-    - **Guarantees:**
-        - The AI cannot generate, delete, or modify canonical segments.
-        - Composition order and joiners (e.g., " ") are determined by the engine.
-        - Internal IDs (like `claim-1001`) are never displayed in the final UI text.
-        - Even if the Renderer fails, the canonical segments remain displayable.
-
-### Idempotency Key Generation Rules
-The browser engine generates deterministic keys to ensure idempotency across retries.
-- **SpeechAct:** `requestId` + alternative index + act index.
-- **CanonicalClaim:** `source AcceptedSpeechAct key` + claim kind (`role_claim` or `result_claim`).
-- **PublicEvent:** `source AcceptedSpeechAct key` + event kind.
-
-Retries with the same `requestId` and indices must result in the exact same `idempotencyKey`, preventing duplicate domain objects or events.
+1. **Atomic Commit (Phase 4):** Register all state changes in browser memory.
+2. **Phase 6 (UI Composition):**
+   - If `canonical_only`: Render canonical segments.
+   - If `free_commentary`: Render `validated commentaryText`.
+   - Engine combines segments/commentary.
 
 ## 18. HTTP & Error Contracts
 
@@ -804,64 +524,53 @@ Retries with the same `requestId` and indices must result in the exact same `ide
 | Aspect | `/api/interpret-player-input` | `/api/render-npc-utterance` |
 | :--- | :--- | :--- |
 | **Method** | POST | POST |
-| **Content Type** | `application/json` | `application/json` |
-| **Request Schema** | `InterpreterRequest` | `RendererRequest` |
 | **Success Status** | 200 OK | 200 OK |
-| **Success Response** | `InterpreterResponse` | `RendererResponse` |
-| **Client Error (400)** | `invalid_schema`, `malformed_json` | `invalid_schema`, `malformed_json` |
-| **Body Size Limit** | 64 KiB (`body_too_large`) | 64 KiB (`body_too_large`) |
-| **Provider Error (503)**| `provider_exception` | `provider_exception` |
-| **Timeout Status (503)**| `provider_timeout` | `provider_timeout` |
-| **Rate Limit (429)** | `rate_limit_exceeded` | `rate_limit_exceeded` |
-| **Abort Behavior** | Server finishes/terminates, Client discards | Server finishes/terminates, Client discards |
-| **Error Envelope** | `ErrorEnvelope` | `ErrorEnvelope` |
-| **Diagnostics** | Populated in response | Populated in response |
+| **JSON Error (400)** | `malformed_json`, `invalid_schema` | `malformed_json`, `invalid_schema` |
+| **Size Limit (413)** | `body_too_large` (64 KiB) | `body_too_large` (64 KiB) |
+| **Media Type (415)** | `unsupported_media_type` | `unsupported_media_type` |
+| **Rate Limit (429)** | `server_rate_limited` | `server_rate_limited` |
+| **Provider Error (502)**| `invalid_provider_response`, `provider_auth_failure` | `invalid_provider_response`, `provider_auth_failure` |
+| **Provider Down (503)**| `provider_unavailable` | `provider_unavailable` |
+| **Timeout (504)** | `provider_timeout` | `provider_timeout` |
 
-### 18.2 Error Envelope
-Both endpoints use a strict, shared error envelope. It must not leak internal data or API keys.
+### 18.2 Error Envelope (ErrorEnvelope)
+- **schemaVersion**: 1 (Required)
+- **requestId**: String | null (Required)
+- **correlationId**: String (Required, Server-generated)
+- **error**: `{ code: Enum, retryable: Boolean }` (Required)
+- **additionalProperties**: false
 
 ```json
 {
   "schemaVersion": 1,
   "requestId": "req-123",
+  "correlationId": "corr-abc-999",
   "error": {
     "code": "provider_timeout",
-    "message": "The AI provider timed out.",
     "retryable": true
   }
 }
 ```
 
-**Common Error Codes:**
-- `400 Bad Request`: `invalid_schema`, `body_too_large`, `malformed_json`.
-- `401 Unauthorized`: `provider_auth_failure`.
-- `429 Too Many Requests`: `rate_limit_exceeded`.
-- `503 Service Unavailable`: `provider_exception`, `provider_timeout`.
-
 ## 19. Migration Plan
-
 *Migration phases 1–9 will be detailed in a future task.*
 
 ## 20. Finalized Design Decisions
 
-- **Authoritative State:** Held in Browser.
-- **Server:** Stateless Proxy.
-- **Legacy NPC Path:** `generateResponse()` remains only for compatibility during transition.
-- **Ambiguity Handling:** Multiple interpretation alternatives trigger deterministic clarification fallback.
-- **Renderer Failure:** Preservation of canonical segments is guaranteed.
-- **Prompt Injection:** Managed via delimiter-based instruction/data separation and engine-side validation.
+- **Renderer Restriction:** AI commentary is prohibited if the plan contains any state-changing canonical segments.
+- **Strict Separation:** Model output, Provider result, and HTTP response are decoupled.
+- **Diagnostics Ownership:** Server/Provider wrapper owns diagnostics; AI model generates only semantic content.
+- **AbortSignal:** Supported for end-to-end cancellation.
+- **Error Mapping:** Provider auth failure is mapped to 502, not 401.
 
-## 21. Open Design Questions
+## 21. Diagnostics Schema
 
-- **UI Highlights:** How to visually distinguish canonical segments from AI commentary?
-- **Contradictory Input:** Rejection of "I am the Seer and the Werewolf" acts.
-
-## 22. Test Strategy
-- Unit tests for all JSON schemas using `additionalProperties: false`.
-- Mock AI providers to verify `interpretPlayerInput` and `renderNpcUtterance` separately.
-- End-to-end integration tests for fallback behavior (e.g., simulating provider timeout).
-
-## 23. Diagnostics and Logging
-- **Allowed:** `requestId`, `providerName`, `latencyMs`, `error.code`, `turnId`, `stateVersion`.
-- **Prohibited:** API keys, raw provider prompts, secret roles, private memory.
-- **Redaction:** `rawText` is redacted in logs by default unless development-mode is explicitly enabled with a security warning.
+### Diagnostics
+- **providerName**: String (Required)
+- **modelId**: String | null (Required)
+- **latencyMs**: Integer (Required)
+- **responseBytes**: Integer (Required)
+- **attemptCount**: Integer (Required)
+- **schemaValidation**: Enum "passed"|"failed" (Required)
+- **errorCode**: String | null (Required)
+- **additionalProperties**: false
