@@ -76,7 +76,7 @@
 
 ## 7. `InterpretationResult` Schema (AI Output)
 
-The AI Interpreter role converts raw player text into a structured `InterpretationResult`. It distinguishes between a single coherent interpretation (which may contain multiple acts) and exclusive interpretive alternatives.
+The AI Interpreter converts raw natural language into structured `InterpretationResult`. It separates successful semantic mapping into alternatives from system-level failures.
 
 ```json
 {
@@ -103,67 +103,100 @@ The AI Interpreter role converts raw player text into a structured `Interpretati
 }
 ```
 
-### Interpretation Decisions
-- **Exclusivity:** `alternatives` represents mutually exclusive interpretations of the same natural language input.
-- **Sequence:** `speechActs` within an alternative represents a sequence of acts performed in a single utterance (e.g., "I am the Seer and Beni is a wolf").
-- **Uniqueness Requirement:** The engine only proceeds to validation if there is exactly **one** alternative. If multiple alternatives are provided, it indicates ambiguity.
-- **Confidence:** Used for diagnostics and developer logs only. It is NOT a threshold for acceptance.
-- **No guessing:** If interpretations are ambiguous, the engine MUST NOT guessed. It triggers a deterministic clarification fallback.
-- **All-or-Nothing:** State-changing acts within a single alternative are processed atomically. If one is invalid, the entire interpretation is rejected.
+### Mutual Exclusivity Rules
+- **Successful interpretation:** `alternatives` has at least 1 item; `interpretationFailure` is `null`.
+- **Interpreter failure:** `alternatives` is `[]`; `interpretationFailure` is an object.
+- **Validation:** The engine rejects any response where both fields are populated or both are empty.
+
+### Interpretation Outcomes
+- **Uniqueness Requirement:** The engine only proceeds to state mutation if `alternatives.length === 1`.
+- **Ambiguity:** If `alternatives.length > 1`, it is treated as an ambiguity failure and triggers a `ClarificationOutcome`.
+- **Confidence:** Diagnostic only. Margin-based automatic adoption is strictly prohibited.
+- **Uninterpretable Case:** `UninterpretableCandidate` is used ONLY when the AI successfully categorizes the input as "gibberish" or "ambiguous". It must be the sole alternative and sole act.
 
 ## 8. `SpeechActCandidate` Types (Strict Discriminated Union)
 
-The AI returns candidates without `actorId`. Unknown fields are strictly prohibited and will result in rejection.
+All candidate types follow a `additionalProperties: false` policy. The AI must NOT include `actorId`.
 
-### Common Constraint Table
+### Common Schema Constraints
+| Candidate Type | State Effect | Record Created | Phase | Target Validation |
+| :--- | :--- | :--- | :--- | :--- |
+| `NonGameStatement` | None | Yes (History) | Any | N/A |
+| `Question` | None | Yes (History) | Day | Alive Required |
+| `Suspicion` | `suspicion_update` | Yes (History) | Day | Alive Required |
+| `VoteDeclaration` | `memory_update` | Yes (History) | Day | Alive Required |
+| `RoleClaim` | `claim_registration` | Yes (History) | Day | N/A |
+| `ResultClaim` | `claim_registration` | Yes (History) | Day | Any Roster ID |
+| `InformationRequest`| None | No | Any | N/A |
+| `Uninterpretable` | None | No | Any | N/A |
 
-| Type | Required Fields | Allowed Fields | Target Req. | Phase Req. | State-Changing |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `non_game_statement` | `text` | - | No | None | No |
-| `question` | `targetId`, `topic` | - | Yes (Alive) | Day | No |
-| `suspicion` | `targetId` | `reason` | Yes (Alive) | Day | Yes |
-| `vote_declaration` | `targetId` | - | Yes (Alive) | Day | Yes |
-| `role_claim` | `claimedRole` | - | No | Day | Yes |
-| `result_claim` | `targetId`, `result` | - | Yes | Day | Yes |
-| `information_request` | `topic` | - | No | None | No |
-| `uninterpretable` | `reason` | `explanation` | No | None | No |
+### Individual Type Definitions
 
-### Candidate Schema Examples
+#### 1. NonGameStatementCandidate
+- `type`: "non_game_statement"
+- `text` (Required): Natural language string.
+- Forbidden: `targetId`, `topic`, `claimedRole`, `result`.
 
-**ResultClaimCandidate**
+#### 2. QuestionCandidate
+- `type`: "question"
+- `targetId` (Required): Valid ID from roster. Must be alive.
+- `topic` (Required): "role", "vote", "opinion", "reason".
+- Forbidden: `claimedRole`, `result`.
+
+#### 3. SuspicionCandidate
+- `type`: "suspicion"
+- `targetId` (Required): Valid ID from roster. Must be alive.
+- `reason` (Optional): String describing why.
+- Forbidden: `claimedRole`, `result`.
+
+#### 4. VoteDeclarationCandidate
+- `type`: "vote_declaration"
+- `targetId` (Required): Valid ID from roster. Must be alive.
+- Forbidden: `topic`, `claimedRole`, `result`.
+
+#### 5. RoleClaimCandidate
+- `type`: "role_claim"
+- `claimedRole` (Required): "seer", "werewolf", "citizen".
+- Forbidden: `targetId`, `result`.
+
+#### 6. ResultClaimCandidate
+- `type`: "result_claim"
+- `targetId` (Required): Valid ID from roster.
+- `result` (Required): "werewolf", "not_werewolf".
+- Forbidden: `claimedRole`.
+
+#### 7. InformationRequestCandidate
+- `type`: "information_request"
+- `topic` (Required): "rules", "commands", "history".
+- Forbidden: `targetId`, `claimedRole`.
+
+#### 8. UninterpretableCandidate
+- `type`: "uninterpretable"
+- `reason` (Required): "ambiguous", "gibberish", "off_topic".
+- `explanation` (Optional): Natural language for diagnostics.
+- Forbidden: All state-changing fields.
+
+## 9. `AcceptedSpeechAct` Types (Strict Discriminated Union)
+
+The engine-generated, validated, and bound representation of a speech act. It abolishes the generic `payload`.
+
+### Common Metadata (All Types)
+- `schemaVersion`: 1
+- `speechActId`: Engine-generated opaque ID.
+- `requestId`: Link to the initiating player request.
+- `acceptedTurnId`: The turn ID when this act was accepted.
+- `acceptedStateVersion`: The `stateVersion` used as a precondition for validation.
+- `actorId`: Authoritative ID bound by the engine.
+- `causationId`: `requestId` or `eventId`.
+- `correlationId`: Logical thread ID.
+- `idempotencyKey`: `requestId` + alternative index + act index.
+
+### Accepted Schema Examples
+
+**AcceptedResultClaim**
 ```json
 {
-  "type": "result_claim",
-  "targetId": "npc-beni",
-  "result": "werewolf"
-}
-```
-
-**QuestionCandidate**
-```json
-{
-  "type": "question",
-  "targetId": "npc1",
-  "topic": "role"
-}
-```
-
-**UninterpretableCandidate**
-```json
-{
-  "type": "uninterpretable",
-  "reason": "ambiguous",
-  "explanation": "Player referred to 'him' but two male NPCs are alive."
-}
-```
-
-## 9. `AcceptedSpeechAct` Schema
-
-The engine-generated, validated, and bound representation of a speech act.
-
-```json
-{
-  "schemaVersion": 1,
+  "type": "accepted_result_claim",
   "speechActId": "act-1001",
   "requestId": "req-123",
   "acceptedTurnId": "day-1-turn-4",
@@ -171,12 +204,9 @@ The engine-generated, validated, and bound representation of a speech act.
   "actorId": "player",
   "causationId": "req-123",
   "correlationId": "conversation-44",
-  "idempotencyKey": "req-123:act-0",
-  "type": "accepted_result_claim",
-  "payload": {
-    "targetId": "npc-beni",
-    "result": "werewolf"
-  },
+  "idempotencyKey": "req-123:alt-0:act-0",
+  "targetId": "npc-beni",
+  "result": "werewolf",
   "validationMetadata": {
     "alternativeId": "alt-1",
     "confidence": 0.84
@@ -184,18 +214,54 @@ The engine-generated, validated, and bound representation of a speech act.
 }
 ```
 
-### Accepted Types
-- `AcceptedNonGameStatement`, `AcceptedQuestion`, `AcceptedSuspicion`, `AcceptedVoteDeclaration`, `AcceptedRoleClaim`, `AcceptedResultClaim`, `AcceptedInformationRequest`.
-- The AI-generated `actorId` (if any) is ignored. The engine binds `actorId` from the game context.
+**AcceptedRoleClaim**
+```json
+{
+  "type": "accepted_role_claim",
+  "speechActId": "act-1002",
+  "requestId": "req-123",
+  "acceptedTurnId": "day-1-turn-4",
+  "acceptedStateVersion": 17,
+  "actorId": "player",
+  "causationId": "req-123",
+  "correlationId": "conversation-44",
+  "idempotencyKey": "req-123:alt-0:act-1",
+  "claimedRole": "seer"
+}
+```
 
-## 10. `PublicEvent` Schema
+### Type Constraints
+- `AcceptedNonGameStatement`: Includes `text`.
+- `AcceptedQuestion`: Includes `targetId`, `topic`.
+- `AcceptedSuspicion`: Includes `targetId`, `reason`.
+- `AcceptedVoteDeclaration`: Includes `targetId`.
+- `AcceptedInformationRequest`: Includes `topic`.
+- Forbidden: Generic `payload` object, AI-determined `actorId`.
 
-The authoritative record of an event in the game. All state changes that are public knowledge are represented as `PublicEvent`.
+## 10. `PublicEvent` Types (Strict Discriminated Union)
 
+An authoritative record of a public game event. It abolishes the generic `payload` and hand-written display text.
+
+### Common Event Metadata
+- `schemaVersion`: 1
+- `eventId`: Engine-generated opaque ID.
+- `requestId`: Link to player request.
+- `turnId`: Current logical turn.
+- `stateVersion`: The `stateVersion` resulting *after* this event is committed.
+- `actorId`: The actor performing the event.
+- `acceptedSpeechActId`: Link to source `AcceptedSpeechAct`.
+- `causationId`: `requestId` or `eventId`.
+- `correlationId`: Logical thread ID.
+- `idempotencyKey`: `source AcceptedSpeechAct key` + event kind.
+- `createdOrder`: Global incrementing counter.
+
+### Event Schema Examples
+
+**ResultClaimRecordedEvent**
 ```json
 {
   "schemaVersion": 1,
-  "eventId": "evt-123",
+  "eventId": "event-1001",
   "eventType": "result_claim_recorded",
   "requestId": "req-123",
   "turnId": "day-1-turn-4",
@@ -204,52 +270,78 @@ The authoritative record of an event in the game. All state changes that are pub
   "acceptedSpeechActId": "act-1001",
   "causationId": "req-123",
   "correlationId": "conversation-44",
-  "idempotencyKey": "req-123:evt-0",
+  "idempotencyKey": "req-123:alt-0:act-0:result_claim",
   "createdOrder": 142,
-  "payload": {
-    "claimId": "clm-456"
-  },
-  "publicDisplayModel": {
-    "text": "プレイヤーが占い結果を公開：npc-beniは人狼。"
+  "claimId": "claim-1001",
+  "display": {
+    "kind": "canonical_claim",
+    "claimId": "claim-1001"
   }
 }
 ```
 
-### Event Types and Sources
+### Event Type Definitions and Replay Rules
 
-| Event Type | Source Accepted Act | Public History | Suspicion Impact | CanonicalClaim Ref |
+| Event Type | Source Act | History | State Effect | Replay Rule |
 | :--- | :--- | :--- | :--- | :--- |
-| `public_statement_recorded` | `AcceptedNonGameStatement` | Yes | No | No |
-| `public_question_recorded` | `AcceptedQuestion` | Yes | No | No |
-| `suspicion_expressed` | `AcceptedSuspicion` | Yes | Yes | No |
-| `vote_declared` | `AcceptedVoteDeclaration` | Yes | Yes | No |
-| `role_claim_recorded` | `AcceptedRoleClaim` | Yes | Yes | `claimId` |
-| `result_claim_recorded` | `AcceptedResultClaim` | Yes | Yes | `claimId` |
-| `clarification_requested` | - (Ambiguity Fallback) | No | No | No |
+| `public_statement_recorded` | `AcceptedNonGameStatement` | Yes | None | Re-render from act text |
+| `public_question_recorded` | `AcceptedQuestion` | Yes | None | Re-render from act topic |
+| `suspicion_expressed` | `AcceptedSuspicion` | Yes | `suspicion_update` | Re-apply score delta |
+| `vote_declared` | `AcceptedVoteDeclaration` | Yes | `memory_update` | Re-apply to NPC memory |
+| `role_claim_recorded` | `AcceptedRoleClaim` | Yes | `claim_registration`| Re-register claimId |
+| `result_claim_recorded` | `AcceptedResultClaim` | Yes | `claim_registration`| Re-register claimId |
 
-### Processing Rules
-- **Logical Commit:** All events related to a single Interpretation alternative are prepared and then committed atomically.
-- **Ordering:** `createdOrder` and `turnId` ensure a stable sequence for replays and UI rendering.
-- **Duplicate handling:** If a duplicate `idempotencyKey` is processed, the engine returns the existing event without re-mutation.
+- **No hand-written text:** Final UI strings are generated by `renderCanonicalClaim(claim)` or equivalent pure functions.
 
-## 11. `CanonicalClaim` Schema
+## 11. `CanonicalClaim` Types (Strict Discriminated Union)
 
-`CanonicalClaim` is the single source of truth for all assertions. It is decoupled from actual truth.
+`CanonicalClaim` is the single source of truth for all public assertions. It is decoupled from actual game truth.
 
+### Common Metadata (All Claims)
+- `schemaVersion`: 1
+- `claimId`: Engine-generated opaque ID.
+- `claimRevision`: 1 for new claims; `previous + 1` for amendments.
+- `actorId`: The actor making the claim.
+- `sourceSpeechActIds`: List of `AcceptedSpeechAct` IDs that established or repeated this claim.
+- `idempotencyKey`: `source AcceptedSpeechAct key` + claim kind.
+- `createdTurnId`: Turn ID when first created.
+- `createdStateVersion`: Resulting `stateVersion` after commit.
+- `status`: "asserted" (default).
+
+### Union Type Examples
+
+**RoleCanonicalClaim**
 ```json
 {
-  "schemaVersion": 1,
-  "claimId": "clm-456",
+  "type": "role_claim",
+  "claimId": "claim-1002",
   "claimRevision": 1,
-  "actorId": "npc2",
+  "actorId": "player",
   "claimedRole": "seer",
-  "claimedResults": [
-    { "targetId": "npc-aoi", "result": "not_werewolf", "day": 1 }
-  ],
-  "sourceSpeechActIds": ["act-1001"],
-  "idempotencyKey": "req-123:clm-0",
+  "sourceSpeechActIds": ["act-1002"],
+  "idempotencyKey": "req-123:alt-0:act-1:role_claim",
   "createdTurnId": "day-1-turn-4",
-  "createdStateVersion": 17,
+  "createdStateVersion": 18,
+  "repeatsClaimId": null,
+  "supersedesClaimId": null,
+  "contradictsClaimIds": [],
+  "status": "asserted"
+}
+```
+
+**ResultCanonicalClaim**
+```json
+{
+  "type": "result_claim",
+  "claimId": "claim-1001",
+  "claimRevision": 1,
+  "actorId": "player",
+  "targetId": "npc-beni",
+  "result": "werewolf",
+  "sourceSpeechActIds": ["act-1001"],
+  "idempotencyKey": "req-123:alt-0:act-0:result_claim",
+  "createdTurnId": "day-1-turn-4",
+  "createdStateVersion": 18,
   "repeatsClaimId": null,
   "supersedesClaimId": null,
   "contradictsClaimIds": [],
@@ -259,16 +351,13 @@ The authoritative record of an event in the game. All state changes that are pub
 
 ### Claim Management Rules
 
-- **Assertion vs. Truth:** The engine validates whether a claim is *permitted* (based on role policy), NOT if it is true. Lying is a valid game action.
-- **No Circular References:**
-  1. Engine validates `AcceptedSpeechAct`.
-  2. Engine prepares `CanonicalClaim` (references `sourceSpeechActIds`).
-  3. Engine prepares `PublicEvent` (references `claimId`).
-  4. Engine commits all objects in a single logical step.
-- **Repeats:** If an identical claim is made, a new record is created with `repeatsClaimId` pointing to the original.
-- **Amendments:** Use `supersedesClaimId` to correct a previous claim. The old claim remains in history.
-- **Contradictions:** Use `contradictsClaimIds` for assertions that logically conflict with previous ones. Both claims persist.
-- **Derived Rendering:** UI, logs, and NPC memory derive text from the structured data via pure functions. Internal IDs are never shown in the UI.
+- **Assertion vs. Truth:** Validation checks if the NPC is *permitted* by policy to make the claim, NOT if it's true.
+- **Reference Constraints:**
+  - `repeatsClaimId`: Set if the same actor makes the same claim. `supersedesClaimId` must be `null`.
+  - `supersedesClaimId`: Set for amendments. `claimRevision` must be > 1.
+  - `contradictsClaimIds`: Set if a new claim logically conflicts with previous one.
+- **No Circularity:** `AcceptedSpeechAct` -> `CanonicalClaim` -> `PublicEvent`.
+- **Atomic Creation:** If an utterance contains both role and result claims, two `CanonicalClaim` and two `PublicEvent` objects are created in the same logical commit.
 
 ## 12. `NpcReactionPlan` Schema
 
@@ -289,9 +378,9 @@ The engine generates the plan for an NPC's response. It contains NO private game
   ],
   "canonicalSegments": [
     {
-      "segmentId": "seg_1",
-      "type": "claim",
-      "text": "私は占い師です。"
+      "segmentId": "segment-1",
+      "type": "canonical_claim",
+      "claimId": "claim-1001"
     }
   ],
   "commentaryPlan": {
@@ -310,7 +399,23 @@ The engine generates the plan for an NPC's response. It contains NO private game
 }
 ```
 
-## 11. Input Interpreter Contract
+## 11. `InterpretationOutcome` and `ClarificationOutcome`
+
+Clarification requests do NOT generate `PublicEvent` or `AcceptedSpeechAct` objects and are not recorded in the public history.
+
+### InterpretationOutcome
+A non-persistent transient object describing the engine's initial triage of an `InterpretationResult`.
+- **Match:** `alternatives.length === 1`. Proceed to validation.
+- **Ambiguity:** `alternatives.length > 1`. Proceed to `ClarificationOutcome`.
+- **System Failure:** `interpretationFailure` is present. Triggers a system error message.
+
+### ClarificationOutcome
+A deterministic engine response when player input is ambiguous.
+- **State Impact:** None. `turnId` and `stateVersion` do not progress.
+- **UI Behavior:** Displays a button or text asking the user to choose or rephrase.
+- **Deterministic:** The response is generated by the engine, not an AI Renderer.
+
+## 12. Input Interpreter Contract
 
 - **Endpoint:** `POST /api/interpret-player-input`
 - **Validation:** If interpretations are ambiguous (low confidence margin) or invalid, the engine triggers a clarification response without updating state.
@@ -335,9 +440,19 @@ The browser-side `WerewolfGame` is the sole transaction authority.
 3.  **Commit Phase:** Single atomic update in browser (AcceptedSpeechAct, PublicEvent, CanonicalClaim, State increment).
 4.  **Reaction Phase:** Planning and Renderer request.
 
-### Idempotency & Stale Responses
-- **Owner:** Browser engine.
-- **Mechanism:** Track `processedRequestIds` and discard responses if `turnId` has already progressed.
+### Idempotency Key Generation Rules
+The browser engine generates deterministic keys to ensure idempotency across retries.
+- **SpeechAct:** `requestId` + alternative index + act index.
+- **CanonicalClaim:** `source AcceptedSpeechAct key` + claim kind (`role_claim` or `result_claim`).
+- **PublicEvent:** `source AcceptedSpeechAct key` + event kind.
+
+Retries with the same `requestId` and indices must result in the exact same `idempotencyKey`, preventing duplicate domain objects or events.
+
+### State Versioning Semantics
+- **AcceptedSpeechAct.acceptedStateVersion:** The `stateVersion` of the engine when validation was performed (Precondition version).
+- **CanonicalClaim.createdStateVersion:** The `stateVersion` resulting *after* the atomic commit (Resulting version).
+- **PublicEvent.stateVersion:** Same as the resulting version of its commit.
+- **Rule:** Objects created in the same logical commit must share the same resulting `stateVersion`.
 
 ## 15. Provider & HTTP Contracts
 
