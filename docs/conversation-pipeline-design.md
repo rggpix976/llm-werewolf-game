@@ -43,7 +43,7 @@
 
 ## 4. Scope and non-scope
 
-- **In Scope:** `SpeechActCandidate` schemas, AI Interpreter/Renderer contracts, browser-side validation and atomicity logic, phased migration plan.
+- **In Scope:** `SpeechActCandidate` schemas, AI Interpreter/Renderer contracts, browser-side validation and atomicity logic.
 - **Out of Scope:** Moving the game engine to the server, adding server-side persistence, changing core game rules (roles, phases). Experimental free-form AI commentary (Natural language generation) is currently out of scope to ensure authoritative consistency.
 
 ## 5. Terminology
@@ -63,7 +63,7 @@
 - Performs atomic state updates (claims, suspicion, history).
 - Generates `NpcReactionPlan` (discriminating between `canonical_only` and `controlled_commentary`).
 - Manages idempotency and stale response detection using `requestId` and `turnId`.
-- Owns all displayable text variants and templates.
+- Owns all displayable text variants (`ControlledCommentaryVariant`) and templates.
 
 ### Server (Proxy)
 - Proxies requests to AI providers.
@@ -111,110 +111,161 @@ The AI Interpreter model produces only the structured interpretation content.
 }
 ```
 
+### Interpretation Outcomes
+- **Uniqueness Requirement:** The engine only proceeds to state mutation if `alternatives.length === 1`.
+- **Ambiguity Handling:** If `alternatives.length > 1`, it is treated as an ambiguity failure and triggers a `ClarificationOutcome`.
+- **No Guessing:** confidence is diagnostic only. Automatic adoption of top alternatives is prohibited.
+- **Uninterpretable Case:** `UninterpretableCandidate` is used when the AI model successfully categorizes the input as incoherent or out-of-scope for the game rules.
+
 ## 8. `SpeechActCandidate` Types (Strict Discriminated Union)
 
 All candidate types follow a strict `additionalProperties: false` policy. Unknown fields are rejected. The AI must NOT include an authoritative `actorId`.
 
-### Candidate Type Definitions
+### Individual Type Definitions
 
 #### 1. NonGameStatementCandidate
-- `type`: "non_game_statement" (Discriminator)
-- `text` (Required, String, 1-500 chars)
-- `additionalProperties`: false
+- **type**: "non_game_statement" (Discriminator)
+- **sourceSpan**: `SourceSpan` (Required)
+- **additionalProperties**: false
 
 #### 2. QuestionCandidate
-- `type`: "question"
-- `targetId` (Required, String): Validated ID from `publicRoster`
-- `topic` (Required, Enum): "role", "vote", "opinion", "reason"
-- `additionalProperties`: false
+- **type**: "question"
+- **targetId**: String (Required): Validated ID from `publicRoster`
+- **topic**: Enum (Required): "role", "vote", "opinion", "reason"
+- **additionalProperties**: false
 
 #### 3. SuspicionCandidate
-- `type`: "suspicion"
-- `targetId` (Required, String): Validated ID from `publicRoster`
-- `reason` (Optional, String, 0-500 chars)
-- `additionalProperties`: false
+- **type**: "suspicion"
+- **targetId**: String (Required): Validated ID from `publicRoster`
+- **sourceSpan**: `SourceSpan` (Optional)
+- **additionalProperties**: false
 
 #### 4. VoteDeclarationCandidate
-- `type`: "vote_declaration"
-- `targetId` (Required, String): Validated ID from `publicRoster`
-- `additionalProperties`: false
+- **type**: "vote_declaration"
+- **targetId**: String (Required): Validated ID from `publicRoster`
+- **additionalProperties**: false
 
 #### 5. RoleClaimCandidate
-- `type`: "role_claim"
-- `claimedRole` (Required, Enum): "seer", "werewolf", "citizen"
-- `additionalProperties`: false
+- **type**: "role_claim"
+- **claimedRole**: Enum (Required): "seer", "werewolf", "citizen"
+- **additionalProperties**: false
 
 #### 6. ResultClaimCandidate
-- `type`: "result_claim"
-- `targetId` (Required, String): Validated ID from `publicRoster`
-- `result` (Required, Enum): "werewolf", "not_werewolf"
-- `additionalProperties`: false
+- **type**: "result_claim"
+- **targetId**: String (Required): Validated ID from `publicRoster`
+- **result**: Enum (Required): "werewolf", "not_werewolf"
+- **additionalProperties**: false
 
 #### 7. InformationRequestCandidate
-- `type`: "information_request"
-- `topic` (Required, Enum): "rules", "commands", "history"
-- `additionalProperties`: false
+- **type**: "information_request"
+- **topic**: Enum (Required): "rules", "commands", "history"
+- **additionalProperties**: false
 
 #### 8. UninterpretableCandidate
-- `type`: "uninterpretable"
-- `reason` (Required, Enum): "gibberish", "missing_required_reference", "unsupported_intent", "off_topic"
-- `explanation` (Optional, String, 0-500 chars)
-- `additionalProperties`: false
+- **type**: "uninterpretable"
+- **reason**: Enum (Required): "gibberish", "missing_required_reference", "unsupported_intent", "off_topic"
+- **additionalProperties**: false
+
+### SourceSpan
+- **start**: Integer (Required, Unicode code point index)
+- **end**: Integer (Required, Unicode code point index)
+- **additionalProperties**: false
 
 ## 9. `AcceptedSpeechAct` Types (Strict Discriminated Union)
 
 The engine-generated representation of a bound act.
 
 ### Metadata
-- `schemaVersion`: 1 (Integer, Required)
-- `speechActId`: String (Required)
-- `requestId`: String (Required)
-- `acceptedTurnId`: String (Required)
-- `acceptedStateVersion`: Integer (Required)
-- `actorId`: String (Required, Bound by engine)
-- `causationId`: String (Required)
-- `correlationId`: String (Required)
-- `idempotencyKey`: String (Required)
-- `additionalProperties`: false
+- **schemaVersion**: 1 (Integer, Required)
+- **speechActId**: String (Required)
+- **requestId**: String (Required)
+- **acceptedTurnId**: String (Required)
+- **acceptedStateVersion**: Integer (Required)
+- **actorId**: String (Required, Bound by engine)
+- **causationId**: String (Required)
+- **correlationId**: String (Required)
+- **idempotencyKey**: String (Required)
+- **additionalProperties**: false
+
+### Individual Types
+1. **AcceptedNonGameStatement**: `{ type: "accepted_non_game_statement", sourceSpan: SourceSpan, ...Metadata }`
+2. **AcceptedQuestion**: `{ type: "accepted_question", targetId: String, topic: Enum, ...Metadata }`
+3. **AcceptedSuspicion**: `{ type: "accepted_suspicion", targetId: String, sourceSpan: SourceSpan | null, ...Metadata }`
+4. **AcceptedVoteDeclaration**: `{ type: "accepted_vote_declaration", targetId: String, ...Metadata }`
+5. **AcceptedRoleClaim**: `{ type: "accepted_role_claim", claimedRole: Enum, ...Metadata }`
+6. **AcceptedResultClaim**: `{ type: "accepted_result_claim", targetId: String, result: Enum, ...Metadata }`
+7. **AcceptedInformationRequest**: `{ type: "accepted_information_request", topic: Enum, ...Metadata }`
 
 ## 10. `PublicEvent` Types (Strict Discriminated Union)
 
 Authoritative public records.
 
 ### Event Metadata
-- `schemaVersion`: 1 (Integer, Required)
-- `eventId`: String (Required)
-- `requestId`: String (Required)
-- `turnId`: String (Required)
-- `stateVersion`: Integer (Required)
-- `actorId`: String (Required)
-- `acceptedSpeechActId`: String (Required)
-- `causationId`: String (Required)
-- `correlationId`: String (Required)
-- `idempotencyKey`: String (Required)
-- `createdOrder`: Integer (Unique, Required)
-- `additionalProperties`: false
+- **schemaVersion**: 1 (Integer, Required)
+- **eventId**: String (Required)
+- **requestId**: String (Required)
+- **turnId**: String (Required)
+- **stateVersion**: Integer (Required)
+- **actorId**: String (Required)
+- **acceptedSpeechActId**: String (Required)
+- **causationId**: String (Required)
+- **correlationId**: String (Required)
+- **idempotencyKey**: String (Required)
+- **createdOrder**: Integer (Unique, Required)
+- **additionalProperties**: false
+
+### Individual Event Types
+1. **PublicStatementRecordedEvent**: `{ eventType: "public_statement_recorded", sourceSpan: SourceSpan, ...EventMetadata }`
+2. **PublicQuestionRecordedEvent**: `{ eventType: "public_question_recorded", targetId: String, topic: Enum, ...EventMetadata }`
+3. **SuspicionExpressedEvent**: `{ eventType: "suspicion_expressed", targetId: String, sourceSpan: SourceSpan | null, ...EventMetadata }`
+4. **VoteDeclaredEvent**: `{ eventType: "vote_declared", targetId: String, ...EventMetadata }`
+5. **RoleClaimRecordedEvent**: `{ eventType: "role_claim_recorded", claimId: String, ...EventMetadata }`
+6. **ResultClaimRecordedEvent**: `{ eventType: "result_claim_recorded", claimId: String, ...EventMetadata }`
 
 ## 11. `CanonicalClaim` Types (Strict Discriminated Union)
 
 `CanonicalClaim` is the single source of truth for assertions.
 
 ### Claim Metadata
-- `schemaVersion`: 1 (Integer, Required)
-- `claimId`: String (Required)
-- `claimRevision`: Integer (Required)
-- `actorId`: String (Required)
-- `sourceSpeechActIds`: Array of String (Required)
-- `idempotencyKey`: String (Required)
-- `createdTurnId`: String (Required)
-- `createdStateVersion`: Integer (Required)
-- `repeatsClaimId`: String | null (Required)
-- `supersedesClaimId`: String | null (Required)
-- `contradictsClaimIds`: Array of String (Required)
-- `status`: Enum "asserted" (Required)
-- `additionalProperties`: false
+- **schemaVersion**: 1 (Integer, Required)
+- **claimId**: String (Required)
+- **claimRevision**: Integer (Required)
+- **actorId**: String (Required)
+- **sourceSpeechActIds**: Array of String (Required)
+- **idempotencyKey**: String (Required)
+- **createdTurnId**: String (Required)
+- **createdStateVersion**: Integer (Required)
+- **repeatsClaimId**: String | null (Required)
+- **supersedesClaimId**: String | null (Required)
+- **contradictsClaimIds**: Array of String (Required)
+- **status**: Enum "asserted" (Required)
+- **additionalProperties**: false
 
-## 12. `NpcReactionPlan` Schema
+### Individual Claim Types
+1. **RoleCanonicalClaim**: `{ type: "role_claim", claimedRole: Enum, ...ClaimMetadata }`
+   - Forbidden: `targetId`, `result`
+2. **ResultCanonicalClaim**: `{ type: "result_claim", targetId: String, result: Enum, ...ClaimMetadata }`
+   - Forbidden: `claimedRole`
+
+### Claim Management Rules
+- **Amendment**: A new `CanonicalClaim` with `supersedesClaimId` pointing to a previous claim by the same actor.
+- **Repeat**: A new `CanonicalClaim` with `repeatsClaimId` pointing to a previous identical claim.
+- **Contradiction**: A new `CanonicalClaim` with `contradictsClaimIds` containing IDs of conflicting claims by the same actor.
+- **Exclusivity**: A claim cannot have both `repeatsClaimId` and `supersedesClaimId` populated.
+
+## 12. Candidate to Event Mapping Table
+
+| Candidate Type | Accepted Type | CanonicalClaim Type | PublicEvent Type | Record Created | Gameplay Effect | Display Source |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `non_game_statement` | `AcceptedNonGameStatement` | `none` | `public_statement_recorded` | Yes | `none` | Player `rawText` |
+| `question` | `AcceptedQuestion` | `none` | `public_question_recorded` | Yes | `none` | Player `rawText` |
+| `suspicion` | `AcceptedSuspicion` | `none` | `suspicion_expressed` | Yes | `suspicion_update` | Player `rawText` |
+| `vote_declaration` | `AcceptedVoteDeclaration` | `none` | `vote_declared` | Yes | `memory_update` | Player `rawText` |
+| `role_claim` | `AcceptedRoleClaim` | `RoleCanonicalClaim` | `role_claim_recorded` | Yes | `claim_registration` | Canonical Renderer |
+| `result_claim` | `AcceptedResultClaim` | `ResultCanonicalClaim` | `result_claim_recorded` | Yes | `claim_registration` | Canonical Renderer |
+| `information_request` | `AcceptedInformationRequest` | `none` | `none` | Yes (Internal) | `none` | `none` |
+
+## 13. `NpcReactionPlan` Schema
 
 The engine generates the plan for an NPC's response. It enforces a strict safety boundary by separating state-changing canonical segments from controlled reactive speech.
 
@@ -229,21 +280,48 @@ The engine generates the plan for an NPC's response. It enforces a strict safety
 - **maxChars**: 240 (Integer, Required)
 - **additionalProperties**: false
 
-### Render Modes
-- **canonical_only:** Used for state-changing acts (Claims, votes, suspicion). The engine renders the text entirely from structured data. The Renderer is NOT called.
-- **controlled_commentary:** Used for non-state-changing reactive speech. The AI selects an engine-approved `variantId`. No natural language is generated by the AI.
+#### SpeechActDescriptor
+- **type**: Enum "role_claim" | "result_claim" | "vote_declaration" | "suspicion" | "answer"
+- **targetId**: String | null
+- **claimedRole**: String | null
+- **result**: String | null
+- **additionalProperties**: false
 
-## 13. Input Interpreter Detailed Contract
+#### CanonicalSegment
+- **segmentId**: String (Required)
+- **type**: Enum "canonical_claim" | "canonical_vote"
+- **claimId**: String | null
+- **targetId**: String | null
+- **additionalProperties**: false
 
-### 13.1 Provider Interface
-```js
-interpretPlayerInput(request, { signal })
-```
-- **Input:** `InterpreterRequest`
-- **Context:** `signal` (AbortSignal, Optional)
-- **Output:** `InterpreterProviderResult`
+#### RendererPolicy
+- **Enum**: "stay_in_character", "be_polite", "avoid_redundancy"
 
-### 13.2 Interpreter Request Schema (`InterpreterRequest`)
+#### ControlledCommentaryPlan
+- **intent**: String (Required)
+- **allowedVariantIds**: Array of String (Required)
+- **allowedPublicReferenceIds**: Array of String (Required)
+- **additionalProperties**: false
+
+## 14. `ControlledCommentaryVariant` Registry
+
+The registry is engine-owned and resides in the browser application. AI models select only the `variantId`.
+
+### ControlledCommentaryVariant
+- **schemaVersion**: 1 (Integer, Required)
+- **variantId**: String (Required)
+- **variantVersion**: Integer (Required)
+- **locale**: String (Required, e.g., "ja-JP")
+- **intent**: String (Required)
+- **text**: String (Required, may contain placeholders like `{actorId}`)
+- **allowedRenderMode**: "controlled_commentary" (Required)
+- **placeholderDefinitions**: `Object` (Required)
+- **maximumRenderedChars**: Integer (Required)
+- **additionalProperties**: false
+
+## 15. Input Interpreter Detailed Contract
+
+### 15.1 Interpreter Request Schema (`InterpreterRequest`)
 
 ```json
 {
@@ -291,16 +369,19 @@ interpretPlayerInput(request, { signal })
 ```
 
 #### Nested Schemas
-- **PlayerContext:** `{ schemaVersion: 1, actorId: "player", additionalProperties: false }`
-- **PublicRosterEntry:** `{ id: String, displayName: String, alive: Boolean, publiclyKnownStatus: Enum "normal"|"suspected"|"executed"|"attacked", additionalProperties: false }`
-- **PublicContext:** `{ recentEvents: Array<PublicEventProjection>, publicClaims: Array<PublicClaimProjection>, publicVoteHistory: Array<PublicVoteProjection>, publicExecutionHistory: Array<PublicExecutionProjection>, publicHistoryWindow: Integer, additionalProperties: false }`
-- **InterpreterLimits:** `{ maximumAlternatives: Integer, maximumSpeechActsPerAlternative: Integer, additionalProperties: false }`
+- **PlayerContext**: `{ schemaVersion: 1, actorId: "player", additionalProperties: false }`
+- **PublicRosterEntry**: `{ id: String, displayName: String, alive: Boolean, publiclyKnownStatus: Enum "normal"|"suspected"|"executed"|"attacked", additionalProperties: false }`
+  - `suspected`: Derived deterministically from public suspicion events, not internal scores.
+- **PublicContext**: `{ recentEvents: Array<PublicEventProjection>, publicClaims: Array<PublicClaimProjection>, publicVoteHistory: Array<PublicVoteProjection>, publicExecutionHistory: Array<PublicExecutionProjection>, publicHistoryWindow: Integer, additionalProperties: false }`
 
 #### Projection Schemas (Public-only)
-- **PublicEventProjection:** `{ eventId: String, eventType: String, actorId: String, turnId: String, additionalProperties: false }`
-- **PublicClaimProjection:** `{ claimId: String, type: String, actorId: String, targetId: String | null, claimedRole: String | null, result: String | null, additionalProperties: false }`
+- **PublicEventProjection**: `{ schemaVersion: 1, eventId: String, eventType: String, actorId: String, turnId: String, additionalProperties: false }`
+- **RoleClaimProjection**: `{ schemaVersion: 1, claimId: String, type: "role_claim", actorId: String, claimedRole: String, additionalProperties: false }`
+- **ResultClaimProjection**: `{ schemaVersion: 1, claimId: String, type: "result_claim", actorId: String, targetId: String, result: String, additionalProperties: false }`
+- **PublicVoteProjection**: `{ schemaVersion: 1, actorId: String, targetId: String, turnId: String, additionalProperties: false }`
+- **PublicExecutionProjection**: `{ schemaVersion: 1, actorId: String, turnId: String, additionalProperties: false }`
 
-### 13.3 Interpreter Output Schemas
+### 15.2 Interpreter Output Schemas
 
 #### InterpreterProviderResult
 - **schemaVersion**: 1 (Required)
@@ -317,7 +398,7 @@ interpretPlayerInput(request, { signal })
 - **providerResult**: `InterpreterProviderResult` (Required)
 - **additionalProperties**: false
 
-### 13.4 Input and Output Limits
+### 15.3 Input and Output Limits
 | Limit | Default Value |
 | :--- | :--- |
 | `maximum rawText characters` | 1000 |
@@ -334,23 +415,10 @@ interpretPlayerInput(request, { signal })
 | `maximum request bytes` | 65536 (64 KiB) |
 | `maximum model-output bytes` | 4096 (4 KiB) |
 | `maximum HTTP response bytes` | 8192 (8 KiB) |
-| `timeout` | 15000ms (Global deadline) |
-| `maximumAttempts` | 3 (Including first call) |
 
-**Nesting Depth Calculation:**
-- Root object depth = 1.
-- Each nested object or array increments depth by 1.
-- Primitives do not increment depth.
+## 16. NPC Utterance Renderer Detailed Contract
 
-## 14. NPC Utterance Renderer Detailed Contract
-
-### 14.1 Provider Interface
-```js
-renderNpcUtterance(request, { signal })
-```
-
-### 14.2 Renderer Request Schema (`RendererRequest`)
-Used only when `renderMode` is `controlled_commentary`.
+### 16.1 Renderer Request Schema (`RendererRequest`)
 
 ```json
 {
@@ -370,37 +438,23 @@ Used only when `renderMode` is `controlled_commentary`.
     "intent": "ponder",
     "allowedVariantIds": [
       "ponder_neutral",
-      "ponder_suspicious",
-      "ponder_confused"
+      "ponder_suspicious"
     ],
-    "authorizedPublicFacts": [
-      "I was asked about the rules",
-      "It is currently Day 1"
-    ]
+    "allowedPublicReferenceIds": ["event-1001"]
   },
-  "allowedPublicReferences": {
-    "roster": ["player", "npc-beni"],
-    "events": ["event-1001"]
-  },
-  "styleHints": ["calm", "polite"],
-  "limits": {
-    "maxChars": 240
-  },
-  "policies": ["stay_in_character"],
+  "publicRoster": [],
+  "publicEvents": [],
+  "publicClaims": [],
+  "limits": { "maxChars": 240 },
   "locale": "ja-JP"
 }
 ```
 
-#### Detailed Schemas
-- **NpcActorProjection:** `{ id: String, name: String, personality: String, speechStyle: String, additionalProperties: false }`
-- **ControlledCommentaryPlan:** `{ intent: String, allowedVariantIds: Array<String>, authorizedPublicFacts: Array<String>, additionalProperties: false }`
-- **RendererPolicies:** Enum Array ["stay_in_character", "be_polite"]
-
-### 14.3 Renderer Output Schemas
+### 16.2 Renderer Output Schemas
 
 #### RendererModelOutput
 - **schemaVersion**: 1 (Required)
-- **selectedVariantId**: String (Required, Must be from `allowedVariantIds`)
+- **selectedVariantId**: String (Required, must be in `allowedVariantIds`)
 - **additionalProperties**: false
 
 ```json
@@ -427,30 +481,23 @@ Used only when `renderMode` is `controlled_commentary`.
 - **providerResult**: `RendererProviderResult` (Required)
 - **additionalProperties**: false
 
-### 14.4 Renderer Correlation Rules
-The browser engine MUST discard the response and perform no state mutation if any of the following do not match the pending request context:
-- `requestId`
-- `reactionPlanId`
-- `turnId`
-- `stateVersion`
-- `schemaVersion`
+## 17. Operational Logic: Retry and Deadline
 
-## 15. Operational Logic: Retry and Deadline
+### 17.1 Unified Policy
+- **Global Deadline**: 15 seconds (Total time for all attempts).
+- **Maximum Attempts**: 3 (Including first attempt).
+- **Per-Attempt Timeout**: Remaining global deadline, capped at 5 seconds.
+- **Backoff**: 1 second then 2 seconds (Linear).
+- **AbortSignal**: Must interrupt the current request, provider call, and any pending backoff sleep immediately.
 
-### 15.1 Unified Policy
-- **Global Deadline:** 15 seconds (Total time for all attempts).
-- **Maximum Attempts:** 3 (Including first attempt).
-- **Per-Attempt Timeout:** Remaining global deadline, capped at 5 seconds.
-- **Backoff:** 1 second then 2 seconds (Linear).
-- **AbortSignal:** Must interrupt the current request, provider call, and any pending backoff sleep immediately.
+### 17.2 Correlation Rules
+The browser engine MUST discard the response if any of the following do not match the pending request context:
+- `requestId`, `turnId`, `stateVersion`, `schemaVersion`.
+- For Renderer: `reactionPlanId`.
 
-### 15.2 Retry Eligibility
-- **Retryable Errors:** 429 (Rate Limit), Transient connection failure, Provider 5xx, Timeout.
-- **Non-Retryable Errors:** 400 (Invalid Client Schema/JSON), 413 (Payload Too Large), 502 (Provider Auth/Schema Failure), Abort, Stale Context (Turn/Version mismatch).
+## 18. HTTP & Error Contracts
 
-## 16. HTTP & Error Contracts
-
-### 16.1 Endpoint Definitions
+### 18.1 Endpoint Definitions
 - **POST /api/interpret-player-input**
 - **POST /api/render-npc-utterance**
 
@@ -460,27 +507,27 @@ The browser engine MUST discard the response and perform no state mutation if an
 | **413** | `body_too_large` | Body exceeds 64 KiB. |
 | **415** | `unsupported_media_type` | Not `application/json`. |
 | **429** | `server_rate_limited` | Rate limit exceeded. |
-| **502** | `invalid_provider_response` | Provider returned malformed/invalid JSON. |
+| **502** | `invalid_provider_response` | Provider returned malformed/invalid JSON or schema mismatch. |
 | **502** | `provider_auth_failure` | Internal server error (Credentials). |
 | **503** | `provider_unavailable` | Upstream provider down. |
 | **504** | `provider_timeout` | Upstream provider timed out. |
 
-### 16.2 Error Envelope (ErrorEnvelope)
-- **schemaVersion**: 1 (Required)
-- **requestId**: String | null (Required, null if unparseable)
+### 18.2 Error Envelope (ErrorEnvelope)
+- **schemaVersion**: 1 (Integer, Required)
+- **requestId**: String | null (Required)
 - **correlationId**: String (Required, Server-generated)
 - **error**: `ErrorDetail` (Required)
 - **additionalProperties**: false
 
 #### ErrorDetail
-- **code**: Enum (Required, See Table 16.1)
+- **code**: Enum (Required)
 - **retryable**: Boolean (Required)
 - **additionalProperties**: false
 
-## 17. Diagnostics Schema
+## 19. Diagnostics Schema
 
 ### Diagnostics
-- **schemaVersion**: 1 (Required)
+- **schemaVersion**: 1 (Integer, Required)
 - **providerName**: String (Required)
 - **modelId**: String | null (Required)
 - **latencyMs**: Integer (Required, Non-negative)
@@ -489,3 +536,14 @@ The browser engine MUST discard the response and perform no state mutation if an
 - **schemaValidation**: Enum "passed"|"failed" (Required)
 - **errorCode**: String | null (Required)
 - **additionalProperties**: false
+
+## 20. Operational Safety
+
+### Event Replay Idempotency
+- **eventId** and **idempotencyKey** are used for deduplication.
+- Replaying a previously processed event is a NO-OP and must not re-apply gameplay effects.
+
+### stateVersion Semantics
+- **acceptedStateVersion**: The version used for validation.
+- **createdStateVersion**: The resulting version after atomic commit.
+- State mutation only occurs if the current engine version matches the `acceptedStateVersion` at the time of commit.
