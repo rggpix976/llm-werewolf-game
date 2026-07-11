@@ -1,6 +1,7 @@
 import { WerewolfGame } from "../src/gameEngine.mjs";
 import { HttpResponseProvider, SessionManager } from "./httpResponseProvider.mjs";
 import { PseudoResponseProvider } from "../src/responseProvider.mjs";
+import { InterpreterShadowClient } from "./interpreterShadowClient.mjs";
 
 const elements = {
   statusLine: document.querySelector("#statusLine"),
@@ -30,6 +31,8 @@ let devLogFilterNpc = "";
 let runtimeConfig = null;
 let sessionManager = new SessionManager();
 let currentGameId = 0;
+let interpreterShadowClient = null;
+let shadowObservations = [];
 
 initializeApp();
 
@@ -73,6 +76,7 @@ elements.askForm.addEventListener("submit", async (event) => {
   }
 
   const gameIdAtSubmit = currentGameId;
+  if (runtimeConfig?.interpreterShadowMode && interpreterShadowClient) interpreterShadowClient.observe({ snapshot, rawText: input, gameId: gameIdAtSubmit, targetNpcId: target });
   const result = await dispatch({
     type: "ask_npc",
     target,
@@ -115,6 +119,8 @@ function startNewGame() {
   const responseProvider = new HttpResponseProvider({
     sessionManager
   });
+  interpreterShadowClient = runtimeConfig?.interpreterShadowMode ? new InterpreterShadowClient({ provider: responseProvider, sessionManager, observer: (entry) => { shadowObservations = [...shadowObservations.slice(-99), Object.freeze({ ...entry })]; } }) : null;
+  shadowObservations = [];
 
   game = WerewolfGame.create({
     seed: Date.now(),
