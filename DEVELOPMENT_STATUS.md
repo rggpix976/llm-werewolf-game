@@ -1,9 +1,10 @@
 # Development Status
 
-Last updated: 2026-07-01
+Last updated: 2026-07-11
 
 ## Current State
 
+- Conversation pipeline migration Phase 1 pure domain definitions, strict validators, deterministic ID helpers, canonical renderers, and unit tests are implemented but intentionally not integrated into production game flow.
 - 5-player werewolf prototype is implemented.
 - Current roles are 1 werewolf, 1 seer, and 3 citizens.
 - The game can run through player question, NPC response, vote, execution, night, seer action, werewolf attack, and win check.
