@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-11
+
+- Added unused, side-effect-free conversation pipeline Phase 1 domain definitions and strict runtime validators.
+- Added deterministic claim idempotency helpers, canonical claim/vote/suspicion renderers, exact commentary-variant replay lookup, and unit tests.
+- Production game flow, providers, HTTP endpoints, browser behavior, and game-state mutation remain unchanged.
+
 ## 2026-07-01
 
 - Recorded successful real OpenAI smoke-test result (`npm run smoke:openai`).
