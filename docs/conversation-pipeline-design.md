@@ -305,7 +305,7 @@ Both have no optional/null fields and `additionalProperties: false`; the fields 
 
 ### PlayerUtterancePublishedEvent
 
-This existing schema is retained as the compatibility alias of `PlayerUtterancePublishedRecord` during migration. It requires `schemaVersion: 1`, `publicationId: ID`, discriminator `recordType: "player_utterance_published"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `gameStateVersion: integer >= 0`, `occurredPhase: GamePhase`, `actorId: ID`, `inputRecordId: ID`, `displayPlanId: ID`, `idempotencyKey: ID`, and `displayOrder: integer >= 0`. It has no optional/null fields and `additionalProperties: false`.
+This existing schema is retained as the compatibility alias of `PlayerUtterancePublishedRecord` during migration. It requires `schemaVersion: 1`, `publicationId: ID`, discriminator `recordType: "player_utterance_published"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `gameStateVersion: integer >= 0`, `occurredPhase: GamePhase`, `actorId: ID`, `inputRecordId: ID`, `displayPlanId: ID`, `idempotencyKey: ID`, `publicationSlotOrder: integer >= 0`, and `recordAppendOrder: integer >= 0`. It has no optional/null fields and `additionalProperties: false`.
 
 Exactly one is created per committed displayable player input, including claim-only, multi-act, question-only, non-game statement, and accepted information-request input. All accepted player inputs in this baseline are displayable; `UninterpretableCandidate` uses clarification. The record is the sole display trigger. It lives in the display log, not `PublicEvent`, and never changes game-rule state/version. Its references resolve to the same player commit. A display plan belongs to exactly one publication. Duplicate replay returns stored results and never displays again.
 
@@ -329,7 +329,7 @@ Semantic events never initiate display. The publication event resolves its `inpu
 - **claimRevision**: Integer (Required, starts at 1)
 - **actorId**: String (Required)
 - **source**: `ClaimSource` (Required)
-- **idempotencyKey**: String (Required, `source act key + claimKind`)
+- **idempotencyKey**: Sha256Fingerprint (Required, provenance-specific derivation below)
 - **createdTurnId**: String (Required)
 - **createdStateVersion**: Integer (Required)
 - **repeatsClaimId**: String | null (Required)
@@ -363,7 +363,7 @@ Examples: `Beni is werewolf` followed by `Beni is not_werewolf` is a contradicti
 - **capturedStateVersion**: Integer (Required, minimum 0)
 - **actorId**: ID (Required, bound by browser engine)
 - **rawText**: String (Required, 1-2000 Unicode scalar values, authoritative player text)
-- **locale**: LocaleTag (Required)
+- **locale**: SupportedLocale (Required)
 - **createdOrder**: Integer (Required, minimum 0 and unique within session)
 - **additionalProperties**: false
 
@@ -375,6 +375,8 @@ Examples: `Beni is werewolf` followed by `Beni is not_werewolf` is a contradicti
 - `NpcReactionClaimSource` requires discriminator `sourceType: "npc_reaction"`, `reactionPlanId: ID`, `descriptorId: ID`, `originatingInputRecordId: ID`, and `reactionCommitRequestId: ID`.
 
 Both members have no optional/null fields and `additionalProperties: false`; cross-member fields are forbidden. Player accepted acts are unique, belong to one player commit/input and actor, and match claim actor. NPC plan and descriptor are committed, descriptor type matches claim type, plan NPC equals claim actor, and originating input caused the reaction. NPC claims never borrow a player accepted-act ID. Both role and result claims use this union.
+
+Claim idempotency uses deterministic canonical JSON with sorted object keys and no display text or locale. Player key is `SHA-256(playerCommitRequestId, sorted acceptedSpeechActIds, actorId, claimKind)`. NPC key is `SHA-256(reactionCommitRequestId, reactionPlanId, descriptorId, actorId, claimKind)`. Equal key and normalized payload returns the existing claim; equal key with different payload is `idempotency_conflict`; replay never creates a new claim ID.
 
 The record is created as an immutable staged value when input is received, before provider work, and is persisted authoritatively only by the atomic commit. Pending state may reference the staged ID. It is separate from prompts and model output. AI never rewrites `rawText` or binds `actorId`. Request, correlation, turn, and captured version must match the pending request; replay reuses the committed record. The raw-text bound exactly matches `InterpreterRequest`.
 
@@ -399,17 +401,17 @@ Segments follow source order. Segment IDs are unique. Raw spans belong to the pl
 
 `NpcReactionPlan = CanonicalOnlyReactionPlan | ControlledCommentaryReactionPlan`, discriminated by `renderMode`.
 
-For both members, `causationEventIds` contains only game-rule `PublicEvent` IDs committed before `NpcReactionPreparation` begins. Same-reaction events, plan-derived events, uncommitted events, and all display-log records are forbidden. Reaction-derived claims/events point forward to the plan and descriptor instead; this prevents causation cycles.
+For both members, `originatingInputRecordId` is mandatory and references one committed `PlayerInputRecord`; `locale` is the originating record's `SupportedLocale` and is immutable on replay. The origin ID must equal every derived NPC claim source, event source, pending Renderer, and reservation. `causationEventIds` is auxiliary and contains 0-16 unique game-rule `PublicEvent` IDs committed before `NpcReactionPreparation` begins. Information-request-only input may use `[]`; when semantic events exist, their relevant IDs are normally included. Same-reaction, plan-derived, uncommitted, duplicate, cyclic, and display-log references are forbidden.
 
 ### CanonicalOnlyReactionPlan
-- **Required**: `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `causationEventIds: ID[1..16]`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `renderMode: "canonical_only"`, `intendedSpeechActs: CanonicalSpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `canonicalSegments: CanonicalSegment[1..16]`, `maxChars: integer 1..1000`
+- **Required**: `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `originatingInputRecordId: ID`, `locale: SupportedLocale`, `causationEventIds: ID[0..16]`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `renderMode: "canonical_only"`, `intendedSpeechActs: CanonicalSpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `canonicalSegments: CanonicalSegment[1..16]`, `maxChars: integer 1..1000`
 - **Forbidden**: `commentaryPlan`, `allowedVariants`
 - **additionalProperties**: false
 
 Every plan containing a state-changing descriptor uses this type. `CanonicalSpeechActDescriptor` is exactly `RoleClaimDescriptor | ResultClaimDescriptor | VoteDeclarationDescriptor | SuspicionDescriptor`; answers, acknowledgements, pondering, declines, clarification, and every other non-state-changing descriptor are forbidden. Its ordered canonical segments completely represent every intended descriptor. It never invokes the Renderer; only the engine-owned canonical renderer displays it.
 
 ### ControlledCommentaryReactionPlan
-- **Required**: `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `causationEventIds: ID[1..16]`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `renderMode: "controlled_commentary"`, `intendedSpeechActs: CommentarySpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `commentaryPlan: ControlledCommentaryPlan`, `maxChars: integer 1..1000`
+- **Required**: `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `originatingInputRecordId: ID`, `locale: SupportedLocale`, `causationEventIds: ID[0..16]`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `renderMode: "controlled_commentary"`, `intendedSpeechActs: CommentarySpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `commentaryPlan: ControlledCommentaryPlan`, `maxChars: integer 1..1000`
 - **Forbidden**: `canonicalSegments`
 - **additionalProperties**: false
 
@@ -459,7 +461,7 @@ Descriptor IDs are engine-generated, unique within the plan, immutable on replay
 - **schemaVersion**: 1 (Integer, Required)
 - **variantId**: ID (Required, Max 64 chars)
 - **variantVersion**: Integer (Required, Min 1)
-- **locale**: LocaleTag (Required)
+- **locale**: SupportedLocale (Required)
 - **renderMode**: Literal `controlled_commentary` (Required)
 - **intent**: CommentaryIntent (Required)
 - **text**: String (Required, 1-240 chars, NO placeholders)
@@ -475,14 +477,14 @@ The registry key is `(variantId, variantVersion, locale)`. Entries are immutable
 - **schemaVersion**: 1 (Required)
 - **variantId**: ID (Required, Max 64 chars)
 - **variantVersion**: Integer (Required, Min 1)
-- **locale**: LocaleTag (Required)
+- **locale**: SupportedLocale (Required)
 - **intent**: CommentaryIntent (Required)
 - **toneTags**: Array of ToneTag (Required, 0-4 unique items)
 - **additionalProperties**: false
 
 ### RendererRequest and RendererModelOutput
 
-`RendererRequest` requires `schemaVersion: 1`, `requestId: ID`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `locale: LocaleTag`, `renderMode: "controlled_commentary"`, `commentaryPlan: ControlledCommentaryPlan`, `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, `allowedPublicReferenceIds: ID[0..32]`, and `allowedVariants: AllowedCommentaryVariantProjection[1..8]`; it has no optional fields and `additionalProperties: false`.
+`RendererRequest` requires `schemaVersion: 1`, `requestId: ID`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `locale: SupportedLocale`, `renderMode: "controlled_commentary"`, `commentaryPlan: ControlledCommentaryPlan`, `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, `allowedPublicReferenceIds: ID[0..32]`, and `allowedVariants: AllowedCommentaryVariantProjection[1..8]`; it has no optional fields and `additionalProperties: false`.
 
 Every allowed public reference ID is unique and exists in one of the same request's public projection arrays; private and unknown IDs are prohibited. Projection IDs are globally unambiguous within the request. Allowed variants have unique `(variantId, variantVersion)` pairs, and a request must not contain multiple versions of one `variantId`.
 
@@ -513,7 +515,7 @@ Schema-valid example:
 
 ### SelectedCommentaryVariant
 
-The persisted selection requires exactly `variantId: ID`, `variantVersion: integer >= 1`, and `locale: LocaleTag`, with `additionalProperties: false`. Replay resolves this exact registry key and never substitutes the latest version. Disabled or retired variants remain available for historical reconstruction.
+The persisted selection requires exactly `variantId: ID`, `variantVersion: integer >= 1`, and `locale: SupportedLocale`, with `additionalProperties: false`. Replay resolves this exact registry key and never substitutes the latest version or current UI locale. Disabled or retired variants remain available for historical reconstruction.
 
 ## 15. Public Projections (Strict Schemas)
 
@@ -621,27 +623,35 @@ Canonical-only plans display immediately after commit, never call Renderer, and 
 
 ### DisplayPublicationRecord (Separate Append-only Display Log)
 
-`DisplayPublicationRecord = PlayerUtterancePublishedRecord | NpcCanonicalUtterancePublishedRecord | NpcUtterancePublicationReserved | NpcUtterancePublicationFinalized`, discriminated by `recordType`. This log is session-authoritative for replay/UI only, has its own monotonic `displayOrder`, is excluded from game-rule `PublicEvent`, and never affects phase, permissions, victory, or game `stateVersion`. Renderer delay never blocks game progression.
+`DisplayPublicationRecord = PlayerUtterancePublishedRecord | NpcCanonicalUtterancePublishedRecord | NpcUtterancePublicationReserved | NpcUtterancePublicationFinalized`, discriminated by `recordType`. This log is session-authoritative for replay/UI only, is excluded from game-rule `PublicEvent`, and never affects phase, permissions, victory, or game `stateVersion`. `publicationSlotOrder` is allocated once per publication ID and determines conversation position; `recordAppendOrder` is unique/monotonic per appended record and determines audit processing only. A reservation is never rendered as speech. Finalization resolves content into its existing slot, so delay never reorders later utterances; an unresolved slot shows an engine-owned loading indicator until same-session fallback policy finalizes it.
 
 Phase 4 moves player publication into this log while retaining `PlayerUtterancePublishedEvent` as a read-compatibility alias; Phase 9 removes consumers that treat the alias as a game-rule event after replay fixtures are migrated.
 
-`NpcCanonicalUtterancePublishedRecord` requires `schemaVersion: 1`, discriminator `recordType: "npc_canonical_published"`, `publicationId: ID`, `reactionPlanId: ID`, `reactionCommitRequestId: ID`, `correlationId: ID`, `turnId: ID`, `reactionResultingStateVersion: integer >= 1`, `actorId: ID`, `canonicalSegmentIds: ID[1..16]`, and `displayOrder: integer >= 0`, with no optional/null fields and `additionalProperties: false`. Canonical-only creates this exactly once inside `NpcReactionCommit` and displays immediately.
+`NpcCanonicalUtterancePublishedRecord` requires `schemaVersion: 1`, discriminator `recordType: "npc_canonical_published"`, `publicationId: ID`, `reactionPlanId: ID`, `reactionCommitRequestId: ID`, `originatingInputRecordId: ID`, `correlationId: ID`, `turnId: ID`, `reactionResultingStateVersion: integer >= 1`, `actorId: ID`, `locale: SupportedLocale`, `canonicalRendererVersion: integer >= 1`, `canonicalSegmentIds: ID[1..16]`, `publicationSlotOrder: integer >= 0`, and `recordAppendOrder: integer >= 0`, with no optional/null fields and `additionalProperties: false`. Canonical-only creates this exactly once inside `NpcReactionCommit`. Origin and locale match the plan/input. Replay uses stored locale/renderer version plus segments, never current UI locale; canonical text is not stored.
 
 ### NpcUtterancePublicationReserved
 
-Controlled commentary creates exactly one reservation inside `NpcReactionCommit`, after its plan is prepared but in the same atomic commit. The strict record requires `schemaVersion: 1`, discriminator `recordType: "npc_publication_reserved"`, `publicationId: ID`, `reservationId: ID`, `reactionPlanId: ID`, `reactionCommitRequestId: ID`, `correlationId: ID`, `turnId: ID`, `reactionResultingStateVersion: integer >= 1`, `actorId: ID`, `renderMode: "controlled_commentary"`, `fallbackVariantId: ID`, `fallbackVariantVersion: integer >= 1`, `status: "reserved"`, and `displayOrder: integer >= 0`; it has no optional/null fields and `additionalProperties: false`.
+Controlled commentary creates exactly one reservation inside `NpcReactionCommit`, after its plan is prepared but in the same atomic commit. The strict record requires `schemaVersion: 1`, discriminator `recordType: "npc_publication_reserved"`, `publicationId: ID`, `reservationId: ID`, `reactionPlanId: ID`, `reactionCommitRequestId: ID`, `originatingInputRecordId: ID`, `correlationId: ID`, `turnId: ID`, `reactionResultingStateVersion: integer >= 1`, `actorId: ID`, `locale: SupportedLocale`, `renderMode: "controlled_commentary"`, `fallbackVariantId: ID`, `fallbackVariantVersion: integer >= 1`, `status: "reserved"`, `publicationSlotOrder: integer >= 0`, and `recordAppendOrder: integer >= 0`; it has no optional/null fields and `additionalProperties: false`.
 
-`publicationId` is stable for the lifecycle; `reservationId` identifies this append-only record. The fallback pair is enabled, locale/intent-compatible, and registry-backed. Neither record nor fields are ever updated, replaced, or deleted. Failure paths and recovery keep the same publication ID.
+`publicationId` and slot order are stable for the lifecycle; `reservationId` identifies this append-only record. The fallback registry key is exactly `(fallbackVariantId, fallbackVariantVersion, locale)`. Locale matches plan and originating input. Neither record nor fields are updated, replaced, or deleted.
 
 ### NpcUtterancePublicationFinalized
 
-This append-only controlled-commentary record requires `schemaVersion: 1`, discriminator `recordType: "npc_publication_finalized"`, `finalizationId: ID`, `publicationId: ID`, `reservationId: ID`, `reactionPlanId: ID`, `rendererRequestId: ID`, `correlationId: ID`, `turnId: ID`, `stateVersion: integer >= 1` (the reaction's already committed resulting version), `actorId: ID`, `selectedVariantId: ID`, `selectedVariantVersion: integer >= 1`, `finalizationReason: FinalizationReason`, `fallbackUsed: boolean`, and `displayOrder: integer >= 0`; it has no optional/null fields and `additionalProperties: false`.
+This append-only controlled-commentary record requires `schemaVersion: 1`, discriminator `recordType: "npc_publication_finalized"`, `finalizationId: ID`, `publicationId: ID`, `reservationId: ID`, `reactionPlanId: ID`, `source: FinalizationSource`, `correlationId: ID`, `turnId: ID`, `stateVersion: integer >= 1` (the reaction's already committed resulting version), `actorId: ID`, `locale: SupportedLocale`, `selectedVariantId: ID`, `selectedVariantVersion: integer >= 1`, `finalizationReason: FinalizationReason`, `fallbackUsed: boolean`, `publicationSlotOrder: integer >= 0`, `recordAppendOrder: integer >= 0`, and `createdAt: RFC3339Utc`; it has no optional/null fields and `additionalProperties: false`.
 
-`FinalizationReason` is the closed enum `renderer_selected | renderer_timeout_fallback | renderer_abort_fallback | renderer_error_fallback | renderer_invalid_output_fallback | session_recovery_fallback`. Selected pairs exist in the engine registry and match the reservation/allowed variants. Timeout, abort, provider failure, or invalid output always selects the reserved fallback. Renderer failure never rolls back reaction state.
+`FinalizationSource` is a versioned strict discriminated-union type. Its baseline member set is exactly `RendererRequestFinalizationSource`, which requires discriminator `sourceType: "renderer_request"` and `rendererRequestId: ID`, forbids recovery fields, and has `additionalProperties: false`. It is used for success, timeout, abort, provider error, and invalid output; at append time the ID resolves to the still-active `PendingRendererRequest` and matches plan, publication, and locale. The embedded source is a self-contained provenance snapshot after validation; replay does not dereference runtime pending state. A future schema version may expand the union to `RendererRequestFinalizationSource | RecoveryFinalizationSource`; the reserved future member would require `sourceType: "session_recovery"`, `recoveryId`, and `recoveredSessionId`, and forbid `rendererRequestId`, but baseline validators reject it.
 
-Finalization is compare-and-set on unfinalized `publicationId`: reservation exists, plan and pending renderer request match, and selected pair is allowed. First successful finalizer wins and appends exactly one record. An identical duplicate returns the stored result; a different pair/reason is `idempotency_conflict`. If timeout fallback races late Renderer success, the winner remains visible and the late result is discarded. Reload/session recovery finalizes every unresolved reservation with fallback; session destruction attempts the same before disposal. Reservations are never left indefinitely unresolved.
+`FinalizationReason` is the baseline closed enum `renderer_selected | renderer_timeout_fallback | renderer_abort_fallback | renderer_error_fallback | renderer_invalid_output_fallback`. Selected registry key is exactly `(selectedVariantId, selectedVariantVersion, locale)` and matches the reservation. Timeout, abort, provider failure, or invalid output selects the reserved fallback key. Missing exact selected and fallback keys is a design error. Renderer failure never rolls back reaction state.
 
-`NpcPublicationFinalizationResult` requires `schemaVersion: 1`, `publicationId: ID`, `reservationId: ID`, `finalizationId: ID`, `rendererRequestId: ID`, `selectedVariantId: ID`, `selectedVariantVersion: integer >= 1`, `fallbackUsed: boolean`, and `createdAtOrder: integer >= 0`, with no optional fields and `additionalProperties: false`. Duplicate finalization returns this stored result.
+Finalization is compare-and-set on unfinalized `publicationId`: reservation exists, plan and pending renderer request match, locale matches, and selected triple is allowed. First successful finalizer wins and appends exactly one record. An identical duplicate returns stored result; a different result is conflict. Timeout fallback wins races against late success when it finalizes first; later output is discarded and never changes display.
+
+Required same-session order is: detect success/failure/timeout/abort; validate reservation; append finalization; persist finalization result; mark pending renderer terminal; remove it from active map. Pending is never removed before durable in-session finalization; failed finalization is safely retryable, and its audit-ring copy is never the authoritative source reference.
+
+`NpcPublicationFinalizationResult` requires `schemaVersion: 1`, `publicationId: ID`, `reservationId: ID`, `finalizationId: ID`, `reactionPlanId: ID`, `source: FinalizationSource`, `locale: SupportedLocale`, `selectedVariantId: ID`, `selectedVariantVersion: integer >= 1`, `fallbackUsed: boolean`, `finalizationReason: FinalizationReason`, `publicationSlotOrder: integer >= 0`, `recordAppendOrder: integer >= 0`, and `createdAt: RFC3339Utc`, with no optional fields and `additionalProperties: false`. It exactly mirrors the stored finalization and never references an uncreated record; duplicate finalization returns it.
+
+### Baseline Recovery Scope
+
+Reload/session rehydration recovery is explicitly unsupported in this baseline because no durable game session, display log, reservation, registry-version, or commit-result store exists. Same-session timeout/abort/error paths always finalize fallback before pending removal; page reload/session destruction may discard an unresolved runtime reservation. A future persistence phase is owned by the browser-session/storage subsystem and must persist `gameSessionId`, game-rule state, display log, unresolved reservations, registry version, locale, publication slot allocation, and commit results. Acceptance requires versioned serialization/migration, ordered rehydration, exact registry restoration, corruption/quota handling, multi-tab locking/CAS, fallback finalization, and rollback tests. Until then `RecoveryFinalizationSource` and all recovery-only finalization reasons are rejected by baseline schemas.
 
 ### ConversationCommitResult
 
@@ -659,13 +669,13 @@ Both have no optional fields and `additionalProperties: false`. NPC result refer
 Provider waiting is runtime control state, not authoritative phase. `PendingConversationRequest = PendingInterpreterRequest | PendingRendererRequest`, discriminated by `pendingType`; both members have no optional/null fields and `additionalProperties: false`.
 
 - `PendingInterpreterRequest` requires `schemaVersion: 1`, `pendingType: "interpreter"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `inputRecordId: ID`, `targetNpcId: ID`, `operation: "interpret_player_input"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
-- `PendingRendererRequest` requires `schemaVersion: 1`, `pendingType: "renderer"`, a distinct `requestId: ID`, `correlationId: ID`, `causationId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `reactionPlanId: ID`, `originatingInputRecordId: ID`, `targetNpcId: ID`, `operation: "render_npc_utterance"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
+- `PendingRendererRequest` requires `schemaVersion: 1`, `pendingType: "renderer"`, a distinct `requestId: ID`, `correlationId: ID`, `causationId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `reactionPlanId: ID`, `originatingInputRecordId: ID`, `locale: SupportedLocale`, `targetNpcId: ID`, `operation: "render_npc_utterance"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
 
 The Interpreter member forbids `resultingStateVersion`, `reactionPlanId`, `originatingInputRecordId`, and `causationId`. The Renderer member forbids `preconditionStateVersion` and `inputRecordId`. This exclusion prevents one version field from acquiring two meanings.
 
-Interpreter pending stores the player precondition version. Renderer pending is created only after `NpcReactionCommit`, stores that committed resulting version, and starts only when it equals current authoritative version. Renderer response validation uses this field and never compares against the old player precondition. Interpreter and Renderer request IDs are different and session-unique. Renderer `causationId` resolves to the NPC reaction commit result or reaction plan.
+Interpreter pending stores the player precondition version. Renderer pending is created only after `NpcReactionCommit`, stores that committed resulting version, and starts only when it equals current authoritative version. Its originating input and locale exactly equal the reaction plan and RendererRequest. Renderer response validation never compares against the old player precondition. Interpreter and Renderer request IDs are different/session-unique. Renderer `causationId` resolves to the NPC reaction commit result or reaction plan.
 
-The runtime map is keyed by request ID. Active records reject duplicate submission. On terminal status, the controller is released immediately; completed/failed records move to a bounded developer-only audit ring and leave the active map before the next event-loop task. Aborted requests use `aborting`, then `failed`, and follow the same removal. The audit ring is not authoritative state or public history and is discarded on reload/session destruction.
+The runtime map is keyed by request ID. Active records reject duplicate submission. Interpreter terminal records may be removed after their result/failure is durably handled in session. A controlled Renderer record remains active through reservation validation, finalization append, and finalization-result persistence; only then is it marked terminal, its controller released, and it moved to a bounded developer-only audit ring. Aborted requests use `aborting`, then terminal status after fallback finalization. The audit ring is not an authoritative finalization reference and is discarded on reload/session destruction.
 
 No provider operation changes authoritative phase. Timeout, abort, disconnect, schema/provider failure, or stale discard leaves phase/turn/version unchanged. Responses match the member-specific correlation, turn, operation, status, and version field. Pending-map state, not phase, blocks duplicate input. `player_question` and `npc_response` remain compatibility-only legacy phases and are not accepted-input phases in the structured pipeline; Phase 9 removes their premature-mutation call sites and legacy pending control.
 
@@ -698,7 +708,7 @@ interpretPlayerInput(request, { signal })
 
 ### InterpreterRequest
 
-Required fields are `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `locale: LocaleTag`, `rawText: string[1..2000 code points]`, `playerContext: InterpreterPlayerContext`, `publicRoster: PublicRosterEntry[1..16]`, `allowedCandidateTypes: CandidateType[1..8]`, `publicContext: InterpreterPublicContext`, and `limits: InterpreterLimits`. There are no optional or nullable fields and `additionalProperties: false`.
+Required fields are `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `locale: SupportedLocale`, `rawText: string[1..2000 code points]`, `playerContext: InterpreterPlayerContext`, `publicRoster: PublicRosterEntry[1..16]`, `allowedCandidateTypes: CandidateType[1..8]`, `publicContext: InterpreterPublicContext`, and `limits: InterpreterLimits`. There are no optional or nullable fields and `additionalProperties: false`.
 
 `InterpreterPlayerContext` requires only `playerId: ID` and `publicStatus: PublicStatus`. `PublicRosterEntry` requires `playerId: ID`, `displayName: string[1..80]`, and `publicStatus: PublicStatus`. `InterpreterPublicContext` requires `publicEvents: PublicEventProjection[0..64]` and `publicClaims: ClaimProjection[0..64]`. `InterpreterLimits` requires `maxAlternatives: integer 1..3`, `maxActsPerAlternative: integer 1..4`, and `maxNestingDepth: integer 1..8`. Each nested type has no optional fields, rejects null, and has `additionalProperties: false`; IDs are unique and references resolve within the request.
 
@@ -805,13 +815,22 @@ Targets must exist before the source or be created in the same atomic commit. Da
 | reaction `CanonicalSegment` | `descriptorId` | plan `intendedSpeechActs[].descriptorId` | exactly 1 | same NPC commit; order-preserving | preserve ID; dangling/conflict rejected | append-only |
 | `PlayerUtterancePublishedRecord` | `inputRecordId` | `PlayerInputRecord` | exactly 1 | same player commit | reuse record | append-only |
 | `PlayerUtterancePublishedRecord` | `displayPlanId` | `PlayerUtteranceDisplayPlan` | exactly 1 and target unique | same player commit | never redisplay | append-only |
-| `NpcReactionPlan` | `causationEventIds` | previously committed `PublicEvent` | 1-16 unique | strictly before reaction preparation; same-commit forbidden | preserve IDs; cycles rejected | append-only |
+| `NpcReactionPlan` | `originatingInputRecordId` | committed `PlayerInputRecord` | exactly 1 | before reaction preparation | preserve ID; derived sources must match | append-only |
+| `NpcReactionPlan` | `locale` | originating `PlayerInputRecord.locale` | exactly 1 equal | copied during preparation | preserve stored locale | append-only |
+| `NpcReactionPlan` | `causationEventIds` | previously committed `PublicEvent` | 0-16 unique | strictly before reaction preparation; same-commit forbidden | preserve IDs; cycles rejected | append-only |
+| `PendingRendererRequest` | `originatingInputRecordId` | plan `originatingInputRecordId` | exactly 1 equal | after reaction commit | preserve ID | runtime source removable only after finalization |
+| `PendingRendererRequest` | `locale` | `RendererRequest.locale` and reservation locale | exactly 1 equal | after reservation | preserve locale | runtime source removable only after finalization |
 | `NpcUtterancePublicationReserved` | `reactionPlanId` | `ControlledCommentaryReactionPlan` | exactly 1 | same NPC commit, plan prepared first | reuse reservation | append-only |
+| `NpcUtterancePublicationReserved` | `locale` | plan `locale` | exactly 1 equal | same NPC commit | preserve locale; no UI substitution | append-only |
 | `NpcUtterancePublicationFinalized` | `publicationId` | reservation `publicationId` | exactly 1 | later display-log CAS | return stored finalization on duplicate | append-only |
 | `NpcUtterancePublicationFinalized` | `reservationId` | reservation `reservationId` | exactly 1 | reservation must preexist | preserve ID; conflict rejected | append-only |
+| `NpcUtterancePublicationFinalized` | `locale` | reservation `locale` | exactly 1 equal | reservation preexists | replay exact registry triple | append-only |
+| `NpcUtterancePublicationFinalized` | `source.rendererRequestId` | active `PendingRendererRequest` | exactly 1 in baseline | before pending terminal/removal | duplicate returns stored result | runtime target removed only after result persistence |
+| `NpcPublicationFinalizationResult` | `finalizationId` | `NpcUtterancePublicationFinalized` | exactly 1 | finalization appended first | exact mirror returned | append-only |
 | `PendingRendererRequest` | `reactionPlanId` | committed `ControlledCommentaryReactionPlan` | exactly 1 | after reaction commit | validate same plan/version | runtime record removable; target append-only |
 | `PlayerConversationCommitResult` | `playerPublicationId` | `PlayerUtterancePublishedRecord.publicationId` | exactly 1 | same player commit | return original ID | append-only |
 | `ControlledNpcReactionCommitResult` | `reservationId` | `NpcUtterancePublicationReserved.reservationId` | exactly 1 | same NPC commit; never finalization | return original ID | append-only |
+| `CanonicalClaim` | `idempotencyKey` | provenance-specific canonical derivation | exactly 1 | computed before claim creation | same payload returns existing claim; mismatch conflicts | immutable |
 
 `ConversationRequestIdentity` is the pair `(requestId, requestFingerprint)` stored in the idempotency index; request ID is unique, and a mismatched fingerprint is rejected.
 
@@ -826,10 +845,10 @@ The first implementation PR is Phase 1 only. It changes no production flow, prov
 | 3. Candidate validation without authoritative mutation | Validate/log candidates only | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current response and mutation behavior | candidate, phase, alternative tests | validation-only flag; disable; risk diagnostic divergence | stable shadow metrics |
 | 4. AcceptedSpeechAct and PublicEvent | Add `PlayerConversationCommit`, `ClaimSource`/`SemanticEventSource` strict unions, player provenance validation, rollback, CommitResult, and exact player display ownership | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-result helper if needed | NPC response provider path | provenance, conversion, rollback, duplicate/fingerprint, phase/version tests | dual-write flag; discard/rollback; provenance compatibility risk | all player claims/events validate one player source and replay atomically |
 | 5. Player Claim migration | Move player claims to canonical claim model/rendering | `src/gameEngine.mjs`, `public/browserApp.mjs`, tests | claim registry helper if needed | NPC claims and response generation | relation, display, replay tests | player-claim flag; rollback old rendering; compatibility risk in history | old/new claim parity and replay migration pass |
-| 6. NpcReactionPlan | Add descriptor IDs, NPC claim/event provenance, past-committed-only causation, preparation/atomic commit, and reaction idempotency | `src/responseGenerator.mjs`, `src/gameEngine.mjs`, `src/responseProvider.mjs`, tests | reaction-plan/commit validator if not Phase 1 | existing provider remains selected | provenance, descriptor uniqueness, causation-cycle, rollback, canonical-reference tests | reaction-commit flag; discard/rollback; descriptor compatibility risk | every NPC object traces to committed plan/descriptor without causation cycles |
-| 7. Controlled Renderer integration | Add display-log reservation/finalization, pending Renderer validation, engine fallback, CAS/idempotency, late-result rejection, and reload recovery | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | display publication log, variant registry, finalization result tests | canonical-only bypasses Renderer; game-rule state independent | reservation, success/failure finalization, races, recovery, registry replay tests | renderer flag; deterministic fallback; risk unresolved reservation | all controlled reservations finalize exactly once without game-state mutation |
+| 6. NpcReactionPlan | Add originating input, stored locale, empty causation support for information-only reactions, descriptor provenance, past-only causation, atomic commit, and provenance-specific idempotency | `src/responseGenerator.mjs`, `src/gameEngine.mjs`, `src/responseProvider.mjs`, tests | reaction-plan/commit validator if not Phase 1 | existing provider remains selected | origin/locale consistency, empty causation, information-only, cycle, rollback tests | reaction-commit flag; discard/rollback; provenance compatibility risk | every plan traces to one input and works with zero or more prior semantic events |
+| 7. Controlled Renderer integration | Add locale propagation, slot/append ordering, baseline Renderer FinalizationSource, pending completion order, fallback finalization, CAS/late rejection, and same-session guarantee | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | display log, variant registry, finalization result tests | canonical-only bypasses Renderer; game state independent; reload recovery deferred | locale triple, ordering, success/failure, races, pending cleanup tests | renderer flag; fallback; risk unresolved reservation on reload | same-session reservations finalize exactly once without game-state mutation |
 | 8. Suspicion and memory migration | Move updates behind accepted events | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, tests | none expected | voting/night/win logic | atomic update, rollback, regression tests | per-effect flag; revert to old effect path; risk scoring changes | parity criteria and audit logs pass |
-| 9. Obsolete-path removal | Remove old NPC publication replacement/mutable reservation, uncreated publication references, legacy provenance fields, premature phases, phase-based pending, direct text, and duplicate display triggers | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `src/validator.mjs`, `src/utteranceGuard.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/browserApp.mjs`, `public/httpResponseProvider.mjs`, `tests/` | none | game rules/public behavior | full suite plus provenance/display-log migration fixtures | deploy after flags stable; rollback release; high history compatibility risk | append-only lifecycle complete, no mutable reservation/uncreated reference/legacy source consumer remains |
+| 9. Obsolete-path removal | Remove old single `displayOrder`, implicit-locale resolution, source-act-only claim key, durable references to runtime pending/audit records, mutable reservation, legacy provenance/phase/direct-text/duplicate-display paths | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `src/validator.mjs`, `src/utteranceGuard.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/browserApp.mjs`, `public/httpResponseProvider.mjs`, `tests/` | none | game rules/public behavior | full suite plus locale/order/idempotency migration fixtures | deploy after flags stable; rollback release; high history risk | split orders and stored locale fully migrated; no runtime-pending persistent reference remains |
 
 The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProvider.mjs` or `src/pseudoResponseProvider.mjs` today. Pseudo behavior currently lives in `src/responseProvider.mjs`, so migration plans use actual file names and may split files only in a separately reviewed phase.
 
@@ -850,7 +869,7 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Migration compatibility tests cover feature flags, dual-read/write boundaries, rollback fixtures, and old history.
 - Existing game-progression regression tests continue covering discussion, question, response, vote, execution, night, seer, attack, and win check.
 - Atomic tests cover successful commit, prepare failure with unchanged state, exception rollback, multi-act all-or-nothing, renderer failure after commit, and clarification with no commit.
-- Display ownership tests cover one publication event for claim-only input, one for multi-act input, and no duplicate display on replay.
+- Display ownership tests cover one publication record for claim-only input, one for multi-act input, and no duplicate display on replay.
 - Pending-state tests cover duplicate submission blocking, timeout/abort with unchanged authoritative phase, and stale response with unchanged state.
 - Version tests prove Interpreter pending uses precondition version, Renderer pending uses committed resulting version, Renderer is not compared with the old player version, and player/NPC commits increment separately.
 - NPC reaction tests prove canonical claims are created only in reaction commit, canonical segments never reference uncommitted claims/events, renderer failure preserves committed state, and one reaction yields exactly one NPC publication.
@@ -863,7 +882,13 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Canonical coverage tests prove segment, claim, and semantic event share the same descriptor ID and preserve descriptor order.
 - Causation tests reject uncommitted, display-log, plan-derived, and same-reaction events in `causationEventIds`, including explicit cycle fixtures.
 - Display-log tests prove reservation is created in reaction commit and remains immutable, Renderer success appends one finalization, and game-rule `stateVersion` never changes for reservation/finalization.
-- Fallback tests cover timeout, abort, provider error, invalid output, and session recovery; each appends one fallback finalization.
+- Finalization-source tests require `RendererRequestFinalizationSource` for success and same-session timeout/abort/error/invalid-output fallback; baseline rejects `RecoveryFinalizationSource` and recovery-only reason values.
+- Pending-order tests prove timeout/abort fallback finalizes and persists result before pending terminal/removal; retries return stored result and late success loses CAS.
+- Locale propagation tests prove plan/input/reservation/RendererRequest/PendingRenderer/finalization/result equality and replay lookup by `(variantId, variantVersion, locale)` without UI-locale override.
+- Canonical publication tests replay segments using stored locale and renderer version, without stored text.
+- Information-only tests produce a valid plan with matching originating input and empty `causationEventIds`.
+- Publication-order tests prove stable slot under delayed Renderer, different append orders for reservation/finalization, and that reservation is never rendered.
+- Claim-key tests verify player and NPC derivations, descriptor replay reuse, and conflict on equal NPC key with changed payload.
 - CAS tests prove identical duplicate finalization returns stored result, conflicting finalization is rejected, and late Renderer success after fallback is ignored.
 - Commit-result tests prove NPC result references an existing reservation rather than an uncreated finalization.
 - Locale tests accept supported language-only `ja` and `en`, accept supported regional tags, and distinguish syntax validity from the `SupportedLocale` allowlist.
@@ -924,3 +949,13 @@ The engine validates Interpreter responses against `preconditionStateVersion` an
 | **Late Renderer changes finalized publication** | PROHIBITED |
 | **CommitResult references uncreated object** | PROHIBITED |
 | **Display lifecycle mutates game-rule state/version** | PROHIBITED |
+| **NpcReactionPlan originating input count** | EXACTLY ONE committed `PlayerInputRecord` |
+| **Information-only reaction causation count** | ZERO permitted |
+| **Controlled variant publication key** | ID + VERSION + STORED LOCALE |
+| **Variant replay locale source** | STORED PUBLICATION LOCALE, never current UI locale |
+| **Publication slot vs record append order** | DISTINCT SEMANTICS |
+| **Reservation rendered as utterance** | PROHIBITED |
+| **Timeout/abort pending removal** | AFTER finalization and result persistence |
+| **CanonicalClaim idempotency derivation** | SELECTED BY PLAYER/NPC PROVENANCE |
+| **Permanent publication dependency on runtime pending state** | PROHIBITED |
+| **Reload recovery baseline** | EXPLICITLY UNSUPPORTED; future persistence phase required |
