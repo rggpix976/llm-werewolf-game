@@ -152,7 +152,7 @@ test("persisted publication lifecycle validates without pending runtime state", 
 });
 
 test("append-time finalization alone requires active matching pending renderer", () => {
-  const { reservation, finalization } = controlledPublicationFixtures(), variant = { schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", renderMode: "controlled_commentary", intent: "acknowledge", text: "了解しました。", enabled: true, maximumRenderedChars: 20, toneTags: ["brief"], lifecycle: "active" }, allowed = [{ schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }], pending = { schemaVersion: 1, pendingType: "renderer", requestId: "renderer-1", correlationId: "corr-1", causationId: "cause-1", turnId: "turn-1", resultingStateVersion: 2, reactionPlanId: "plan-1", originatingInputRecordId: "input-1", locale: "ja-JP", targetNpcId: "npc-1", operation: "render_npc_utterance", status: "pending", startedAt: "2026-07-11T00:00:00Z" };
+  const { reservation, finalization } = controlledPublicationFixtures(), variant = { schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", renderMode: "controlled_commentary", intent: "acknowledge", text: "了解しました。", enabled: true, maximumRenderedChars: 20, toneTags: ["brief"], lifecycle: "active" }, allowed = [{ schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }], pending = { schemaVersion: 1, pendingType: "renderer", requestId: "renderer-1", correlationId: "corr-1", causationId: "plan-1", turnId: "turn-1", resultingStateVersion: 2, reactionPlanId: "plan-1", originatingInputRecordId: "input-1", locale: "ja-JP", targetNpcId: "npc-1", operation: "render_npc_utterance", status: "pending", startedAt: "2026-07-11T00:00:00Z" };
   assert.equal(validatePublicationFinalizationAtAppend(finalization, { publications: [reservation], reactionPlans: [controlledPlan()], pendingRendererRequests: [pending], registry: [variant], allowedVariants: allowed, expectedIntent: "acknowledge" }).classification, "new");
   assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { publications: [reservation], reactionPlans: [controlledPlan()], registry: [variant], allowedVariants: allowed, expectedIntent: "acknowledge" }));
   assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { publications: [reservation], reactionPlans: [controlledPlan()], pendingRendererRequests: [{ ...pending, status: "completed" }], registry: [variant], allowedVariants: allowed, expectedIntent: "acknowledge" }));
@@ -231,7 +231,7 @@ test("validation errors expose path, code, and message without mutating input", 
   assert.equal(invalid.locale, "fr");
 });
 
-function pendingRenderer(status = "pending") { return { schemaVersion: 1, pendingType: "renderer", requestId: "renderer-1", correlationId: "corr-1", causationId: "cause-1", turnId: "turn-1", resultingStateVersion: 2, reactionPlanId: "plan-1", originatingInputRecordId: "input-1", locale: "ja-JP", targetNpcId: "npc-1", operation: "render_npc_utterance", status, startedAt: "2026-07-11T00:00:00Z" }; }
+function pendingRenderer(status = "pending") { return { schemaVersion: 1, pendingType: "renderer", requestId: "renderer-1", correlationId: "corr-1", causationId: "plan-1", turnId: "turn-1", resultingStateVersion: 2, reactionPlanId: "plan-1", originatingInputRecordId: "input-1", locale: "ja-JP", targetNpcId: "npc-1", operation: "render_npc_utterance", status, startedAt: "2026-07-11T00:00:00Z" }; }
 function fallbackVariant(lifecycle = "active", enabled = true) { return { schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", renderMode: "controlled_commentary", intent: "acknowledge", text: "了解しました。", enabled, maximumRenderedChars: 20, toneTags: ["brief"], lifecycle }; }
 const fallbackAllowed = [{ schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }];
 
@@ -372,14 +372,20 @@ test("finalization version must match reservation, plan, and pending request", (
   assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), resultingStateVersion: 99 }] }));
   assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), turnId: "turn-2" }] }));
   assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), targetNpcId: "npc-2" }] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend({ ...finalization, stateVersion: 99 }, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), resultingStateVersion: 99 }] }), (error) => error.code === "state_version_mismatch");
+  assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), correlationId: "corr-2" }] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), causationId: "other" }] }));
 });
 
 test("Player publication references reject dangling and duplicate owners", () => {
   const plan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "seg-1", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 1 } }] }, publication = { schemaVersion: 1, recordType: "player_utterance_published", publicationId: "pub-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", gameStateVersion: 1, occurredPhase: "day_discussion", actorId: "player", inputRecordId: "input-1", displayPlanId: "display-1", idempotencyKey: "idem-1", publicationSlotOrder: 0, recordAppendOrder: 0 };
-  assert.equal(validatePlayerPublicationReferences([publication], { inputRecords: [input], displayPlans: [plan] }), true);
+  assert.equal(validatePlayerPublicationReferences([publication], { inputRecords: [input], displayPlans: [plan], acceptedSpeechActs: [roleAct] }), true);
   assert.throws(() => validatePlayerPublicationReferences([publication], { inputRecords: [], displayPlans: [plan] }));
   assert.throws(() => validatePlayerPublicationReferences([publication, { ...publication, publicationId: "pub-2", recordAppendOrder: 1 }], { inputRecords: [input], displayPlans: [plan] }));
   assert.throws(() => validateConversationGraph({ inputRecords: [input], displayPlans: [plan], publications: [{ ...publication, inputRecordId: "missing" }] }));
+  assert.throws(() => validatePlayerPublicationReferences([{ ...publication, occurredPhase: "night" }], { inputRecords: [input], displayPlans: [plan], acceptedSpeechActs: [roleAct] }));
+  assert.throws(() => validatePlayerPublicationReferences([{ ...publication, gameStateVersion: 99 }], { inputRecords: [input], displayPlans: [{ ...plan, stateVersion: 99 }], acceptedSpeechActs: [roleAct] }));
+  assert.throws(() => validatePlayerPublicationReferences([publication], { inputRecords: [input], displayPlans: [plan], acceptedSpeechActs: [{ ...roleAct, acceptedPhase: "night" }, roleAct] }));
 });
 
 test("semantic Event key is unique for player and NPC sources", () => {
