@@ -239,67 +239,29 @@ The engine-generated representation of a bound act.
 
 ## 10. `PublicEvent` Types (Strict Discriminated Union)
 
-Authoritative public records.
+Authoritative public records. Every ID is a non-empty ASCII identifier of 1-64 characters matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`. All six event types have `additionalProperties: false`.
 
-### Common Required Fields (EventMetadata)
-- **schemaVersion**: 1 (Integer, Required)
-- **eventId**: String (Required, Engine-generated)
-- **requestId**: String (Required)
-- **turnId**: String (Required)
-- **stateVersion**: Integer (Required, Resulting version)
-- **actorId**: String (Required)
-- **acceptedSpeechActId**: String (Required)
-- **causationId**: String (Required)
-- **correlationId**: String (Required)
-- **idempotencyKey**: String (Required, `source act key + eventKind`)
-- **inputRecordId**: String (Required, Reference to `PlayerInputRecord`)
-- **displayPlanId**: String (Required, Reference to `PlayerUtteranceDisplayPlan`)
-- **createdOrder**: Integer (Unique, Required)
-- **additionalProperties**: false
+### Common Required Fields (`EventMetadata`)
+
+- **schemaVersion**: integer literal `1`
+- **eventId**, **requestId**, **turnId**, **actorId**, **acceptedSpeechActId**, **causationId**, **correlationId**, **idempotencyKey**: ID
+- **stateVersion**: integer, minimum `0`
+- **createdOrder**: integer, minimum `0`, unique across the event stream
+
+`PublicStatementRecordedEvent`, `PublicQuestionRecordedEvent`, `SuspicionExpressedEvent`, and `VoteDeclaredEvent` additionally require **inputRecordId** and **displayPlanId** (ID). They never carry `sourceSpan`; segmentation is owned exclusively by the referenced `PlayerUtteranceDisplayPlan`. The plan's `inputRecordId` must equal the event's `inputRecordId`.
 
 ### Individual Event Types
 
-#### 1. PublicStatementRecordedEvent
-- **eventType**: "public_statement_recorded" (Discriminator)
-- **sourceSpan**: `SourceSpan` (Required)
-- **Forbidden**: `targetId`, `topic`, `claimId`
-- **Display Source**: Player `rawText` (via display plan)
+| Type | Discriminator `eventType` | Additional required fields | Optional fields | Forbidden fields |
+| :--- | :--- | :--- | :--- | :--- |
+| `PublicStatementRecordedEvent` | `public_statement_recorded` | `inputRecordId: ID`, `displayPlanId: ID` | none | `sourceSpan`, `targetId`, `topic`, `claimId`, `claimedRole`, `result` |
+| `PublicQuestionRecordedEvent` | `public_question_recorded` | `inputRecordId: ID`, `displayPlanId: ID`, `targetId: ID`, `topic: PublicQuestionTopic` | none | `sourceSpan`, `claimId`, `claimedRole`, `result` |
+| `SuspicionExpressedEvent` | `suspicion_expressed` | `inputRecordId: ID`, `displayPlanId: ID`, `targetId: ID` | none | `sourceSpan`, `topic`, `claimId`, `claimedRole`, `result` |
+| `VoteDeclaredEvent` | `vote_declared` | `inputRecordId: ID`, `displayPlanId: ID`, `targetId: ID` | none | `sourceSpan`, `topic`, `claimId`, `claimedRole`, `result` |
+| `RoleClaimRecordedEvent` | `role_claim_recorded` | `claimId: ID` | none | `inputRecordId`, `displayPlanId`, `sourceSpan`, `targetId`, `topic`, `claimedRole`, `result` |
+| `ResultClaimRecordedEvent` | `result_claim_recorded` | `claimId: ID` | none | `inputRecordId`, `displayPlanId`, `sourceSpan`, `topic`, `claimedRole`, `result` |
 
-#### 2. PublicQuestionRecordedEvent
-- **eventType**: "public_question_recorded" (Discriminator)
-- **targetId**: String (Required)
-- **topic**: Enum (Required)
-- **Forbidden**: `sourceSpan`, `claimId`
-- **Display Source**: Player `rawText`
-
-#### 3. SuspicionExpressedEvent
-- **eventType**: "suspicion_expressed" (Discriminator)
-- **targetId**: String (Required)
-- **sourceSpan**: `SourceSpan` (Optional)
-- **Forbidden**: `topic`, `claimId`
-- **Gameplay Effect**: `suspicion_update`
-- **Display Source**: Player `rawText`
-
-#### 4. VoteDeclaredEvent
-- **eventType**: "vote_declared" (Discriminator)
-- **targetId**: String (Required)
-- **Forbidden**: `topic`, `claimId`, `sourceSpan`
-- **Gameplay Effect**: `memory_update`
-- **Display Source**: Player `rawText`
-
-#### 5. RoleClaimRecordedEvent
-- **eventType**: "role_claim_recorded" (Discriminator)
-- **claimId**: String (Required, Reference to `CanonicalClaim`)
-- **Forbidden**: `targetId`, `topic`, `sourceSpan`
-- **Gameplay Effect**: `claim_registration`
-- **Display Source**: Canonical Renderer
-
-#### 6. ResultClaimRecordedEvent
-- **eventType**: "result_claim_recorded" (Discriminator)
-- **claimId**: String (Required, Reference to `CanonicalClaim`)
-- **Forbidden**: `claimedRole`, `topic`, `sourceSpan`
-- **Gameplay Effect**: `claim_registration`
-- **Display Source**: Canonical Renderer
+Event display never copies player text. Raw display resolves through `inputRecordId` and `displayPlanId`; claim display resolves through the referenced canonical claim and the engine-owned canonical renderer.
 
 ## 11. `CanonicalClaim` Types (Strict Discriminated Union)
 
@@ -326,54 +288,60 @@ Authoritative public records.
 
 ### Claim Management Rules
 - **New Assertion**: `rev=1`, `repeats=null`, `supersedes=null`, `contradicts=[]`.
-- **Repeat**: `rev=1`, `repeats=originalId`. Subject and payload must match exactly.
-- **Amendment**: `rev=prev+1`, `supersedes=amendedId`. Subject must match; payload changes.
-- **Contradiction**: `rev=1`, `contradicts=[ids]`. Subject must match; payload logically conflicts.
-- **Rules**: Mutually exclusive relations. Same actor. compatible types. Same subject (self for roles, `targetId` for results).
+- **Repeat**: `rev=1`, `repeats=originalId`. Actor, claim type, subject, and normalized payload match exactly. A role claim payload matches only when `claimedRole` matches; a result claim payload matches only when both `targetId` and `result` match.
+- **Amendment**: `rev=previous+1`, `supersedes=amendedId`. Actor and claim type match, and subject is identical, while the payload changes. A role claim's subject is the claiming actor; a result claim's subject is `targetId`.
+- **Contradiction**: `rev=1`, `contradicts=[ids]`. Actor, claim type, and subject match, while normalized payloads logically conflict. Result claims about different targets are not contradictions.
+- **Rules**: `repeatsClaimId`, `supersedesClaimId`, and non-empty `contradictsClaimIds` are mutually exclusive. Every referenced claim exists and precedes the new claim.
+
+Examples: `Beni is werewolf` followed by `Beni is not_werewolf` is a contradiction when the same actor made both result claims about Beni. `Beni is werewolf` followed by `Aoi is not_werewolf` is not a contradiction because the subjects differ.
 
 ## 12. `PlayerInputRecord` and `DisplayPlan`
 
 ### PlayerInputRecord
 - **schemaVersion**: 1 (Integer, Required)
-- **inputRecordId**: String (Required)
-- **rawText**: String (Required, Authoritative player text)
-- **locale**: String (Required)
+- **inputRecordId**: ID (Required)
+- **rawText**: String (Required, 1-2000 Unicode scalar values, authoritative player text)
+- **locale**: LocaleTag (Required)
 - **additionalProperties**: false
 
 ### PlayerUtteranceDisplayPlan
 - **schemaVersion**: 1 (Integer, Required)
-- **displayPlanId**: String (Required)
-- **inputRecordId**: String (Required)
-- **segments**: Array of `PlayerDisplaySegment` (Required, ordered)
+- **displayPlanId**: ID (Required)
+- **inputRecordId**: ID (Required, must reference an existing `PlayerInputRecord`)
+- **segments**: Array of `PlayerDisplaySegment` (Required, 1-64 items, ordered)
 - **additionalProperties**: false
 
 ### PlayerDisplaySegment (Strict Union)
-1. **RawInputSegment**: `{ segmentId: String, type: "raw_input", inputRecordId: String, sourceSpan: SourceSpan, additionalProperties: false }`
-2. **CanonicalClaimSegment**: `{ segmentId: String, type: "canonical_claim", claimId: String, additionalProperties: false }`
-3. **CanonicalVoteSegment**: `{ segmentId: String, type: "canonical_vote", voteEventId: String, additionalProperties: false }`
+1. **RawInputSegment** requires `segmentId: ID`, discriminator `type: "raw_input"`, `inputRecordId: ID`, and `sourceSpan: SourceSpan`; it forbids `claimId` and `voteEventId` and has `additionalProperties: false`.
+2. **CanonicalClaimSegment** requires `segmentId: ID`, discriminator `type: "canonical_claim"`, and `claimId: ID`; it forbids `inputRecordId`, `sourceSpan`, and `voteEventId` and has `additionalProperties: false`.
+3. **CanonicalVoteSegment** requires `segmentId: ID`, discriminator `type: "canonical_vote"`, and `voteEventId: ID`; it forbids `inputRecordId`, `sourceSpan`, and `claimId` and has `additionalProperties: false`.
+
+Segments follow source order. Segment IDs are unique. Raw spans belong to the plan's input record, are in bounds, and do not overlap. A span canonicalized as a claim or vote is omitted from raw segments, so raw and canonical segments never render the same semantic content twice. Multiple claims from one input produce multiple canonical segments in source order. Replay uses the stored plan unchanged and never uses AI-generated display text.
 
 ## 13. `NpcReactionPlan` Schema (Strict Union)
 
 ### CanonicalOnlyReactionPlan
-- **renderMode**: "canonical_only"
-- **intendedSpeechActs**: Array of `SpeechActDescriptor` (state-changing allowed)
-- **canonicalSegments**: Array of `CanonicalSegment` (Min 1)
-- **Forbidden**: `commentaryPlan`
+- **Required**: `schemaVersion: 1`, `reactionPlanId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `npcId: ID`, `renderMode: "canonical_only"`, `intendedSpeechActs: SpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `canonicalSegments: CanonicalSegment[1..16]`, `maxChars: integer 1..1000`
+- **Forbidden**: `commentaryPlan`, `allowedVariants`
 - **additionalProperties**: false
 
+Every plan containing a state-changing descriptor uses this type. It may contain role claims, result claims, vote declarations, and suspicion updates. Its ordered canonical segments completely represent every state-changing descriptor. It never invokes the Renderer; only the engine-owned canonical renderer displays it.
+
 ### ControlledCommentaryReactionPlan
-- **renderMode**: "controlled_commentary"
-- **intendedSpeechActs**: Array of `SpeechActDescriptor` (NO state-changing)
-- **commentaryPlan**: `ControlledCommentaryPlan`
-- **Forbidden**: `canonicalSegments`, `RoleClaimDescriptor`, `ResultClaimDescriptor`, `VoteDeclarationDescriptor`, `SuspicionDescriptor`
+- **Required**: `schemaVersion: 1`, `reactionPlanId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `npcId: ID`, `renderMode: "controlled_commentary"`, `intendedSpeechActs: CommentarySpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `commentaryPlan: ControlledCommentaryPlan`, `maxChars: integer 1..1000`
+- **Forbidden**: `canonicalSegments`
 - **additionalProperties**: false
+
+This type prohibits every state-changing descriptor, including `RoleClaimDescriptor`, `ResultClaimDescriptor`, `VoteDeclarationDescriptor`, `SuspicionDescriptor`, and any descriptor that updates suspicion score or memory. It permits only non-authoritative answers, acknowledgements, pondering, declines, and clarification requests. The AI selects only an engine-owned variant ID and version; it does not generate display prose.
 
 ### SpeechActDescriptor (Strict Union)
 1. **RoleClaimDescriptor**: `{ type: "role_claim", claimedRole: ClaimableRole, additionalProperties: false }`
 2. **ResultClaimDescriptor**: `{ type: "result_claim", targetId: String, result: ClaimResult, additionalProperties: false }`
 3. **VoteDeclarationDescriptor**: `{ type: "vote_declaration", targetId: String, additionalProperties: false }`
 4. **SuspicionDescriptor**: `{ type: "suspicion", targetId: String, additionalProperties: false }`
-5. **AnswerDescriptor**: `{ type: "answer", topic: Enum, additionalProperties: false }`
+5. **AnswerDescriptor**: `{ type: "answer", topic: PublicQuestionTopic, additionalProperties: false }`
+
+`CommentarySpeechActDescriptor` is the strict subset `AnswerDescriptor | AcknowledgementDescriptor | PonderingDescriptor | DeclineDescriptor | ClarificationRequestDescriptor`; each member is closed with `additionalProperties: false` and contains no state mutation field. `ReactionPolicies` and `ControlledCommentaryPlan` are also closed objects. `ControlledCommentaryPlan` requires `intent: CommentaryIntent`; its only other permitted field is `allowedPublicReferenceIds: ID[0..32]` with unique items.
 
 ### CanonicalSegment (Strict Union)
 1. **CanonicalClaimSegment**: `{ segmentId: String, type: "canonical_claim", claimId: String, additionalProperties: false }`
@@ -383,52 +351,107 @@ Authoritative public records.
 
 ### ControlledCommentaryVariant
 - **schemaVersion**: 1 (Integer, Required)
-- **variantId**: String (Required, Max 64 chars)
+- **variantId**: ID (Required, Max 64 chars)
 - **variantVersion**: Integer (Required, Min 1)
-- **locale**: String (Required, e.g., "ja-JP")
-- **intent**: Enum (Required): "acknowledge", "ponder", "decline", "ask_for_clarification", "neutral_reaction"
+- **locale**: LocaleTag (Required)
+- **renderMode**: Literal `controlled_commentary` (Required)
+- **intent**: CommentaryIntent (Required)
 - **text**: String (Required, 1-240 chars, NO placeholders)
 - **enabled**: Boolean (Required)
-- **maximumRenderedChars**: Integer (Required, 1-240)
+- **maximumRenderedChars**: Integer (Required, 1-240 and not less than the actual text length)
+- **toneTags**: Array of ToneTag (Required, 0-4 unique items)
+- **lifecycle**: VariantLifecycle (Required)
 - **additionalProperties**: false
+
+The registry key is `(variantId, variantVersion, locale)`. Entries are immutable. An entry is never deleted; it moves to `retired` when no longer offered. Retired or disabled entries remain readable for replay.
 
 ### AllowedCommentaryVariantProjection (AI-facing)
 - **schemaVersion**: 1 (Required)
-- **variantId**: String (Required)
-- **variantVersion**: Integer (Required)
-- **intent**: Enum (Required)
-- **toneTags**: Array of Enum (Required, Max 4): ["formal", "casual", "brief", "detailed"]
+- **variantId**: ID (Required, Max 64 chars)
+- **variantVersion**: Integer (Required, Min 1)
+- **locale**: LocaleTag (Required)
+- **intent**: CommentaryIntent (Required)
+- **toneTags**: Array of ToneTag (Required, 0-4 unique items)
 - **additionalProperties**: false
 
-## 15. Public Projections (Strict Unions)
+### RendererRequest and RendererModelOutput
 
-### Public Event Projections
-1. **PublicStatementEventProjection**: `{ eventId: String, type: "public_statement_recorded", actorId: String, turnId: String, additionalProperties: false }`
-2. **PublicQuestionEventProjection**: `{ eventId: String, type: "public_question_recorded", actorId: String, targetId: String, turnId: String, additionalProperties: false }`
-3. **SuspicionEventProjection**: `{ eventId: String, type: "suspicion_expressed", actorId: String, targetId: String, turnId: String, additionalProperties: false }`
-4. **VoteEventProjection**: `{ eventId: String, type: "vote_declared", actorId: String, targetId: String, turnId: String, additionalProperties: false }`
-5. **RoleClaimEventProjection**: `{ eventId: String, type: "role_claim_recorded", actorId: String, claimId: String, turnId: String, additionalProperties: false }`
-6. **ResultClaimEventProjection**: `{ eventId: String, type: "result_claim_recorded", actorId: String, claimId: String, turnId: String, additionalProperties: false }`
+`RendererRequest` requires `schemaVersion: 1`, `requestId: ID`, `reactionPlanId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `npcId: ID`, `locale: LocaleTag`, `renderMode: "controlled_commentary"`, `commentaryPlan: ControlledCommentaryPlan`, `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, `allowedPublicReferenceIds: ID[0..32]`, and `allowedVariants: AllowedCommentaryVariantProjection[1..8]`; it has no optional fields and `additionalProperties: false`.
 
-### Claim Projections
-1. **RoleClaimProjection**: `{ claimId: String, type: "role_claim", actorId: String, claimedRole: ClaimableRole, additionalProperties: false }`
-2. **ResultClaimProjection**: `{ claimId: String, type: "result_claim", actorId: String, targetId: String, result: ClaimResult, additionalProperties: false }`
+Every allowed public reference ID is unique and exists in one of the same request's public projection arrays; private and unknown IDs are prohibited. Projection IDs are globally unambiguous within the request. Allowed variants have unique `(variantId, variantVersion)` pairs, and a request must not contain multiple versions of one `variantId`.
 
-### Other Projections
-1. **PublicVoteProjection**: `{ actorId: String, targetId: String, turnId: String, additionalProperties: false }`
-2. **ExecutionProjection**: `{ executedPlayerId: String, turnId: String, additionalProperties: false }`
-3. **AttackDeathProjection**: `{ attackedPlayerId: String, turnId: String, additionalProperties: false }`
+`RendererModelOutput` requires exactly `schemaVersion: 1`, `selectedVariantId: ID`, and `selectedVariantVersion: integer >= 1`, with `additionalProperties: false`. The selected pair must exactly match one allowed variant and an existing enabled registry entry whose locale equals the request locale, render mode is `controlled_commentary`, and intent equals `commentaryPlan.intent`.
+
+Schema-valid example:
+
+```json
+{
+  "schemaVersion": 1,
+  "requestId": "request-1001",
+  "reactionPlanId": "reaction-1001",
+  "turnId": "turn-7",
+  "stateVersion": 12,
+  "npcId": "npc-aoi",
+  "locale": "ja-JP",
+  "renderMode": "controlled_commentary",
+  "commentaryPlan": { "intent": "acknowledge", "allowedPublicReferenceIds": ["event-1001"] },
+  "publicEvents": [{ "schemaVersion": 1, "projectionType": "public_statement_event", "eventId": "event-1001", "actorId": "player", "turnId": "turn-7" }],
+  "publicClaims": [],
+  "publicVotes": [],
+  "executions": [],
+  "attackDeaths": [],
+  "allowedPublicReferenceIds": ["event-1001"],
+  "allowedVariants": [{ "schemaVersion": 1, "variantId": "ack-brief", "variantVersion": 2, "locale": "ja-JP", "intent": "acknowledge", "toneTags": ["brief"] }]
+}
+```
+
+### SelectedCommentaryVariant
+
+The persisted selection requires exactly `variantId: ID`, `variantVersion: integer >= 1`, and `locale: LocaleTag`, with `additionalProperties: false`. Replay resolves this exact registry key and never substitutes the latest version. Disabled or retired variants remain available for historical reconstruction.
+
+## 15. Public Projections (Strict Schemas)
+
+All projection objects require `schemaVersion: 1`, use the closed `projectionType` discriminator below, have no optional or nullable fields, and set `additionalProperties: false`. Every String typed as ID uses the section 10 ID constraint. No projection may contain raw text, private memory, hidden role data, internal suspicion scores, provider diagnostics, or fields not listed in its row. String values other than IDs are limited by their referenced closed enum; no free-form projection text exists.
+
+| Projection | `projectionType` | Other required fields | Forbidden fields (in addition to every unlisted field) |
+| :--- | :--- | :--- | :--- |
+| `PublicStatementEventProjection` | `public_statement_event` | `eventId: ID`, `actorId: ID`, `turnId: ID` | `targetId`, `claimId`, `role`, `result`, `phase`, `publicStatus` |
+| `PublicQuestionEventProjection` | `public_question_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `topic: PublicQuestionTopic` | `claimId`, `role`, `result`, `phase`, `publicStatus` |
+| `SuspicionEventProjection` | `suspicion_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID` | `claimId`, `role`, `result`, `phase`, `publicStatus`, `score` |
+| `VoteEventProjection` | `vote_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID` | `claimId`, `role`, `result`, `phase`, `publicStatus` |
+| `RoleClaimEventProjection` | `role_claim_event` | `eventId: ID`, `actorId: ID`, `claimId: ID`, `turnId: ID` | `targetId`, `role`, `result`, `phase`, `publicStatus` |
+| `ResultClaimEventProjection` | `result_claim_event` | `eventId: ID`, `actorId: ID`, `claimId: ID`, `turnId: ID` | `targetId`, `role`, `result`, `phase`, `publicStatus` |
+| `RoleClaimProjection` | `role_claim` | `claimId: ID`, `actorId: ID`, `claimedRole: ClaimableRole` | `targetId`, `result`, `phase`, `publicStatus` |
+| `ResultClaimProjection` | `result_claim` | `claimId: ID`, `actorId: ID`, `targetId: ID`, `result: ClaimResult` | `claimedRole`, `phase`, `publicStatus` |
+| `PublicVoteProjection` | `public_vote` | `voteEventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `phase: GamePhase` | `claimId`, `role`, `result`, `publicStatus` |
+| `ExecutionProjection` | `execution` | `executionEventId: ID`, `executedPlayerId: ID`, `turnId: ID`, `phase: GamePhase` | `actorId`, `targetId`, `claimId`, `role`, `result`, `publicStatus` |
+| `AttackDeathProjection` | `attack_death` | `attackEventId: ID`, `attackedPlayerId: ID`, `turnId: ID`, `phase: GamePhase` | `actorId`, `targetId`, `claimId`, `role`, `result`, `publicStatus` |
+
+`PublicRosterEntry` does not contain `publiclyKnownStatus`; public suspicion is represented only by `SuspicionEventProjection`, preserving both the actor and target. It is derived solely from public events and never from internal suspicion scores or private memory.
+
+Each request array has the maximum shown in `RendererRequest`, rejects duplicate primary IDs, preserves authoritative `createdOrder` (or source order for non-event projections), and rejects references to unknown IDs. Claim-event projections reference an existing same-request claim projection with matching actor and claim type. Public votes reference an existing vote event. Execution and attack-death player IDs reference public roster entries. Stable ordering is retained on replay.
 
 ## 16. Enums
 
 ### GameRole
-Enum: `seer`, `werewolf`, `citizen`
+Closed enum: `seer`, `werewolf`, `citizen`. This is the authoritative role model currently implemented by the engine.
 
 ### ClaimableRole
-Subset of `GameRole`: `seer`, `werewolf`, `citizen` (Current game setup)
+Explicit closed subset of `GameRole`: `seer`, `werewolf`, `citizen`. `RoleClaimCandidate`, `AcceptedRoleClaim`, `RoleCanonicalClaim`, descriptors, and projections all reference this single definition. Future engine roles must first be added to `GameRole`; public claim support is then an explicit `ClaimableRole` decision.
 
 ### ClaimResult
-Enum: `werewolf`, `not_werewolf`
+Closed enum: `werewolf`, `not_werewolf`. Every candidate, accepted act, canonical claim, descriptor, event-derived view, and projection references this single definition.
+
+### Other Closed Enums
+
+- **PublicEventType**: `public_statement_recorded`, `public_question_recorded`, `suspicion_expressed`, `vote_declared`, `role_claim_recorded`, `result_claim_recorded`
+- **PublicQuestionTopic**: `role`, `result`, `vote`, `suspicion`, `reasoning`, `rules`, `other`
+- **GamePhase**: `day_discussion`, `voting`, `execution`, `night`, `ended`
+- **PublicStatus**: `alive`, `dead`; suspicion is deliberately not a roster status
+- **CommentaryIntent**: `acknowledge`, `ponder`, `decline`, `ask_for_clarification`, `neutral_reaction`
+- **ToneTag**: `formal`, `casual`, `brief`, `detailed`
+- **VariantLifecycle**: `active`, `retired`
+- **LocaleTag**: String, 2-35 ASCII characters matching `^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})+$`
 
 ## 17. Operational Logic
 
