@@ -4,7 +4,7 @@ import { canonicalJson, classifyIdempotentWrite, npcClaimIdempotencyKey, playerC
 import { renderCanonicalClaim, renderCanonicalSuspicion, renderCanonicalVote, resolveHistoricalVariant, validateRendererSelection } from "../src/conversation/canonicalRenderer.mjs";
 import { candidateFields, enums } from "../src/conversation/domain.mjs";
 import { validateAcceptedSpeechAct, validateCanonicalClaim, validateControlledCommentaryVariant, validateConversationCommitResult, validateDisplayPublicationRecord, validateInterpreterModelOutput, validateNpcPublicationFinalizationResult, validateNpcReactionPlan, validatePendingRendererRequest, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent, validateReferentialIntegrity, validateSelectedCommentaryVariant, validateSpeechActCandidates, validateSourceSpan } from "../src/conversation/validators.mjs";
-import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateConversationGraph, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePlayerPublicationReferences, validatePublicationFinalizationAtAppend, validateReactionPlanReferences } from "../src/conversation/references.mjs";
+import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateCommitResultReferences, validateConversationGraph, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePlayerPublicationReferences, validatePublicationFinalizationAtAppend, validateReactionPlanReferences } from "../src/conversation/references.mjs";
 
 const fingerprint = "a".repeat(64);
 const input = { schemaVersion: 1, inputRecordId: "input-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", capturedStateVersion: 0, actorId: "player", rawText: "😀占い師です。Beniが怪しい。", locale: "ja-JP", createdOrder: 0 };
@@ -111,7 +111,7 @@ test("all publication and commit-result union members validate", () => {
 });
 
 test("referential validators cover accepted sources and canonical display ownership", () => {
-  const plan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "seg-1", type: "canonical_claim", claimId: "claim-1" }] };
+  const plan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "raw-prefix", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 1 } }, { segmentId: "seg-1", type: "canonical_claim", claimId: "claim-1" }, { segmentId: "raw-suffix", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 7, end: 16 } }] };
   assert.equal(validateReferentialIntegrity({ claims: [claim], acceptedSpeechActs: [roleAct], inputRecords: [input], displayPlans: [plan], canonicalSpans: new Map([["claim-1", roleAct.sourceSpan]]) }), true);
   assert.throws(() => validateReferentialIntegrity({ claims: [claim], inputRecords: [input], displayPlans: [plan], canonicalSpans: new Map([["claim-1", roleAct.sourceSpan]]) }));
 });
@@ -185,7 +185,7 @@ test("claim events require matching claim member, actor, request and provenance"
 });
 
 test("DisplayPlan resolves every segment span and enforces global source order", () => {
-  const voteAct = { ...actBase, speechActId: "act-vote", type: "accepted_vote_declaration", targetId: "npc-1", sourceSpan: { start: 8, end: 12 } }, voteEvent = { ...eventBase, eventId: "event-vote", eventType: "vote_declared", targetId: "npc-1", source: { ...playerEventSource, acceptedSpeechActId: "act-vote" } }, plan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "raw-1", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 1 } }, { segmentId: "claim-1", type: "canonical_claim", claimId: "claim-1" }, { segmentId: "vote-1", type: "canonical_vote", voteEventId: "event-vote" }] };
+  const voteAct = { ...actBase, speechActId: "act-vote", type: "accepted_vote_declaration", targetId: "npc-1", sourceSpan: { start: 7, end: 12 } }, voteEvent = { ...eventBase, eventId: "event-vote", eventType: "vote_declared", targetId: "npc-1", source: { ...playerEventSource, acceptedSpeechActId: "act-vote" } }, plan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "raw-1", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 1 } }, { segmentId: "claim-1", type: "canonical_claim", claimId: "claim-1" }, { segmentId: "vote-1", type: "canonical_vote", voteEventId: "event-vote" }, { segmentId: "raw-2", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 12, end: 16 } }] };
   assert.doesNotThrow(() => validateDisplayPlanReferences([plan], { inputRecords: [input], claims: [claim], events: [voteEvent], acceptedSpeechActs: [roleAct, voteAct] }));
   assert.throws(() => validateDisplayPlanReferences([{ ...plan, segments: [plan.segments[2], plan.segments[1]] }], { inputRecords: [input], claims: [claim], events: [voteEvent], acceptedSpeechActs: [roleAct, voteAct] }));
   assert.throws(() => validateDisplayPlanReferences([{ ...plan, segments: [plan.segments[1], { ...plan.segments[1], segmentId: "claim-2" }] }], { inputRecords: [input], claims: [claim], events: [voteEvent], acceptedSpeechActs: [roleAct, voteAct] }));
@@ -392,4 +392,38 @@ test("semantic Event key is unique for player and NPC sources", () => {
   const voteAct = { ...actBase, type: "accepted_vote_declaration", targetId: "npc-1" }, first = { ...eventBase, eventId: "vote-1", eventType: "vote_declared", targetId: "npc-1" }, duplicate = { ...first, eventId: "vote-2", createdOrder: 1 };
   assert.throws(() => validateEventReferences([first, duplicate], { acceptedSpeechActs: [voteAct] }), (error) => error.code === "duplicate_semantic_event");
   assert.throws(() => validateEventReferences([first, { ...duplicate, targetId: "npc-2" }], { acceptedSpeechActs: [voteAct] }));
+});
+
+test("PublicEvent metadata is bound to its source transaction", () => {
+  const statementAct = { ...actBase, type: "accepted_non_game_statement" }, event = { ...eventBase, eventId: "statement-1", eventType: "public_statement_recorded" };
+  assert.doesNotThrow(() => validateEventReferences([event], { acceptedSpeechActs: [statementAct] }));
+  for (const changed of [{ requestId: "other" }, { turnId: "other" }, { correlationId: "other" }, { stateVersion: 2 }, { causationId: "other" }]) assert.throws(() => validateEventReferences([{ ...event, ...changed }], { acceptedSpeechActs: [statementAct] }));
+  const plan = { ...canonicalPlan(), intendedSpeechActs: [{ descriptorId: "desc-1", descriptorType: "vote_declaration", targetId: "npc-1" }] }, source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, npcEvent = { ...eventBase, eventId: "npc-vote", requestId: "reaction-request-1", actorId: "npc-1", source, stateVersion: 2, eventType: "vote_declared", targetId: "npc-1" };
+  assert.doesNotThrow(() => validateEventReferences([npcEvent], { reactionPlans: [plan] }));
+  assert.throws(() => validateEventReferences([{ ...npcEvent, correlationId: "other" }], { reactionPlans: [plan] }));
+});
+
+test("NpcReactionPlan version and correlation derive from originating input", () => {
+  const plan = controlledPlan(); assert.doesNotThrow(() => validateReactionPlanReferences([plan], { inputRecords: [input] }));
+  assert.throws(() => validateReactionPlanReferences([{ ...plan, resultingStateVersion: 3 }], { inputRecords: [input] }), (error) => error.code === "state_version_mismatch");
+  assert.throws(() => validateReactionPlanReferences([{ ...plan, correlationId: "other" }], { inputRecords: [input] }));
+});
+
+test("DisplayPlan must cover raw input without prefix, gap, or suffix loss", () => {
+  const complete = { schemaVersion: 1, displayPlanId: "display-complete", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "raw-all", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 16 } }] };
+  assert.doesNotThrow(() => validateDisplayPlanReferences([complete], { inputRecords: [input] }));
+  assert.throws(() => validateDisplayPlanReferences([{ ...complete, segments: [{ ...complete.segments[0], sourceSpan: { start: 1, end: 16 } }] }], { inputRecords: [input] }));
+  assert.throws(() => validateDisplayPlanReferences([{ ...complete, segments: [{ ...complete.segments[0], sourceSpan: { start: 0, end: 15 } }] }], { inputRecords: [input] }));
+  assert.throws(() => validateDisplayPlanReferences([{ ...complete, segments: [{ segmentId: "raw-a", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 4 } }, { segmentId: "raw-b", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 5, end: 16 } }] }], { inputRecords: [input] }));
+});
+
+test("graph enforces commit identity, finalization identity, and stream order uniqueness", () => {
+  const baseResult = { schemaVersion: 1, requestId: "request-1", correlationId: "corr-1", requestFingerprint: fingerprint, commitType: "player_conversation", preconditionStateVersion: 0, resultingStateVersion: 1, inputRecordId: "input-1", displayPlanId: "display-1", playerPublicationId: "pub-1", createdEventIds: [], createdClaimIds: [], createdAtOrder: 0 };
+  assert.throws(() => validateCommitResultReferences([baseResult, { ...baseResult }], {}));
+  assert.throws(() => validateCommitResultReferences([baseResult, { ...baseResult, requestFingerprint: "b".repeat(64) }], {}), (error) => error.code === "idempotency_conflict");
+  const { reservation, finalization } = controlledPublicationFixtures(), { recordType: _recordType, actorId: _actorId, correlationId: _correlationId, turnId: _turnId, stateVersion: _stateVersion, ...finalizationResult } = finalization;
+  assert.throws(() => validateConversationGraph({ inputRecords: [input], reactionPlans: [controlledPlan()], publications: [reservation, finalization], finalizationResults: [finalizationResult, { ...finalizationResult }] }));
+  assert.throws(() => validateConversationGraph({ inputRecords: [input, { ...input, inputRecordId: "input-2" }] }));
+  const firstEvent = { ...eventBase, eventId: "event-a", eventType: "public_statement_recorded" }, secondEvent = { ...eventBase, eventId: "event-b", createdOrder: 0, eventType: "public_statement_recorded", source: { ...playerEventSource, acceptedSpeechActId: "act-2" } };
+  assert.throws(() => validateConversationGraph({ inputRecords: [input], events: [firstEvent, secondEvent] }));
 });
