@@ -45,6 +45,31 @@ export function validateSpeechActCandidates(values, rawText) {
   let end = -1; values.forEach((value, index) => { validateSpeechActCandidate(value, rawText, `candidates[${index}]`); if (value.sourceSpan.start < end) fail(`candidates[${index}].sourceSpan`, "must be ordered and non-overlapping"); end = value.sourceSpan.end; }); return values;
 }
 
+export function validateUninterpretableAlternative(value, rawText, path = "alternative") {
+  if (value.speechActs.length !== 1 || value.speechActs[0].type !== "uninterpretable") fail(path, "uninterpretable must be the only speech act");
+  const span = value.speechActs[0].sourceSpan;
+  if (span.start !== 0 || span.end !== [...rawText].length) fail(`${path}.speechActs[0].sourceSpan`, "uninterpretable must span the entire input");
+  return value;
+}
+
+export function validateSpeechActAlternative(value, rawText, path = "alternative") {
+  exact(value, ["alternativeId", "speechActs", "confidence"], [], path);
+  id(value.alternativeId, `${path}.alternativeId`);
+  if (typeof value.confidence !== "number" || !Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1) fail(`${path}.confidence`, "must be a finite number from 0 to 1");
+  validateSpeechActCandidates(value.speechActs, rawText);
+  if (value.speechActs.some((act) => act.type === "uninterpretable")) validateUninterpretableAlternative(value, rawText, path);
+  return value;
+}
+
+export function validateInterpreterModelOutput(value, rawText) {
+  const path = "interpreterModelOutput";
+  exact(value, ["schemaVersion", "alternatives"], [], path); schema(value, path);
+  if (!Array.isArray(value.alternatives) || value.alternatives.length < 1 || value.alternatives.length > 3) fail(`${path}.alternatives`, "must contain 1-3 alternatives");
+  value.alternatives.forEach((alternative, index) => validateSpeechActAlternative(alternative, rawText, `${path}.alternatives[${index}]`));
+  assertUniqueIds(value.alternatives.map((alternative) => alternative.alternativeId), "alternativeIds");
+  return value;
+}
+
 const acceptedCommon = ["schemaVersion", "speechActId", "requestId", "acceptedTurnId", "acceptedStateVersion", "acceptedPhase", "inputRecordId", "actorId", "causationId", "correlationId", "idempotencyKey", "sourceSpan", "type"];
 export function validateAcceptedSpeechAct(value, rawText, path = "acceptedSpeechAct") {
   const candidateType = Object.entries(acceptedTypeForCandidate).find(([, accepted]) => accepted === value?.type)?.[0]; if (!candidateType) fail(path, "unknown accepted type");
@@ -67,7 +92,7 @@ export function validateClaimSource(value, path = "claimSource") {
 export function validateCanonicalClaim(value, path = "canonicalClaim") {
   const extra = value?.type === "role_claim" ? ["claimedRole"] : value?.type === "result_claim" ? ["targetId", "result"] : fail(path, "unknown type");
   exact(value, ["schemaVersion", "claimId", "claimRevision", "actorId", "source", "idempotencyKey", "createdTurnId", "createdStateVersion", "repeatsClaimId", "contradictsClaimIds", "status", "type", ...extra], [], path); schema(value, path);
-  for (const k of ["claimId", "actorId", "createdTurnId"]) id(value[k], `${path}.${k}`); integer(value.claimRevision, 1, `${path}.claimRevision`); integer(value.createdStateVersion, 0, `${path}.createdStateVersion`); if (!SHA256_PATTERN.test(value.idempotencyKey)) fail(`${path}.idempotencyKey`, "must be SHA-256");
+  for (const k of ["claimId", "actorId", "createdTurnId"]) id(value[k], `${path}.${k}`); literal(value.claimRevision, 1, `${path}.claimRevision`); integer(value.createdStateVersion, 0, `${path}.createdStateVersion`); if (!SHA256_PATTERN.test(value.idempotencyKey)) fail(`${path}.idempotencyKey`, "must be SHA-256");
   if (value.repeatsClaimId !== null) id(value.repeatsClaimId, `${path}.repeatsClaimId`); ids(value.contradictsClaimIds, 0, 64, `${path}.contradictsClaimIds`); if (value.repeatsClaimId && value.contradictsClaimIds.length) fail(path, "repeat and contradiction are mutually exclusive"); literal(value.status, "asserted", `${path}.status`); validateClaimSource(value.source, `${path}.source`); validateTypedFields(value, extra, path); return value;
 }
 
@@ -80,9 +105,11 @@ export function validatePublicEvent(value, path = "publicEvent") {
   exact(value, [...common, ...extra], [], path); schema(value, path); for (const k of ["eventId", "requestId", "turnId", "actorId", "causationId", "correlationId", "idempotencyKey"]) id(value[k], `${path}.${k}`); integer(value.stateVersion, 0, `${path}.stateVersion`); integer(value.createdOrder, 0, `${path}.createdOrder`); enumField(value, "occurredPhase", enums.gamePhase, path); validateSemanticEventSource(value.source, `${path}.source`); validateTypedFields(value, extra, path); return value;
 }
 
-export function validatePlayerUtteranceDisplayPlan(value, input) {
+export function validatePlayerUtteranceDisplayPlan(value, input, displaySources = {}) {
   const path = "displayPlan"; exact(value, ["schemaVersion", "displayPlanId", "inputRecordId", "turnId", "stateVersion", "segments"], [], path); schema(value, path); ["displayPlanId", "inputRecordId", "turnId"].forEach((k) => id(value[k], `${path}.${k}`)); integer(value.stateVersion, 0, `${path}.stateVersion`); if (!Array.isArray(value.segments) || value.segments.length < 1 || value.segments.length > 64) fail(`${path}.segments`, "must contain 1-64 segments");
-  const segmentIds = []; value.segments.forEach((segment, i) => { const p = `${path}.segments[${i}]`; const fields = segment.type === "raw_input" ? ["inputRecordId", "sourceSpan"] : segment.type === "canonical_claim" ? ["claimId"] : segment.type === "canonical_vote" ? ["voteEventId"] : segment.type === "canonical_suspicion" ? ["suspicionEventId"] : fail(p, "unknown type"); exact(segment, ["segmentId", "type", ...fields], [], p); id(segment.segmentId, `${p}.segmentId`); segmentIds.push(segment.segmentId); fields.filter((k) => k !== "sourceSpan").forEach((k) => id(segment[k], `${p}.${k}`)); if (segment.sourceSpan) validateSourceSpan(segment.sourceSpan, input.rawText, `${p}.sourceSpan`); }); assertUniqueIds(segmentIds, "segmentIds"); return value;
+  if (!input || value.inputRecordId !== input.inputRecordId || value.turnId !== input.turnId) fail(path, "input and turn references must match the PlayerInputRecord");
+  const canonicalSpans = displaySources.canonicalSpans ?? new Map(); let previousRawEnd = -1;
+  const segmentIds = []; value.segments.forEach((segment, i) => { const p = `${path}.segments[${i}]`; const fields = segment.type === "raw_input" ? ["inputRecordId", "sourceSpan"] : segment.type === "canonical_claim" ? ["claimId"] : segment.type === "canonical_vote" ? ["voteEventId"] : segment.type === "canonical_suspicion" ? ["suspicionEventId"] : fail(p, "unknown type"); exact(segment, ["segmentId", "type", ...fields], [], p); id(segment.segmentId, `${p}.segmentId`); segmentIds.push(segment.segmentId); fields.filter((k) => k !== "sourceSpan").forEach((k) => id(segment[k], `${p}.${k}`)); if (segment.sourceSpan) { validateSourceSpan(segment.sourceSpan, input.rawText, `${p}.sourceSpan`); if (segment.inputRecordId !== value.inputRecordId || segment.sourceSpan.start < previousRawEnd) fail(p, "raw spans must match the input and be ordered without overlap"); for (const span of canonicalSpans.values()) if (segment.sourceSpan.start < span.end && span.start < segment.sourceSpan.end) fail(p, "raw span duplicates canonicalized content"); previousRawEnd = segment.sourceSpan.end; } }); assertUniqueIds(segmentIds, "segmentIds"); return value;
 }
 
 export function validateSpeechActDescriptor(value, expectedMode, path = "descriptor") {
@@ -93,12 +120,15 @@ export function validateNpcReactionPlan(value) {
   const path = "reactionPlan", common = ["schemaVersion", "requestId", "correlationId", "causationId", "originatingInputRecordId", "locale", "causationEventIds", "reactionPlanId", "turnId", "resultingStateVersion", "npcId", "renderMode", "intendedSpeechActs", "policies", "maxChars"];
   const tail = value?.renderMode === "canonical_only" ? ["canonicalSegments"] : value?.renderMode === "controlled_commentary" ? ["commentaryPlan"] : fail(path, "unknown renderMode"); exact(value, [...common, ...tail], [], path); schema(value, path); ["requestId", "correlationId", "causationId", "originatingInputRecordId", "reactionPlanId", "turnId", "npcId"].forEach((k) => id(value[k], `${path}.${k}`)); enumField(value, "locale", enums.supportedLocale, path); ids(value.causationEventIds, 0, 16, `${path}.causationEventIds`); integer(value.resultingStateVersion, 1, `${path}.resultingStateVersion`); integer(value.maxChars, 1, `${path}.maxChars`, 1000);
   if (!Array.isArray(value.intendedSpeechActs) || value.intendedSpeechActs.length < 1 || value.intendedSpeechActs.length > 16) fail(`${path}.intendedSpeechActs`, "must contain 1-16 descriptors"); value.intendedSpeechActs.forEach((d, i) => validateSpeechActDescriptor(d, value.renderMode, `${path}.intendedSpeechActs[${i}]`)); assertUniqueIds(value.intendedSpeechActs.map((d) => d.descriptorId), "descriptorIds");
-  exact(value.policies, ["policyType", "allowStateChanges", "allowClaims", "allowVoteDeclaration", "allowSuspicionUpdate", "allowMemoryUpdate"], [], `${path}.policies`); literal(value.policies.policyType, "reaction_policies", `${path}.policies.policyType`); Object.keys(value.policies).filter((k) => k !== "policyType").forEach((k) => bool(value.policies[k], `${path}.policies.${k}`)); if (value.renderMode === "controlled_commentary" && Object.values(value.policies).some((v) => v === true)) fail(`${path}.policies`, "controlled commentary policies must all be false");
+  exact(value.policies, ["policyType", "allowStateChanges", "allowClaims", "allowVoteDeclaration", "allowSuspicionUpdate", "allowMemoryUpdate"], [], `${path}.policies`); literal(value.policies.policyType, "reaction_policies", `${path}.policies.policyType`); Object.keys(value.policies).filter((k) => k !== "policyType").forEach((k) => bool(value.policies[k], `${path}.policies.${k}`));
+  const types = new Set(value.intendedSpeechActs.map((descriptor) => descriptor.descriptorType));
+  const expectedPolicies = value.renderMode === "controlled_commentary" ? { allowStateChanges: false, allowClaims: false, allowVoteDeclaration: false, allowSuspicionUpdate: false, allowMemoryUpdate: false } : { allowStateChanges: true, allowClaims: types.has("role_claim") || types.has("result_claim"), allowVoteDeclaration: types.has("vote_declaration"), allowSuspicionUpdate: types.has("suspicion"), allowMemoryUpdate: types.has("vote_declaration") };
+  for (const [key, expected] of Object.entries(expectedPolicies)) if (value.policies[key] !== expected) fail(`${path}.policies.${key}`, "does not reflect intended descriptors");
   if (value.renderMode === "controlled_commentary") { exact(value.commentaryPlan, ["intent", "allowedPublicReferenceIds"], [], `${path}.commentaryPlan`); enumField(value.commentaryPlan, "intent", enums.commentaryIntent, `${path}.commentaryPlan`); ids(value.commentaryPlan.allowedPublicReferenceIds, 0, 32, `${path}.commentaryPlan.allowedPublicReferenceIds`); }
   else validateCanonicalSegments(value.canonicalSegments, value.intendedSpeechActs); return value;
 }
 
-function validateCanonicalSegments(segments, descriptors) { if (!Array.isArray(segments) || segments.length < 1 || segments.length > 16 || segments.length !== descriptors.length) fail("reactionPlan.canonicalSegments", "must cover descriptors exactly once"); segments.forEach((s, i) => { const field = s.type === "canonical_claim" ? "claimId" : s.type === "canonical_vote" ? "voteEventId" : s.type === "canonical_suspicion" ? "suspicionEventId" : fail(`canonicalSegments[${i}]`, "unknown type"); exact(s, ["segmentId", "descriptorId", "type", field], [], `canonicalSegments[${i}]`); ["segmentId", "descriptorId", field].forEach((k) => id(s[k], `canonicalSegments[${i}].${k}`)); if (s.descriptorId !== descriptors[i].descriptorId) fail(`canonicalSegments[${i}]`, "descriptor coverage must preserve order"); }); assertUniqueIds(segments.map((s) => s.segmentId), "canonicalSegmentIds"); }
+function validateCanonicalSegments(segments, descriptors) { const compatible = { role_claim: "canonical_claim", result_claim: "canonical_claim", vote_declaration: "canonical_vote", suspicion: "canonical_suspicion" }; if (!Array.isArray(segments) || segments.length < 1 || segments.length > 16 || segments.length !== descriptors.length) fail("reactionPlan.canonicalSegments", "must cover descriptors exactly once"); segments.forEach((s, i) => { const field = s.type === "canonical_claim" ? "claimId" : s.type === "canonical_vote" ? "voteEventId" : s.type === "canonical_suspicion" ? "suspicionEventId" : fail(`canonicalSegments[${i}]`, "unknown type"); exact(s, ["segmentId", "descriptorId", "type", field], [], `canonicalSegments[${i}]`); ["segmentId", "descriptorId", field].forEach((k) => id(s[k], `canonicalSegments[${i}].${k}`)); if (s.descriptorId !== descriptors[i].descriptorId || s.type !== compatible[descriptors[i].descriptorType]) fail(`canonicalSegments[${i}]`, "segment type and order must match its descriptor"); }); assertUniqueIds(segments.map((s) => s.segmentId), "canonicalSegmentIds"); }
 
 export function validateControlledCommentaryVariant(value) { const p = "variant"; exact(value, ["schemaVersion", "variantId", "variantVersion", "locale", "renderMode", "intent", "text", "enabled", "maximumRenderedChars", "toneTags", "lifecycle"], [], p); schema(value, p); id(value.variantId, `${p}.variantId`); integer(value.variantVersion, 1, `${p}.variantVersion`); enumField(value, "locale", enums.supportedLocale, p); literal(value.renderMode, "controlled_commentary", `${p}.renderMode`); enumField(value, "intent", enums.commentaryIntent, p); if (typeof value.text !== "string" || [...value.text].length < 1 || [...value.text].length > 240 || /\{[^}]*\}/.test(value.text)) fail(`${p}.text`, "must be placeholder-free text of 1-240 code points"); bool(value.enabled, `${p}.enabled`); integer(value.maximumRenderedChars, [...value.text].length, `${p}.maximumRenderedChars`, 240); if (!Array.isArray(value.toneTags) || value.toneTags.length > 4 || new Set(value.toneTags).size !== value.toneTags.length) fail(`${p}.toneTags`, "must contain 0-4 unique tags"); value.toneTags.forEach((tag) => oneOf(tag, enums.toneTag, `${p}.toneTags`)); enumField(value, "lifecycle", enums.variantLifecycle, p); return value; }
 
@@ -122,6 +152,17 @@ export function validateDisplayPublicationRecord(value) {
   return value;
 }
 
+export function validateNpcPublicationFinalizationResult(value) {
+  const p = "finalizationResult";
+  exact(value, ["schemaVersion", "publicationId", "reservationId", "finalizationId", "reactionPlanId", "source", "locale", "selectedVariantId", "selectedVariantVersion", "fallbackUsed", "finalizationReason", "publicationSlotOrder", "recordAppendOrder", "createdAt"], [], p);
+  schema(value, p);
+  for (const key of ["publicationId", "reservationId", "finalizationId", "reactionPlanId", "selectedVariantId"]) id(value[key], `${p}.${key}`);
+  exact(value.source, ["sourceType", "rendererRequestId"], [], `${p}.source`); literal(value.source.sourceType, "renderer_request", `${p}.source.sourceType`); id(value.source.rendererRequestId, `${p}.source.rendererRequestId`);
+  enumField(value, "locale", enums.supportedLocale, p); integer(value.selectedVariantVersion, 1, `${p}.selectedVariantVersion`); bool(value.fallbackUsed, `${p}.fallbackUsed`); enumField(value, "finalizationReason", enums.finalizationReason, p); integer(value.publicationSlotOrder, 0, `${p}.publicationSlotOrder`); integer(value.recordAppendOrder, 0, `${p}.recordAppendOrder`);
+  if (typeof value.createdAt !== "string" || !/^\d{4}-\d{2}-\d{2}T.*Z$/.test(value.createdAt)) fail(`${p}.createdAt`, "must be RFC3339 UTC");
+  return value;
+}
+
 export function validateConversationCommitResult(value) {
   const p = "commitResult", common = ["schemaVersion", "requestId", "correlationId", "requestFingerprint", "commitType", "preconditionStateVersion", "resultingStateVersion", "createdEventIds", "createdClaimIds", "createdAtOrder"];
   let extra;
@@ -131,4 +172,4 @@ export function validateConversationCommitResult(value) {
   else fail(p, "unknown commit result member"); exact(value, [...common, ...extra], [], p); schema(value, p); ["requestId", "correlationId", ...extra.filter((k) => !["resultMode"].includes(k))].forEach((k) => id(value[k], `${p}.${k}`)); if (!SHA256_PATTERN.test(value.requestFingerprint)) fail(`${p}.requestFingerprint`, "must be SHA-256"); integer(value.preconditionStateVersion, 0, `${p}.preconditionStateVersion`); integer(value.resultingStateVersion, 1, `${p}.resultingStateVersion`); if (value.resultingStateVersion !== value.preconditionStateVersion + 1) fail(p, "state version must increment exactly once"); ids(value.createdEventIds, 0, 64, `${p}.createdEventIds`); ids(value.createdClaimIds, 0, 4, `${p}.createdClaimIds`); integer(value.createdAtOrder, 0, `${p}.createdAtOrder`); return value;
 }
 
-export function validateReferentialIntegrity({ claims = [], events = [], inputRecords = [], displayPlans = [] }) { const claimIds = new Set(claims.map((x) => x.claimId)), eventIds = new Set(events.map((x) => x.eventId)), inputs = new Set(inputRecords.map((x) => x.inputRecordId)); for (const plan of displayPlans) { if (!inputs.has(plan.inputRecordId)) fail("displayPlan.inputRecordId", "dangling reference"); for (const s of plan.segments) { if (s.claimId && !claimIds.has(s.claimId)) fail("segment.claimId", "dangling reference"); if (s.voteEventId && !eventIds.has(s.voteEventId)) fail("segment.voteEventId", "dangling reference"); if (s.suspicionEventId && !eventIds.has(s.suspicionEventId)) fail("segment.suspicionEventId", "dangling reference"); } } return true; }
+export { validateReferentialIntegrity } from "./references.mjs";

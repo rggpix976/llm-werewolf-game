@@ -15,9 +15,26 @@ export function assertUniqueIds(values, label = "ids") {
 }
 
 export function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  return JSON.stringify(value);
+  const stack = new Set();
+  function serialize(current) {
+    if (current === null || typeof current === "string" || typeof current === "boolean") return JSON.stringify(current);
+    if (typeof current === "number") {
+      if (!Number.isFinite(current)) throw new TypeError("canonical JSON rejects non-finite numbers");
+      return JSON.stringify(current);
+    }
+    if (typeof current !== "object") throw new TypeError(`canonical JSON rejects ${typeof current}`);
+    if (stack.has(current)) throw new TypeError("canonical JSON rejects cyclic values");
+    if (!Array.isArray(current) && Object.getPrototypeOf(current) !== Object.prototype && Object.getPrototypeOf(current) !== null) {
+      throw new TypeError("canonical JSON accepts only arrays and plain objects");
+    }
+    stack.add(current);
+    const result = Array.isArray(current)
+      ? `[${current.map(serialize).join(",")}]`
+      : `{${Object.keys(current).sort().map((key) => `${JSON.stringify(key)}:${serialize(current[key])}`).join(",")}}`;
+    stack.delete(current);
+    return result;
+  }
+  return serialize(value);
 }
 
 export function sha256Fingerprint(...parts) {
@@ -30,6 +47,10 @@ export function playerClaimIdempotencyKey({ requestId, acceptedSpeechActIds, act
 
 export function npcClaimIdempotencyKey({ reactionCommitRequestId, reactionPlanId, descriptorId, actorId, claimKind }) {
   return sha256Fingerprint(reactionCommitRequestId, reactionPlanId, descriptorId, actorId, claimKind);
+}
+
+export function classifyIdempotentWrite(existingPayload, incomingPayload) {
+  return canonicalJson(existingPayload) === canonicalJson(incomingPayload) ? "replay" : "idempotency_conflict";
 }
 
 export function createId(prefix, uuid = randomUUID) {

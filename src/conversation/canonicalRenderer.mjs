@@ -1,25 +1,85 @@
 import { enums } from "./domain.mjs";
+import { validateCanonicalClaim, validatePublicEvent, validateSelectedCommentaryVariant } from "./validators.mjs";
 
-const JA = new Set(["ja", "ja-JP"]);
-function localeOf(locale) { if (!enums.supportedLocale.includes(locale)) throw new TypeError("unsupported locale"); return JA.has(locale) ? "ja" : "en"; }
+const labels = Object.freeze({
+  ja: Object.freeze({ roles: Object.freeze({ seer: "占い師", werewolf: "人狼", citizen: "市民" }), results: Object.freeze({ werewolf: "人狼", not_werewolf: "人狼ではない" }) }),
+  en: Object.freeze({ roles: Object.freeze({ seer: "seer", werewolf: "werewolf", citizen: "citizen" }), results: Object.freeze({ werewolf: "a werewolf", not_werewolf: "not a werewolf" }) })
+});
 
-export function renderCanonicalClaim(claim, locale) {
-  const lang = localeOf(locale);
-  if (claim.type === "role_claim") return lang === "ja" ? `${claim.actorId}は${claim.claimedRole}を主張しました。` : `${claim.actorId} claimed ${claim.claimedRole}.`;
-  if (claim.type === "result_claim") return lang === "ja" ? `${claim.actorId}は${claim.targetId}を${claim.result}と判定しました。` : `${claim.actorId} claimed ${claim.targetId} is ${claim.result}.`;
-  throw new TypeError("unsupported canonical claim");
+function language(locale) {
+  if (!enums.supportedLocale.includes(locale)) throw new TypeError("unsupported locale");
+  return locale.startsWith("ja") ? "ja" : "en";
 }
 
-export function renderCanonicalVote(event, locale) {
-  return localeOf(locale) === "ja" ? `${event.actorId}は${event.targetId}への投票を宣言しました。` : `${event.actorId} declared a vote for ${event.targetId}.`;
+function participant(participantsById, participantId) {
+  const value = participantsById instanceof Map ? participantsById.get(participantId) : participantsById?.[participantId];
+  if (!value || value.id !== participantId || typeof value.displayName !== "string") throw new TypeError(`unknown participant ${participantId}`);
+  const length = [...value.displayName].length;
+  if (length < 1 || length > 64 || /[<>&\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value.displayName)) throw new TypeError(`unsafe display name for ${participantId}`);
+  return value.displayName;
 }
 
-export function renderCanonicalSuspicion(event, locale) {
-  return localeOf(locale) === "ja" ? `${event.actorId}は${event.targetId}への疑いを表明しました。` : `${event.actorId} expressed suspicion of ${event.targetId}.`;
+function context(options) {
+  if (!options || typeof options !== "object" || !options.participantsById) throw new TypeError("renderer requires an engine-owned participant projection");
+  return { locale: options.locale, lang: language(options.locale), participantsById: options.participantsById };
 }
 
-export function resolveSelectedCommentaryVariant(selection, registry) {
-  const match = registry.find((item) => item.variantId === selection.variantId && item.variantVersion === selection.variantVersion && item.locale === selection.locale);
-  if (!match) throw new TypeError("selected commentary variant does not exist for the exact locale and version");
+export function renderCanonicalClaim(claim, options) {
+  validateCanonicalClaim(claim);
+  const { lang, participantsById } = context(options);
+  const actor = participant(participantsById, claim.actorId);
+  if (claim.type === "role_claim") return lang === "ja" ? `${actor}は${labels.ja.roles[claim.claimedRole]}を主張しました。` : `${actor} claimed to be a ${labels.en.roles[claim.claimedRole]}.`;
+  const target = participant(participantsById, claim.targetId);
+  return lang === "ja" ? `${actor}は${target}を${labels.ja.results[claim.result]}と判定しました。` : `${actor} claimed ${target} is ${labels.en.results[claim.result]}.`;
+}
+
+function renderTargetEvent(event, options, expectedType, jaText, enText) {
+  validatePublicEvent(event);
+  if (event.eventType !== expectedType) throw new TypeError(`expected ${expectedType}`);
+  const { lang, participantsById } = context(options);
+  const actor = participant(participantsById, event.actorId), target = participant(participantsById, event.targetId);
+  return lang === "ja" ? jaText(actor, target) : enText(actor, target);
+}
+
+export function renderCanonicalVote(event, options) {
+  return renderTargetEvent(event, options, "vote_declared", (a, t) => `${a}は${t}への投票を宣言しました。`, (a, t) => `${a} declared a vote for ${t}.`);
+}
+
+export function renderCanonicalSuspicion(event, options) {
+  return renderTargetEvent(event, options, "suspicion_expressed", (a, t) => `${a}は${t}への疑いを表明しました。`, (a, t) => `${a} expressed suspicion of ${t}.`);
+}
+
+function registryIndex(registry) {
+  const index = new Map();
+  for (const entry of registry) {
+    const key = `${entry.variantId}\0${entry.variantVersion}\0${entry.locale}`;
+    if (index.has(key)) throw new TypeError("duplicate commentary registry key");
+    index.set(key, entry);
+  }
+  return index;
+}
+
+export function validateRendererSelection(selection, allowedVariants, registry, expectedIntent) {
+  validateSelectedCommentaryVariant(selection);
+  if (!Array.isArray(allowedVariants) || allowedVariants.length < 1) throw new TypeError("allowedVariants must not be empty");
+  const ids = new Set(), pairs = new Set();
+  for (const allowed of allowedVariants) {
+    const pair = `${allowed.variantId}\0${allowed.variantVersion}`;
+    if (pairs.has(pair) || ids.has(allowed.variantId)) throw new TypeError("allowedVariants must contain one version per variant ID");
+    pairs.add(pair); ids.add(allowed.variantId);
+  }
+  const allowed = allowedVariants.find((v) => v.variantId === selection.variantId && v.variantVersion === selection.variantVersion && v.locale === selection.locale);
+  if (!allowed || allowed.intent !== expectedIntent) throw new TypeError("selection is not an allowed variant for the requested intent");
+  const match = registryIndex(registry).get(`${selection.variantId}\0${selection.variantVersion}\0${selection.locale}`);
+  if (!match || match.renderMode !== "controlled_commentary" || match.intent !== expectedIntent || match.enabled !== true || match.lifecycle !== "active" || [...match.text].length > match.maximumRenderedChars) throw new TypeError("registry entry is not eligible for a new selection");
   return match.text;
 }
+
+export function resolveHistoricalVariant(selection, registry) {
+  validateSelectedCommentaryVariant(selection);
+  const match = registryIndex(registry).get(`${selection.variantId}\0${selection.variantVersion}\0${selection.locale}`);
+  if (!match) throw new TypeError("historical commentary variant does not exist");
+  return match.text;
+}
+
+export const resolveSelectedCommentaryVariant = resolveHistoricalVariant;
