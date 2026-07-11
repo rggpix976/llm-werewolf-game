@@ -4,7 +4,7 @@ import { canonicalJson, classifyIdempotentWrite, npcClaimIdempotencyKey, playerC
 import { renderCanonicalClaim, renderCanonicalSuspicion, renderCanonicalVote, resolveHistoricalVariant, validateRendererSelection } from "../src/conversation/canonicalRenderer.mjs";
 import { candidateFields, enums } from "../src/conversation/domain.mjs";
 import { validateAcceptedSpeechAct, validateCanonicalClaim, validateControlledCommentaryVariant, validateConversationCommitResult, validateDisplayPublicationRecord, validateInterpreterModelOutput, validateNpcPublicationFinalizationResult, validateNpcReactionPlan, validatePendingRendererRequest, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent, validateReferentialIntegrity, validateSelectedCommentaryVariant, validateSpeechActCandidates, validateSourceSpan } from "../src/conversation/validators.mjs";
-import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateConversationGraph, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePublicationFinalizationAtAppend, validateReactionPlanReferences } from "../src/conversation/references.mjs";
+import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateConversationGraph, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePlayerPublicationReferences, validatePublicationFinalizationAtAppend, validateReactionPlanReferences } from "../src/conversation/references.mjs";
 
 const fingerprint = "a".repeat(64);
 const input = { schemaVersion: 1, inputRecordId: "input-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", capturedStateVersion: 0, actorId: "player", rawText: "😀占い師です。Beniが怪しい。", locale: "ja-JP", createdOrder: 0 };
@@ -349,4 +349,41 @@ test("complete graph validation includes finalization result mirrors", () => {
   const { reservation, finalization } = controlledPublicationFixtures(), { recordType: _recordType, actorId: _actorId, correlationId: _correlationId, turnId: _turnId, stateVersion: _stateVersion, ...result } = finalization, graph = { inputRecords: [input], reactionPlans: [controlledPlan()], publications: [reservation, finalization], finalizationResults: [result] };
   assert.equal(validateConversationGraph(graph), true);
   assert.throws(() => validateConversationGraph({ ...graph, finalizationResults: [{ ...result, selectedVariantVersion: 2 }] }));
+});
+
+test("PublicEvent payload must match AcceptedSpeechAct and NPC descriptor", () => {
+  const voteAct = { ...actBase, type: "accepted_vote_declaration", targetId: "npc-1" }, voteEvent = { ...eventBase, eventId: "vote-event", eventType: "vote_declared", targetId: "npc-2" };
+  assert.throws(() => validateEventReferences([voteEvent], { acceptedSpeechActs: [voteAct] }), (error) => error.code === "event_payload_mismatch");
+  const questionAct = { ...actBase, type: "accepted_question", targetId: "npc-1", topic: "role" }, questionEvent = { ...eventBase, eventId: "question-event", eventType: "public_question_recorded", targetId: "npc-2", topic: "vote" };
+  assert.throws(() => validateEventReferences([questionEvent], { acceptedSpeechActs: [questionAct] }));
+  const plan = { ...canonicalPlan(), intendedSpeechActs: [{ descriptorId: "desc-1", descriptorType: "vote_declaration", targetId: "npc-1" }] }, source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, npcEvent = { ...eventBase, eventId: "npc-vote", requestId: "reaction-request-1", actorId: "npc-1", source, stateVersion: 2, eventType: "vote_declared", targetId: "npc-2" };
+  assert.throws(() => validateEventReferences([npcEvent], { reactionPlans: [plan] }));
+});
+
+test("conversation graph binds every AcceptedSpeechAct to PlayerInputRecord metadata", () => {
+  const informationAct = { ...actBase, type: "accepted_information_request", topic: "rules" }, graph = { inputRecords: [input], acceptedSpeechActs: [informationAct] };
+  assert.equal(validateConversationGraph(graph), true);
+  for (const changed of [{ requestId: "other" }, { correlationId: "other" }, { acceptedTurnId: "other" }, { acceptedStateVersion: 1 }, { actorId: "npc-1" }]) assert.throws(() => validateConversationGraph({ ...graph, acceptedSpeechActs: [{ ...informationAct, ...changed }] }));
+});
+
+test("finalization version must match reservation, plan, and pending request", () => {
+  const { reservation, finalization } = controlledPublicationFixtures(), plan = controlledPlan(), base = { publications: [reservation], reactionPlans: [plan], pendingRendererRequests: [pendingRenderer()], registry: [fallbackVariant()], allowedVariants: fallbackAllowed, expectedIntent: "acknowledge" };
+  assert.throws(() => validatePersistedPublicationReferences([reservation, { ...finalization, stateVersion: 99 }], { reactionPlans: [plan] }), (error) => error.code === "state_version_mismatch");
+  assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), resultingStateVersion: 99 }] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), turnId: "turn-2" }] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { ...base, pendingRendererRequests: [{ ...pendingRenderer(), targetNpcId: "npc-2" }] }));
+});
+
+test("Player publication references reject dangling and duplicate owners", () => {
+  const plan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "seg-1", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 1 } }] }, publication = { schemaVersion: 1, recordType: "player_utterance_published", publicationId: "pub-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", gameStateVersion: 1, occurredPhase: "day_discussion", actorId: "player", inputRecordId: "input-1", displayPlanId: "display-1", idempotencyKey: "idem-1", publicationSlotOrder: 0, recordAppendOrder: 0 };
+  assert.equal(validatePlayerPublicationReferences([publication], { inputRecords: [input], displayPlans: [plan] }), true);
+  assert.throws(() => validatePlayerPublicationReferences([publication], { inputRecords: [], displayPlans: [plan] }));
+  assert.throws(() => validatePlayerPublicationReferences([publication, { ...publication, publicationId: "pub-2", recordAppendOrder: 1 }], { inputRecords: [input], displayPlans: [plan] }));
+  assert.throws(() => validateConversationGraph({ inputRecords: [input], displayPlans: [plan], publications: [{ ...publication, inputRecordId: "missing" }] }));
+});
+
+test("semantic Event key is unique for player and NPC sources", () => {
+  const voteAct = { ...actBase, type: "accepted_vote_declaration", targetId: "npc-1" }, first = { ...eventBase, eventId: "vote-1", eventType: "vote_declared", targetId: "npc-1" }, duplicate = { ...first, eventId: "vote-2", createdOrder: 1 };
+  assert.throws(() => validateEventReferences([first, duplicate], { acceptedSpeechActs: [voteAct] }), (error) => error.code === "duplicate_semantic_event");
+  assert.throws(() => validateEventReferences([first, { ...duplicate, targetId: "npc-2" }], { acceptedSpeechActs: [voteAct] }));
 });
