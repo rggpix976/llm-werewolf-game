@@ -176,6 +176,16 @@ export function validateNpcPublicationFinalizationResult(value) {
   return value;
 }
 
+export function validatePendingRendererRequest(value) {
+  const p = "pendingRendererRequest";
+  exact(value, ["schemaVersion", "pendingType", "requestId", "correlationId", "causationId", "turnId", "resultingStateVersion", "reactionPlanId", "originatingInputRecordId", "locale", "targetNpcId", "operation", "status", "startedAt"], [], p);
+  schema(value, p); literal(value.pendingType, "renderer", `${p}.pendingType`);
+  for (const key of ["requestId", "correlationId", "causationId", "turnId", "reactionPlanId", "originatingInputRecordId", "targetNpcId"]) id(value[key], `${p}.${key}`);
+  integer(value.resultingStateVersion, 1, `${p}.resultingStateVersion`); enumField(value, "locale", enums.supportedLocale, p); literal(value.operation, "render_npc_utterance", `${p}.operation`); oneOf(value.status, ["pending", "aborting", "completed", "failed"], `${p}.status`);
+  if (typeof value.startedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T.*Z$/.test(value.startedAt)) fail(`${p}.startedAt`, "must be RFC3339 UTC");
+  return value;
+}
+
 export function validateConversationCommitResult(value) {
   const p = "commitResult", common = ["schemaVersion", "requestId", "correlationId", "requestFingerprint", "commitType", "preconditionStateVersion", "resultingStateVersion", "createdEventIds", "createdClaimIds", "createdAtOrder"];
   let extra;

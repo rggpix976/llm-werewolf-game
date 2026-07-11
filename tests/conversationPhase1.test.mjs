@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { canonicalJson, classifyIdempotentWrite, npcClaimIdempotencyKey, playerClaimIdempotencyKey, sha256Fingerprint } from "../src/conversation/ids.mjs";
 import { renderCanonicalClaim, renderCanonicalSuspicion, renderCanonicalVote, resolveHistoricalVariant, validateRendererSelection } from "../src/conversation/canonicalRenderer.mjs";
 import { candidateFields, enums } from "../src/conversation/domain.mjs";
-import { validateAcceptedSpeechAct, validateCanonicalClaim, validateControlledCommentaryVariant, validateConversationCommitResult, validateDisplayPublicationRecord, validateInterpreterModelOutput, validateNpcPublicationFinalizationResult, validateNpcReactionPlan, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent, validateReferentialIntegrity, validateSelectedCommentaryVariant, validateSpeechActCandidates, validateSourceSpan } from "../src/conversation/validators.mjs";
-import { validateClaimReferences, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePublicationFinalizationAtAppend } from "../src/conversation/references.mjs";
+import { validateAcceptedSpeechAct, validateCanonicalClaim, validateControlledCommentaryVariant, validateConversationCommitResult, validateDisplayPublicationRecord, validateInterpreterModelOutput, validateNpcPublicationFinalizationResult, validateNpcReactionPlan, validatePendingRendererRequest, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent, validateReferentialIntegrity, validateSelectedCommentaryVariant, validateSpeechActCandidates, validateSourceSpan } from "../src/conversation/validators.mjs";
+import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePublicationFinalizationAtAppend } from "../src/conversation/references.mjs";
 
 const fingerprint = "a".repeat(64);
 const input = { schemaVersion: 1, inputRecordId: "input-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", capturedStateVersion: 0, actorId: "player", rawText: "😀占い師です。Beniが怪しい。", locale: "ja-JP", createdOrder: 0 };
@@ -151,8 +151,8 @@ test("persisted publication lifecycle validates without pending runtime state", 
 });
 
 test("append-time finalization alone requires active matching pending renderer", () => {
-  const { reservation, finalization } = controlledPublicationFixtures(), variant = { schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", renderMode: "controlled_commentary", intent: "acknowledge", text: "了解しました。", enabled: true, maximumRenderedChars: 20, toneTags: ["brief"], lifecycle: "active" }, allowed = [{ schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }], pending = { rendererRequestId: "renderer-1", reactionPlanId: "plan-1", originatingInputRecordId: "input-1", locale: "ja-JP", status: "pending" };
-  assert.equal(validatePublicationFinalizationAtAppend(finalization, { publications: [reservation], pendingRendererRequests: [pending], registry: [variant], allowedVariants: allowed, expectedIntent: "acknowledge" }), true);
+  const { reservation, finalization } = controlledPublicationFixtures(), variant = { schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", renderMode: "controlled_commentary", intent: "acknowledge", text: "了解しました。", enabled: true, maximumRenderedChars: 20, toneTags: ["brief"], lifecycle: "active" }, allowed = [{ schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }], pending = { schemaVersion: 1, pendingType: "renderer", requestId: "renderer-1", correlationId: "corr-1", causationId: "cause-1", turnId: "turn-1", resultingStateVersion: 2, reactionPlanId: "plan-1", originatingInputRecordId: "input-1", locale: "ja-JP", targetNpcId: "npc-1", operation: "render_npc_utterance", status: "pending", startedAt: "2026-07-11T00:00:00Z" };
+  assert.equal(validatePublicationFinalizationAtAppend(finalization, { publications: [reservation], pendingRendererRequests: [pending], registry: [variant], allowedVariants: allowed, expectedIntent: "acknowledge" }).classification, "new");
   assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { publications: [reservation], registry: [variant], allowedVariants: allowed, expectedIntent: "acknowledge" }));
   assert.throws(() => validatePublicationFinalizationAtAppend(finalization, { publications: [reservation], pendingRendererRequests: [{ ...pending, status: "completed" }], registry: [variant], allowedVariants: allowed, expectedIntent: "acknowledge" }));
 });
@@ -203,14 +203,14 @@ test("canonical JSON rejects sparse arrays and own symbol keys", () => {
 });
 
 test("claim repeat and contradiction semantics use array order", () => {
-  const repeat = { ...claim, claimId: "claim-repeat", repeatsClaimId: "claim-1" };
+  const repeat = { ...claim, claimId: "claim-repeat", createdStateVersion: 2, repeatsClaimId: "claim-1" };
   assert.doesNotThrow(() => validateClaimReferences([claim, repeat], { acceptedSpeechActs: [roleAct] }));
   assert.throws(() => validateClaimReferences([claim, { ...repeat, actorId: "npc-1" }], { acceptedSpeechActs: [roleAct] }));
   assert.throws(() => validateClaimReferences([claim, { ...repeat, claimedRole: "citizen" }], { acceptedSpeechActs: [roleAct] }));
-  const contradiction = { ...claim, claimId: "claim-contradiction", claimedRole: "citizen", repeatsClaimId: null, contradictsClaimIds: ["claim-1"] };
-  assert.doesNotThrow(() => validateClaimReferences([claim, contradiction], { acceptedSpeechActs: [roleAct] }));
+  const citizenAct = { ...roleAct, speechActId: "act-citizen", claimedRole: "citizen" }, contradiction = { ...claim, claimId: "claim-contradiction", createdStateVersion: 2, claimedRole: "citizen", source: { ...claim.source, acceptedSpeechActIds: ["act-citizen"] }, repeatsClaimId: null, contradictsClaimIds: ["claim-1"] };
+  assert.doesNotThrow(() => validateClaimReferences([claim, contradiction], { acceptedSpeechActs: [roleAct, citizenAct] }));
   assert.throws(() => validateClaimReferences([claim, { ...contradiction, claimedRole: "seer" }], { acceptedSpeechActs: [roleAct] }));
-  assert.throws(() => validateClaimReferences([contradiction, claim], { acceptedSpeechActs: [roleAct] }));
+  assert.doesNotThrow(() => validateClaimReferences([contradiction, claim], { acceptedSpeechActs: [roleAct, citizenAct] }));
 });
 
 test("commit and finalization result references are member-specific", () => {
@@ -228,4 +228,87 @@ test("validation errors expose path, code, and message without mutating input", 
   const invalid = Object.freeze({ ...input, locale: "fr" });
   assert.throws(() => validatePlayerInputRecord(invalid), (error) => typeof error.path === "string" && typeof error.code === "string" && typeof error.message === "string");
   assert.equal(invalid.locale, "fr");
+});
+
+function pendingRenderer(status = "pending") { return { schemaVersion: 1, pendingType: "renderer", requestId: "renderer-1", correlationId: "corr-1", causationId: "cause-1", turnId: "turn-1", resultingStateVersion: 2, reactionPlanId: "plan-1", originatingInputRecordId: "input-1", locale: "ja-JP", targetNpcId: "npc-1", operation: "render_npc_utterance", status, startedAt: "2026-07-11T00:00:00Z" }; }
+function fallbackVariant(lifecycle = "active", enabled = true) { return { schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", renderMode: "controlled_commentary", intent: "acknowledge", text: "了解しました。", enabled, maximumRenderedChars: 20, toneTags: ["brief"], lifecycle }; }
+const fallbackAllowed = [{ schemaVersion: 1, variantId: "fallback-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }];
+
+test("PendingRendererRequest uses requestId and rejects rendererRequestId", () => {
+  assert.doesNotThrow(() => validatePendingRendererRequest(pendingRenderer()));
+  assert.throws(() => validatePendingRendererRequest({ ...pendingRenderer(), rendererRequestId: "renderer-1" }));
+});
+
+test("pending status is a closed mapping of finalization reason", () => {
+  const { reservation, finalization } = controlledPublicationFixtures(), context = { publications: [reservation], registry: [fallbackVariant()], allowedVariants: fallbackAllowed, expectedIntent: "acknowledge" };
+  const selected = { ...finalization, finalizationReason: "renderer_selected", fallbackUsed: false };
+  assert.equal(validatePublicationFinalizationAtAppend(selected, { ...context, pendingRendererRequests: [pendingRenderer()] }).classification, "new");
+  const aborted = { ...finalization, finalizationReason: "renderer_abort_fallback" };
+  assert.equal(validatePublicationFinalizationAtAppend(aborted, { ...context, pendingRendererRequests: [pendingRenderer("aborting")] }).classification, "new");
+  assert.throws(() => validatePublicationFinalizationAtAppend(aborted, { ...context, pendingRendererRequests: [pendingRenderer()] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend(selected, { ...context, pendingRendererRequests: [pendingRenderer("completed")] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend(selected, { ...context, pendingRendererRequests: [{ ...pendingRenderer(), requestId: "other" }] }));
+});
+
+test("finalization attempts classify new, replay, and conflict by operation identity", () => {
+  const { finalization } = controlledPublicationFixtures();
+  assert.equal(classifyPublicationFinalizationAttempt({ candidate: finalization, existingFinalizations: [] }).classification, "new");
+  const replay = classifyPublicationFinalizationAttempt({ candidate: { ...finalization, finalizationId: "retry-id", recordAppendOrder: 99, createdAt: "2026-07-12T00:00:00Z" }, existingFinalizations: [finalization] }); assert.equal(replay.classification, "replay"); assert.equal(replay.existingFinalization.finalizationId, "final-1");
+  assert.equal(classifyPublicationFinalizationAttempt({ candidate: { ...finalization, selectedVariantVersion: 2 }, existingFinalizations: [finalization] }).classification, "conflict");
+  assert.equal(classifyPublicationFinalizationAttempt({ candidate: { ...finalization, finalizationReason: "renderer_error_fallback" }, existingFinalizations: [finalization] }).code, "idempotency_conflict");
+  assert.equal(classifyPublicationFinalizationAttempt({ candidate: { ...finalization, locale: "en" }, existingFinalizations: [finalization] }).classification, "conflict");
+});
+
+test("fallback reason, flag, key, and historical registry resolution agree", () => {
+  const { reservation, finalization } = controlledPublicationFixtures(), base = { publications: [reservation], pendingRendererRequests: [pendingRenderer()], allowedVariants: fallbackAllowed, expectedIntent: "acknowledge" };
+  assert.equal(validatePublicationFinalizationAtAppend(finalization, { ...base, registry: [fallbackVariant("retired", false)] }).classification, "new");
+  assert.throws(() => validatePublicationFinalizationAtAppend({ ...finalization, fallbackUsed: false }, { ...base, registry: [fallbackVariant()] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend({ ...finalization, selectedVariantId: "other" }, { ...base, registry: [fallbackVariant()] }));
+  assert.throws(() => validatePublicationFinalizationAtAppend({ ...finalization, finalizationReason: "renderer_selected", fallbackUsed: true }, { ...base, registry: [fallbackVariant()] }));
+});
+
+test("Player and NPC claim provenance enforce type and payload", () => {
+  assert.doesNotThrow(() => validateClaimReferences([claim], { acceptedSpeechActs: [roleAct] }));
+  assert.throws(() => validateClaimReferences([claim], { acceptedSpeechActs: [{ ...roleAct, type: "accepted_question", targetId: "npc-1", topic: "role", claimedRole: undefined }] }));
+  assert.throws(() => validateClaimReferences([claim], { acceptedSpeechActs: [{ ...roleAct, claimedRole: "citizen" }] }));
+  const { claimedRole: _role, ...resultBase } = claim, resultClaim = { ...resultBase, claimId: "claim-result", type: "result_claim", targetId: "npc-2", result: "werewolf", source: { sourceType: "player_accepted_act", acceptedSpeechActIds: ["act-result"], inputRecordId: "input-1", requestId: "request-1" } }, resultAct = { ...actBase, speechActId: "act-result", type: "accepted_result_claim", targetId: "npc-1", result: "werewolf" };
+  assert.throws(() => validateClaimReferences([resultClaim], { acceptedSpeechActs: [resultAct] }));
+  const plan = canonicalPlan(), npcClaim = { ...claim, actorId: "npc-1", source: { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" } };
+  assert.doesNotThrow(() => validateClaimReferences([npcClaim], { reactionPlans: [plan] })); assert.throws(() => validateClaimReferences([{ ...npcClaim, claimedRole: "citizen" }], { reactionPlans: [plan] }));
+});
+
+test("CommitResult rejects foreign request and state-version objects", () => {
+  const playerPublication = { schemaVersion: 1, recordType: "player_utterance_published", publicationId: "pub-player", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", gameStateVersion: 1, occurredPhase: "day_discussion", actorId: "player", inputRecordId: "input-1", displayPlanId: "display-1", idempotencyKey: "idem-1", publicationSlotOrder: 0, recordAppendOrder: 0 }, displayPlan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "seg-1", type: "canonical_claim", claimId: "claim-1" }] }, event = { ...eventBase, eventId: "event-1", eventType: "role_claim_recorded", claimId: "claim-1" }, result = { schemaVersion: 1, requestId: "request-1", correlationId: "corr-1", requestFingerprint: fingerprint, commitType: "player_conversation", preconditionStateVersion: 0, resultingStateVersion: 1, inputRecordId: "input-1", displayPlanId: "display-1", playerPublicationId: "pub-player", createdEventIds: ["event-1"], createdClaimIds: ["claim-1"], createdAtOrder: 0 };
+  assert.doesNotThrow(() => validatePlayerConversationCommitResultReferences(result, { inputRecords: [input], displayPlans: [displayPlan], publications: [playerPublication], events: [event], claims: [claim] }));
+  assert.throws(() => validatePlayerConversationCommitResultReferences(result, { inputRecords: [input], displayPlans: [displayPlan], publications: [playerPublication], events: [{ ...event, source: { ...event.source, requestId: "foreign" } }], claims: [claim] }));
+  assert.throws(() => validatePlayerConversationCommitResultReferences(result, { inputRecords: [input], displayPlans: [{ ...displayPlan, stateVersion: 2 }], publications: [playerPublication], events: [event], claims: [claim] }));
+  assert.throws(() => validatePlayerConversationCommitResultReferences(result, { inputRecords: [input], displayPlans: [displayPlan], publications: [playerPublication], events: [event], claims: [{ ...claim, createdStateVersion: 2 }] }));
+});
+
+test("NPC CommitResult owns only objects from its reaction transaction", () => {
+  const { reservation } = controlledPublicationFixtures(), plan = canonicalPlan(), source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, event = { ...eventBase, eventId: "npc-event", requestId: "reaction-request-1", actorId: "npc-1", source, stateVersion: 2, eventType: "role_claim_recorded", claimId: "npc-claim" }, npcClaim = { ...claim, claimId: "npc-claim", actorId: "npc-1", source, createdStateVersion: 2 }, result = { schemaVersion: 1, requestId: "reaction-request-1", correlationId: "corr-1", requestFingerprint: fingerprint, commitType: "npc_reaction", resultMode: "controlled_commentary", preconditionStateVersion: 1, resultingStateVersion: 2, reactionPlanId: "plan-1", npcPublicationId: "pub-controlled", reservationId: "reservation-1", createdEventIds: ["npc-event"], createdClaimIds: ["npc-claim"], createdAtOrder: 1 };
+  assert.doesNotThrow(() => validateNpcReactionCommitResultReferences(result, { reactionPlans: [plan], publications: [reservation], events: [event], claims: [npcClaim] }));
+  assert.throws(() => validateNpcReactionCommitResultReferences(result, { reactionPlans: [plan], publications: [reservation], events: [{ ...event, source: { ...source, reactionPlanId: "foreign" } }], claims: [npcClaim] }));
+  assert.throws(() => validateNpcReactionCommitResultReferences(result, { reactionPlans: [plan], publications: [reservation], events: [event], claims: [{ ...npcClaim, source: { ...source, reactionCommitRequestId: "foreign" } }] }));
+});
+
+test("Claim temporal relations use state version rather than array position", () => {
+  const prior = claim, repeat = { ...claim, claimId: "repeat", createdStateVersion: 2, repeatsClaimId: "claim-1" };
+  assert.doesNotThrow(() => validateClaimReferences([repeat, prior], { acceptedSpeechActs: [roleAct] }));
+  assert.throws(() => validateClaimReferences([{ ...prior, createdStateVersion: 3 }, repeat], { acceptedSpeechActs: [roleAct] }));
+  assert.throws(() => validateClaimReferences([{ ...prior, createdStateVersion: 2 }, repeat], { acceptedSpeechActs: [roleAct] }));
+  assert.throws(() => validateClaimReferences([{ ...claim, repeatsClaimId: "claim-1" }], { acceptedSpeechActs: [roleAct] }));
+});
+
+test("display publication log enforces append and slot order globally", () => {
+  const { reservation, finalization } = controlledPublicationFixtures(); assert.doesNotThrow(() => validatePersistedPublicationReferences([reservation, finalization]));
+  assert.throws(() => validatePersistedPublicationReferences([reservation, { ...finalization, recordAppendOrder: reservation.recordAppendOrder }]));
+  assert.throws(() => validatePersistedPublicationReferences([finalization, reservation]));
+  const other = { ...reservation, publicationId: "pub-other", reservationId: "reservation-other", recordAppendOrder: 4 };
+  assert.throws(() => validatePersistedPublicationReferences([reservation, finalization, other]));
+});
+
+test("DisplayPlan rejects claims with multiple accepted source acts", () => {
+  const multiClaim = { ...claim, source: { ...claim.source, acceptedSpeechActIds: ["act-1", "act-2"] } }, secondAct = { ...roleAct, speechActId: "act-2" }, plan = { schemaVersion: 1, displayPlanId: "display-1", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "claim-1", type: "canonical_claim", claimId: "claim-1" }] };
+  assert.throws(() => validateDisplayPlanReferences([plan], { inputRecords: [input], claims: [multiClaim], acceptedSpeechActs: [roleAct, secondAct] }), (error) => error.code === "ambiguous_display_source");
 });
