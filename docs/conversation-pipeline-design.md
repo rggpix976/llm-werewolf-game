@@ -484,9 +484,11 @@ The registry key is `(variantId, variantVersion, locale)`. Entries are immutable
 
 ### RendererRequest and RendererModelOutput
 
-`RendererRequest` requires `schemaVersion: 1`, `requestId: ID`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `locale: SupportedLocale`, `renderMode: "controlled_commentary"`, `commentaryPlan: ControlledCommentaryPlan`, `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, `allowedPublicReferenceIds: ID[0..32]`, and `allowedVariants: AllowedCommentaryVariantProjection[1..8]`; it has no optional fields and `additionalProperties: false`.
+`RendererRequest` requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `locale: SupportedLocale`, `renderMode: "controlled_commentary"`, `commentaryPlan: ControlledCommentaryPlan`, `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, `allowedPublicReferenceIds: ID[0..32]`, and `allowedVariants: AllowedCommentaryVariantProjection[1..8]`; it has no optional fields and `additionalProperties: false`.
 
 Every allowed public reference ID is unique and exists in one of the same request's public projection arrays; private and unknown IDs are prohibited. Projection IDs are globally unambiguous within the request. Allowed variants have unique `(variantId, variantVersion)` pairs, and a request must not contain multiple versions of one `variantId`.
+
+`RendererRequest` deliberately does not include `publicRoster`. The Renderer selects only an engine-approved variant ID and version; it cannot generate participant IDs, display names, or utterance text. Public reference validation uses only `publicEvents`, `publicClaims`, `publicVotes`, `executions`, `attackDeaths`, `allowedPublicReferenceIds`, and `allowedVariants`. Participant display-name resolution belongs to the local-only canonical rendering context below and is never provider-facing.
 
 `RendererModelOutput` requires exactly `schemaVersion: 1`, `selectedVariantId: ID`, and `selectedVariantVersion: integer >= 1`, with `additionalProperties: false`. The selected pair must exactly match one allowed variant and an existing enabled registry entry whose locale equals the request locale, render mode is `controlled_commentary`, and intent equals `commentaryPlan.intent`.
 
@@ -496,6 +498,7 @@ Schema-valid example:
 {
   "schemaVersion": 1,
   "requestId": "request-1001",
+  "correlationId": "correlation-1001",
   "reactionPlanId": "reaction-1001",
   "turnId": "turn-7",
   "resultingStateVersion": 12,
@@ -517,6 +520,12 @@ Schema-valid example:
 
 The persisted selection requires exactly `variantId: ID`, `variantVersion: integer >= 1`, and `locale: SupportedLocale`, with `additionalProperties: false`. Replay resolves this exact registry key and never substitutes the latest version or current UI locale. Disabled or retired variants remain available for historical reconstruction.
 
+### CanonicalRenderingContext (local-only)
+
+Canonical claim, vote, and suspicion renderers receive a local-only pure validation context that is separate from `RendererRequest`. `CanonicalRenderingContext` requires exactly `locale: SupportedLocale` and `publicParticipantsById: read-only participant projection index`, with no optional or nullable fields and `additionalProperties: false`.
+
+Each participant projection requires exactly `participantId: ID` and `displayName: string[1..80 Unicode code points]`, with `additionalProperties: false`. The browser engine constructs this index through an explicit allowlist. Participant IDs are unique, unknown participant IDs are rejected, and renderer inputs and the index are not mutated. The projection contains no private role, team, memory, internal suspicion, provider diagnostic, or other unlisted field. This context is never sent to a provider and is never included in `RendererRequest`.
+
 ## 15. Public Projections (Strict Schemas)
 
 All projection objects require `schemaVersion: 1`, use the closed `projectionType` discriminator below, have no optional or nullable fields, and set `additionalProperties: false`. Every String typed as ID uses the section 10 ID constraint. No projection may contain raw text, private memory, hidden role data, internal suspicion scores, provider diagnostics, or fields not listed in its row. String values other than IDs are limited by their referenced closed enum; no free-form projection text exists.
@@ -537,7 +546,7 @@ All projection objects require `schemaVersion: 1`, use the closed `projectionTyp
 
 `PublicRosterEntry` does not contain `publiclyKnownStatus`; public suspicion is represented only by `SuspicionEventProjection`, preserving both the actor and target. It is derived solely from public events and never from internal suspicion scores or private memory.
 
-Each request array has the maximum shown in `RendererRequest`, rejects duplicate primary IDs, preserves authoritative `createdOrder` (or source order for non-event projections), and rejects references to unknown IDs. Claim-event projections reference an existing same-request claim projection with matching actor and claim type. Public votes reference an existing vote event. Execution and attack-death player IDs reference public roster entries. Stable ordering is retained on replay.
+Each request array has the maximum shown in `RendererRequest`, rejects duplicate primary IDs, preserves authoritative `createdOrder` (or source order for non-event projections), and rejects references to unknown IDs. Claim-event projections reference an existing same-request claim projection with matching actor and claim type. Public votes reference an existing vote event. Execution and attack-death player IDs are validated by the browser engine against its local public participant projection before request construction; the full roster is not copied into `RendererRequest`. Stable ordering is retained on replay.
 
 ### Projection unions
 
@@ -673,7 +682,7 @@ Provider waiting is runtime control state, not authoritative phase. `PendingConv
 
 The Interpreter member forbids `resultingStateVersion`, `reactionPlanId`, `originatingInputRecordId`, and `causationId`. The Renderer member forbids `preconditionStateVersion` and `inputRecordId`. This exclusion prevents one version field from acquiring two meanings.
 
-Interpreter pending stores the player precondition version. Renderer pending is created only after `NpcReactionCommit`, stores that committed resulting version, and starts only when it equals current authoritative version. Its originating input and locale exactly equal the reaction plan and RendererRequest. Renderer response validation never compares against the old player precondition. Interpreter and Renderer request IDs are different/session-unique. Renderer `causationId` resolves to the NPC reaction commit result or reaction plan.
+Interpreter pending stores the player precondition version. Renderer pending is created only after `NpcReactionCommit`, stores that committed resulting version, and starts only when it equals current authoritative version. Its originating input, locale, and correlation ID exactly equal the reaction plan and RendererRequest. Renderer response validation never compares against the old player precondition. Interpreter and Renderer request IDs are different/session-unique. Renderer `causationId` resolves to the NPC reaction commit result or reaction plan.
 
 The runtime map is keyed by request ID. Active records reject duplicate submission. Interpreter terminal records may be removed after their result/failure is durably handled in session. A controlled Renderer record remains active through reservation validation, finalization append, and finalization-result persistence; only then is it marked terminal, its controller released, and it moved to a bounded developer-only audit ring. Aborted requests use `aborting`, then terminal status after fallback finalization. The audit ring is not an authoritative finalization reference and is discarded on reload/session destruction.
 
@@ -740,15 +749,17 @@ renderNpcUtterance(request, { signal })
 
 Canonical-only plans never call this interface. Controlled commentary supplies the `RendererRequest` in section 14, and the model returns only `selectedVariantId` plus `selectedVariantVersion`; raw in-world text is prohibited.
 
+The renderer correlation chain is an exact invariant: `RendererRequest.correlationId == PendingRendererRequest.correlationId == RendererProviderResult.correlationId == RendererHttpResponse.correlationId == NpcReactionPlan.correlationId`. Any mismatch is stale or invalid and is rejected without state mutation.
+
 `ControlledCommentaryPlan.allowedPublicReferenceIds` is the authoritative source. `RendererRequest.allowedPublicReferenceIds` is an engine-produced projection copy that must be byte-for-byte equal in order and content; neither server nor provider may independently add, remove, or reorder IDs. Duplicate, private, and unknown IDs are rejected.
 
 ### RendererProviderResult
 
-This strict schema requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `reactionPlanId: ID`, `modelOutput: RendererModelOutput`, and `diagnostics: ProviderDiagnostics`; it has no optional or nullable fields and `additionalProperties: false`. The selected variant pair is validated against the request before return.
+This strict schema requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `reactionPlanId: ID`, `modelOutput: RendererModelOutput`, and `diagnostics: ProviderDiagnostics`; it has no optional or nullable fields and `additionalProperties: false`. Its request ID, correlation ID, and reaction plan ID exactly match `RendererRequest`. The selected variant pair is validated against the request before return.
 
 ### RendererHttpResponse
 
-The HTTP success envelope requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ClientCorrelationId`, `serverCorrelationId: ServerCorrelationId`, `reactionPlanId: ID`, and `result: RendererProviderResult`, with no optional fields, no nulls, and `additionalProperties: false`. Client/domain IDs must match the request and nested result. A stale or mismatched response is discarded without retry or state mutation.
+The HTTP success envelope requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ClientCorrelationId`, `serverCorrelationId: ServerCorrelationId`, `reactionPlanId: ID`, and `result: RendererProviderResult`, with no optional fields, no nulls, and `additionalProperties: false`. Its request ID, client correlation ID, and reaction plan ID exactly match both `RendererRequest` and the nested provider result. A stale or mismatched response is discarded without retry or state mutation.
 
 ## 22. HTTP endpoint contract
 
@@ -820,6 +831,7 @@ Targets must exist before the source or be created in the same atomic commit. Da
 | `NpcReactionPlan` | `causationEventIds` | previously committed `PublicEvent` | 0-16 unique | strictly before reaction preparation; same-commit forbidden | preserve IDs; cycles rejected | append-only |
 | `PendingRendererRequest` | `originatingInputRecordId` | plan `originatingInputRecordId` | exactly 1 equal | after reaction commit | preserve ID | runtime source removable only after finalization |
 | `PendingRendererRequest` | `locale` | `RendererRequest.locale` and reservation locale | exactly 1 equal | after reservation | preserve locale | runtime source removable only after finalization |
+| `RendererRequest` | `correlationId` | plan, pending Renderer, provider result, and HTTP response correlation IDs | exactly 1 equal | copied from committed reaction | mismatch rejected as stale/invalid | immutable request |
 | `NpcUtterancePublicationReserved` | `reactionPlanId` | `ControlledCommentaryReactionPlan` | exactly 1 | same NPC commit, plan prepared first | reuse reservation | append-only |
 | `NpcUtterancePublicationReserved` | `locale` | plan `locale` | exactly 1 equal | same NPC commit | preserve locale; no UI substitution | append-only |
 | `NpcUtterancePublicationFinalized` | `publicationId` | reservation `publicationId` | exactly 1 | later display-log CAS | return stored finalization on duplicate | append-only |
@@ -892,6 +904,8 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - CAS tests prove identical duplicate finalization returns stored result, conflicting finalization is rejected, and late Renderer success after fallback is ignored.
 - Commit-result tests prove NPC result references an existing reservation rather than an uncreated finalization.
 - Locale tests accept supported language-only `ja` and `en`, accept supported regional tags, and distinguish syntax validity from the `SupportedLocale` allowlist.
+- Renderer correlation tests prove exact equality across `NpcReactionPlan`, `RendererRequest`, `PendingRendererRequest`, `RendererProviderResult`, and `RendererHttpResponse`, and reject each mismatched link.
+- Canonical rendering-context tests prove strict participant projections, duplicate and unknown participant rejection, input immutability, private-field rejection, and that the local-only context is absent from `RendererRequest`.
 - A repository CI check must reject bidi controls, zero-width characters, and other unapproved default-ignorable Unicode in design/schema sources. Code-block identifiers and enum literals remain ASCII.
 
 ## 28. Design invariants
