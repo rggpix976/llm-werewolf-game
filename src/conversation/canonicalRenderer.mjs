@@ -1,5 +1,5 @@
 import { enums } from "./domain.mjs";
-import { validateCanonicalClaim, validatePublicEvent, validateSelectedCommentaryVariant } from "./validators.mjs";
+import { validateAllowedCommentaryVariantProjections, validateCanonicalClaim, validateControlledCommentaryVariant, validatePublicEvent, validateSelectedCommentaryVariant } from "./validators.mjs";
 
 const labels = Object.freeze({
   ja: Object.freeze({ roles: Object.freeze({ seer: "占い師", werewolf: "人狼", citizen: "市民" }), results: Object.freeze({ werewolf: "人狼", not_werewolf: "人狼ではない" }) }),
@@ -51,7 +51,9 @@ export function renderCanonicalSuspicion(event, options) {
 
 function registryIndex(registry) {
   const index = new Map();
+  if (!Array.isArray(registry)) throw new TypeError("registry must be an array");
   for (const entry of registry) {
+    validateControlledCommentaryVariant(entry);
     const key = `${entry.variantId}\0${entry.variantVersion}\0${entry.locale}`;
     if (index.has(key)) throw new TypeError("duplicate commentary registry key");
     index.set(key, entry);
@@ -61,13 +63,7 @@ function registryIndex(registry) {
 
 export function validateRendererSelection(selection, allowedVariants, registry, expectedIntent) {
   validateSelectedCommentaryVariant(selection);
-  if (!Array.isArray(allowedVariants) || allowedVariants.length < 1) throw new TypeError("allowedVariants must not be empty");
-  const ids = new Set(), pairs = new Set();
-  for (const allowed of allowedVariants) {
-    const pair = `${allowed.variantId}\0${allowed.variantVersion}`;
-    if (pairs.has(pair) || ids.has(allowed.variantId)) throw new TypeError("allowedVariants must contain one version per variant ID");
-    pairs.add(pair); ids.add(allowed.variantId);
-  }
+  validateAllowedCommentaryVariantProjections(allowedVariants);
   const allowed = allowedVariants.find((v) => v.variantId === selection.variantId && v.variantVersion === selection.variantVersion && v.locale === selection.locale);
   if (!allowed || allowed.intent !== expectedIntent) throw new TypeError("selection is not an allowed variant for the requested intent");
   const match = registryIndex(registry).get(`${selection.variantId}\0${selection.variantVersion}\0${selection.locale}`);

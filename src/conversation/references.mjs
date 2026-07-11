@@ -1,68 +1,78 @@
-function fail(message) { throw new TypeError(message); }
-function uniqueIndex(values, key, label) {
-  const index = new Map();
-  for (const value of values) {
-    const id = value[key];
-    if (index.has(id)) fail(`duplicate ${label} ${id}`);
-    index.set(id, value);
-  }
-  return index;
+import { canonicalJson } from "./ids.mjs";
+import { validateRendererSelection } from "./canonicalRenderer.mjs";
+import { ConversationValidationError } from "./validators.mjs";
+
+function fail(path, code, message) { throw new ConversationValidationError(path, code, message); }
+function uniqueIndex(values, key, label) { const index = new Map(); values.forEach((value, position) => { const id = value[key]; if (index.has(id)) fail(`${label}[${position}].${key}`, "duplicate_id", `duplicate ${key} ${id}`); index.set(id, value); }); return index; }
+function sameSource(left, right) {
+  if (left?.sourceType !== right?.sourceType) return false;
+  if (left.sourceType === "player_accepted_act") return right.acceptedSpeechActIds?.includes(left.acceptedSpeechActId);
+  return left.reactionPlanId === right.reactionPlanId && left.descriptorId === right.descriptorId;
 }
+function claimPayload(claim) { return claim.type === "role_claim" ? { claimedRole: claim.claimedRole } : { targetId: claim.targetId, result: claim.result }; }
+function sameSubject(left, right) { return left.actorId === right.actorId && left.type === right.type && (left.type === "role_claim" || left.targetId === right.targetId); }
 
 export function validateClaimReferences(claims, { acceptedSpeechActs = [], reactionPlans = [] } = {}) {
-  const acts = uniqueIndex(acceptedSpeechActs, "speechActId", "accepted speech act"), plans = uniqueIndex(reactionPlans, "reactionPlanId", "reaction plan"), claimIndex = uniqueIndex(claims, "claimId", "claim");
-  for (const claim of claims) {
-    if (claim.source.sourceType === "player_accepted_act") {
-      for (const actId of claim.source.acceptedSpeechActIds) { const act = acts.get(actId); if (!act || act.inputRecordId !== claim.source.inputRecordId || act.requestId !== claim.source.requestId || act.actorId !== claim.actorId) fail(`invalid player claim source ${actId}`); }
-    } else {
-      const plan = plans.get(claim.source.reactionPlanId), descriptor = plan?.intendedSpeechActs.find((item) => item.descriptorId === claim.source.descriptorId);
-      if (!plan || plan.npcId !== claim.actorId || plan.originatingInputRecordId !== claim.source.originatingInputRecordId || plan.requestId !== claim.source.reactionCommitRequestId || descriptor?.descriptorType !== claim.type) fail(`invalid NPC claim source ${claim.claimId}`);
+  const acts = uniqueIndex(acceptedSpeechActs, "speechActId", "acceptedSpeechActs"), plans = uniqueIndex(reactionPlans, "reactionPlanId", "reactionPlans"), claimIndex = uniqueIndex(claims, "claimId", "claims"), positions = new Map(claims.map((claim, index) => [claim.claimId, index]));
+  claims.forEach((claim, position) => {
+    if (claim.source.sourceType === "player_accepted_act") for (const actId of claim.source.acceptedSpeechActIds) { const act = acts.get(actId); if (!act || act.inputRecordId !== claim.source.inputRecordId || act.requestId !== claim.source.requestId || act.actorId !== claim.actorId) fail(`claims[${position}].source`, "invalid_reference", `invalid player claim source ${actId}`); }
+    else { const plan = plans.get(claim.source.reactionPlanId), descriptor = plan?.intendedSpeechActs.find((item) => item.descriptorId === claim.source.descriptorId); if (!plan || plan.npcId !== claim.actorId || plan.originatingInputRecordId !== claim.source.originatingInputRecordId || plan.requestId !== claim.source.reactionCommitRequestId || descriptor?.descriptorType !== claim.type) fail(`claims[${position}].source`, "invalid_reference", "invalid NPC claim source"); }
+    const repeat = claim.repeatsClaimId ? claimIndex.get(claim.repeatsClaimId) : null;
+    if (repeat) { if (positions.get(repeat.claimId) >= position) fail(`claims[${position}].repeatsClaimId`, "future_reference", "repeat must reference an earlier claim"); if (!sameSubject(claim, repeat) || canonicalJson(claimPayload(claim)) !== canonicalJson(claimPayload(repeat))) fail(`claims[${position}].repeatsClaimId`, "invalid_repeat", "repeat actor, type, subject, and payload must match"); }
+    else if (claim.repeatsClaimId) fail(`claims[${position}].repeatsClaimId`, "dangling_reference", "repeat claim does not exist");
+    for (const relatedId of claim.contradictsClaimIds) { const prior = claimIndex.get(relatedId); if (!prior) fail(`claims[${position}].contradictsClaimIds`, "dangling_reference", `claim ${relatedId} does not exist`); if (positions.get(relatedId) >= position) fail(`claims[${position}].contradictsClaimIds`, "future_reference", "contradiction must reference an earlier claim"); if (!sameSubject(claim, prior) || canonicalJson(claimPayload(claim)) === canonicalJson(claimPayload(prior))) fail(`claims[${position}].contradictsClaimIds`, "invalid_contradiction", "contradiction must have the same actor/type/subject and conflicting payload"); }
+  }); return true;
+}
+
+const playerEventCompatibility = Object.freeze({ public_statement_recorded: "accepted_non_game_statement", public_question_recorded: "accepted_question", suspicion_expressed: "accepted_suspicion", vote_declared: "accepted_vote_declaration", role_claim_recorded: "accepted_role_claim", result_claim_recorded: "accepted_result_claim" });
+const npcEventCompatibility = Object.freeze({ suspicion_expressed: "suspicion", vote_declared: "vote_declaration", role_claim_recorded: "role_claim", result_claim_recorded: "result_claim" });
+export function validateEventReferences(events, { acceptedSpeechActs = [], reactionPlans = [], claims = [] } = {}) {
+  const acts = uniqueIndex(acceptedSpeechActs, "speechActId", "acceptedSpeechActs"), plans = uniqueIndex(reactionPlans, "reactionPlanId", "reactionPlans"), claimIndex = uniqueIndex(claims, "claimId", "claims");
+  events.forEach((event, position) => {
+    if (event.source.sourceType === "player_accepted_act") { const act = acts.get(event.source.acceptedSpeechActId); if (!act || act.inputRecordId !== event.source.inputRecordId || act.requestId !== event.source.requestId || act.actorId !== event.actorId || act.acceptedPhase !== event.occurredPhase || act.type !== playerEventCompatibility[event.eventType]) fail(`events[${position}].source`, "incompatible_source", "accepted speech act is incompatible with event type, actor, request, input, or phase"); }
+    else { const plan = plans.get(event.source.reactionPlanId), descriptor = plan?.intendedSpeechActs.find((item) => item.descriptorId === event.source.descriptorId); if (!plan || plan.npcId !== event.actorId || plan.originatingInputRecordId !== event.source.originatingInputRecordId || plan.requestId !== event.source.reactionCommitRequestId || descriptor?.descriptorType !== npcEventCompatibility[event.eventType]) fail(`events[${position}].source`, "incompatible_source", "reaction descriptor is incompatible with event type"); }
+    if (event.claimId) { const claim = claimIndex.get(event.claimId), expected = event.eventType === "role_claim_recorded" ? "role_claim" : "result_claim"; if (!claim || claim.type !== expected || claim.actorId !== event.actorId || !sameSource(event.source, claim.source)) fail(`events[${position}].claimId`, "incompatible_claim", "claim event and canonical claim provenance must agree"); const sourceRequest = claim.source.requestId ?? claim.source.reactionCommitRequestId; if (event.requestId !== sourceRequest) fail(`events[${position}].requestId`, "request_mismatch", "event and claim request must match"); }
+  }); return true;
+}
+
+export function validateReactionPlanReferences(reactionPlans, { inputRecords = [], events = [] } = {}) { const inputs = uniqueIndex(inputRecords, "inputRecordId", "inputRecords"), eventIndex = uniqueIndex(events, "eventId", "events"); reactionPlans.forEach((plan, position) => { const input = inputs.get(plan.originatingInputRecordId); if (!input || input.locale !== plan.locale || input.turnId !== plan.turnId) fail(`reactionPlans[${position}].originatingInputRecordId`, "invalid_reference", "originating input, locale, and turn must match"); for (const eventId of plan.causationEventIds) { const event = eventIndex.get(eventId); if (!event || event.stateVersion >= plan.resultingStateVersion) fail(`reactionPlans[${position}].causationEventIds`, "invalid_reference", `invalid causation event ${eventId}`); } }); return true; }
+
+export function validateDisplayPlanReferences(displayPlans, { inputRecords = [], claims = [], events = [], acceptedSpeechActs = [] } = {}) {
+  const inputs = uniqueIndex(inputRecords, "inputRecordId", "inputRecords"), claimIndex = uniqueIndex(claims, "claimId", "claims"), eventIndex = uniqueIndex(events, "eventId", "events"), acts = uniqueIndex(acceptedSpeechActs, "speechActId", "acceptedSpeechActs");
+  function spanFor(segment, plan) { if (segment.type === "raw_input") { if (segment.inputRecordId !== plan.inputRecordId) fail(`displayPlans.${plan.displayPlanId}`, "input_mismatch", "raw segment input must match plan"); return segment.sourceSpan; } const sourceObject = segment.claimId ? claimIndex.get(segment.claimId) : eventIndex.get(segment.voteEventId ?? segment.suspicionEventId); if (!sourceObject) fail(`displayPlans.${plan.displayPlanId}`, "dangling_reference", "canonical segment source does not exist"); if (sourceObject.source?.sourceType !== "player_accepted_act") fail(`displayPlans.${plan.displayPlanId}`, "unresolvable_span", "player display canonical source must derive from an accepted player act"); const actId = sourceObject.source.acceptedSpeechActId ?? sourceObject.source.acceptedSpeechActIds?.[0], act = acts.get(actId); if (!act || act.inputRecordId !== plan.inputRecordId) fail(`displayPlans.${plan.displayPlanId}`, "unresolvable_span", "canonical segment source span cannot be resolved"); return act.sourceSpan; }
+  displayPlans.forEach((plan, position) => { const input = inputs.get(plan.inputRecordId); if (!input || input.turnId !== plan.turnId) fail(`displayPlans[${position}].inputRecordId`, "invalid_reference", "display input and turn must match"); let previousEnd = -1; const used = new Set(); plan.segments.forEach((segment, segmentPosition) => { const span = spanFor(segment, plan), key = `${span.start}:${span.end}`; if (span.start < previousEnd) fail(`displayPlans[${position}].segments[${segmentPosition}]`, "source_order", "all segments must follow non-overlapping source order"); if (used.has(key)) fail(`displayPlans[${position}].segments[${segmentPosition}]`, "duplicate_source", "source span cannot be displayed twice"); used.add(key); previousEnd = span.end; if (span.end > [...input.rawText].length) fail(`displayPlans[${position}].segments[${segmentPosition}]`, "span_bounds", "source span exceeds raw input"); }); }); return true;
+}
+
+function publicationGroups(publications) { const groups = new Map(); publications.forEach((record) => { const records = groups.get(record.publicationId) ?? []; records.push(record); groups.set(record.publicationId, records); }); return groups; }
+export function validatePersistedPublicationReferences(publications, { reactionPlans = [] } = {}) {
+  uniqueIndex(publications.filter((record) => record.recordType === "npc_publication_reserved"), "reservationId", "reservations");
+  uniqueIndex(publications.filter((record) => record.recordType === "npc_publication_finalized"), "finalizationId", "finalizations");
+  const plans = uniqueIndex(reactionPlans, "reactionPlanId", "reactionPlans");
+  for (const [publicationId, records] of publicationGroups(publications)) {
+    const reservations = records.filter((record) => record.recordType === "npc_publication_reserved"), finalizations = records.filter((record) => record.recordType === "npc_publication_finalized"), canonical = records.filter((record) => record.recordType === "npc_canonical_published"), players = records.filter((record) => record.recordType === "player_utterance_published");
+    if (reservations.length > 1 || finalizations.length > 1 || canonical.length > 1 || players.length > 1) fail(`publications.${publicationId}`, "duplicate_lifecycle_record", "publication lifecycle contains duplicate record types");
+    if ((canonical.length || players.length) && records.length > 1) fail(`publications.${publicationId}`, "aggregate_conflict", "immediate publication cannot share a controlled lifecycle ID");
+    if (finalizations.length && reservations.length !== 1) fail(`publications.${publicationId}`, "missing_reservation", "finalization requires exactly one reservation");
+    if (reservations.length && finalizations.length) {
+      const reservation = reservations[0], finalization = finalizations[0];
+      for (const key of ["publicationId", "reservationId", "reactionPlanId", "actorId", "locale", "publicationSlotOrder"]) if (reservation[key] !== finalization[key]) fail(`publications.${publicationId}.${key}`, "lifecycle_mismatch", "reservation and finalization must agree");
+      if (finalization.recordAppendOrder <= reservation.recordAppendOrder) fail(`publications.${publicationId}.recordAppendOrder`, "append_order", "finalization must append after reservation");
+      if (finalization.fallbackUsed && (finalization.selectedVariantId !== reservation.fallbackVariantId || finalization.selectedVariantVersion !== reservation.fallbackVariantVersion)) fail(`publications.${publicationId}.selectedVariantId`, "fallback_mismatch", "fallback finalization must preserve the reserved variant key and locale");
     }
-    for (const relatedId of [claim.repeatsClaimId, ...claim.contradictsClaimIds].filter(Boolean)) if (!claimIndex.has(relatedId)) fail(`dangling related claim ${relatedId}`);
+    for (const record of records) if (record.reactionPlanId) { const plan = plans.get(record.reactionPlanId); if (plan && plan.locale !== record.locale) fail(`publications.${publicationId}.locale`, "locale_mismatch", "publication locale must match plan"); }
   }
   return true;
 }
 
-export function validateEventReferences(events, { acceptedSpeechActs = [], reactionPlans = [] } = {}) {
-  const acts = uniqueIndex(acceptedSpeechActs, "speechActId", "accepted speech act"), plans = uniqueIndex(reactionPlans, "reactionPlanId", "reaction plan");
-  const compatible = { public_statement_recorded: "accepted_non_game_statement", public_question_recorded: "accepted_question", suspicion_expressed: "suspicion", vote_declared: "vote_declaration", role_claim_recorded: "role_claim", result_claim_recorded: "result_claim" };
-  for (const event of events) {
-    if (event.source.sourceType === "player_accepted_act") { const act = acts.get(event.source.acceptedSpeechActId); if (!act || act.inputRecordId !== event.source.inputRecordId || act.requestId !== event.source.requestId || act.actorId !== event.actorId) fail(`invalid player event source ${event.eventId}`); }
-    else { const plan = plans.get(event.source.reactionPlanId), descriptor = plan?.intendedSpeechActs.find((item) => item.descriptorId === event.source.descriptorId); if (!plan || plan.npcId !== event.actorId || plan.originatingInputRecordId !== event.source.originatingInputRecordId || plan.requestId !== event.source.reactionCommitRequestId || descriptor?.descriptorType !== compatible[event.eventType]) fail(`invalid NPC event source ${event.eventId}`); }
-  }
-  return true;
+export function validatePublicationFinalizationAtAppend(finalization, { publications = [], pendingRendererRequests = [], registry = [], allowedVariants = [], expectedIntent } = {}) {
+  validatePersistedPublicationReferences(publications); const reservation = publications.find((r) => r.recordType === "npc_publication_reserved" && r.reservationId === finalization.reservationId), pending = pendingRendererRequests.find((r) => r.rendererRequestId === finalization.source.rendererRequestId); if (!reservation) fail("finalization.reservationId", "missing_reservation", "reservation must exist before finalization"); for (const key of ["publicationId", "reservationId", "reactionPlanId", "actorId", "locale", "publicationSlotOrder"]) if (reservation[key] !== finalization[key]) fail(`finalization.${key}`, "lifecycle_mismatch", "finalization must match reservation"); if (!pending || pending.reactionPlanId !== finalization.reactionPlanId || pending.originatingInputRecordId !== reservation.originatingInputRecordId || pending.locale !== finalization.locale || pending.status !== "pending") fail("finalization.source.rendererRequestId", "invalid_pending_request", "active matching pending renderer request is required"); if (publications.some((r) => r.recordType === "npc_publication_finalized" && r.publicationId === finalization.publicationId)) fail("finalization.publicationId", "already_finalized", "publication is already finalized"); if (finalization.fallbackUsed && (finalization.selectedVariantId !== reservation.fallbackVariantId || finalization.selectedVariantVersion !== reservation.fallbackVariantVersion)) fail("finalization.selectedVariantId", "fallback_mismatch", "fallback finalization must use the reserved fallback key"); validateRendererSelection({ variantId: finalization.selectedVariantId, variantVersion: finalization.selectedVariantVersion, locale: finalization.locale }, allowedVariants, registry, expectedIntent); return true;
 }
 
-export function validateReactionPlanReferences(reactionPlans, { inputRecords = [], events = [] } = {}) {
-  const inputs = uniqueIndex(inputRecords, "inputRecordId", "input record"), eventIndex = uniqueIndex(events, "eventId", "event");
-  for (const plan of reactionPlans) { const input = inputs.get(plan.originatingInputRecordId); if (!input || input.locale !== plan.locale || input.turnId !== plan.turnId) fail(`invalid originating input for ${plan.reactionPlanId}`); for (const eventId of plan.causationEventIds) { const event = eventIndex.get(eventId); if (!event || event.stateVersion >= plan.resultingStateVersion) fail(`invalid causation event ${eventId}`); } }
-  return true;
-}
+export function validatePublicationReferences(publications, context = {}) { return validatePersistedPublicationReferences(publications, context); }
 
-export function validateDisplayPlanReferences(displayPlans, { inputRecords = [], claims = [], events = [], canonicalSpans = new Map() } = {}) {
-  const inputs = uniqueIndex(inputRecords, "inputRecordId", "input record"), claimIndex = uniqueIndex(claims, "claimId", "claim"), eventIndex = uniqueIndex(events, "eventId", "event");
-  for (const plan of displayPlans) { const input = inputs.get(plan.inputRecordId); if (!input || input.turnId !== plan.turnId) fail(`invalid display input ${plan.displayPlanId}`); for (const segment of plan.segments) { if (segment.type === "raw_input" && segment.inputRecordId !== plan.inputRecordId) fail(`invalid raw input segment ${segment.segmentId}`); if (segment.claimId && !claimIndex.has(segment.claimId)) fail(`dangling claim ${segment.claimId}`); if (segment.voteEventId && eventIndex.get(segment.voteEventId)?.eventType !== "vote_declared") fail(`invalid vote event ${segment.voteEventId}`); if (segment.suspicionEventId && eventIndex.get(segment.suspicionEventId)?.eventType !== "suspicion_expressed") fail(`invalid suspicion event ${segment.suspicionEventId}`); const source = segment.claimId ?? segment.voteEventId ?? segment.suspicionEventId; if (source && !canonicalSpans.has(source)) fail(`missing accepted source span for ${source}`); } }
-  return true;
-}
+export function validatePlayerConversationCommitResultReferences(result, { inputRecords = [], displayPlans = [], publications = [], events = [], claims = [] } = {}) { const input = inputRecords.find((x) => x.inputRecordId === result.inputRecordId), plan = displayPlans.find((x) => x.displayPlanId === result.displayPlanId), publication = publications.find((x) => x.publicationId === result.playerPublicationId && x.recordType === "player_utterance_published"); if (!input || !plan || !publication || input.requestId !== result.requestId || plan.inputRecordId !== input.inputRecordId || publication.inputRecordId !== input.inputRecordId || publication.displayPlanId !== plan.displayPlanId || publication.requestId !== result.requestId || publication.correlationId !== result.correlationId || publication.turnId !== input.turnId || publication.gameStateVersion !== result.resultingStateVersion) fail("commitResult", "invalid_reference", "player commit references do not agree"); for (const id of result.createdEventIds) if (!events.some((x) => x.eventId === id)) fail("commitResult.createdEventIds", "dangling_reference", `event ${id} does not exist`); for (const id of result.createdClaimIds) if (!claims.some((x) => x.claimId === id)) fail("commitResult.createdClaimIds", "dangling_reference", `claim ${id} does not exist`); return true; }
+export function validateNpcReactionCommitResultReferences(result, { reactionPlans = [], publications = [], events = [], claims = [] } = {}) { const plan = reactionPlans.find((x) => x.reactionPlanId === result.reactionPlanId), expectedType = result.resultMode === "canonical_only" ? "npc_canonical_published" : "npc_publication_reserved", publication = publications.find((x) => x.publicationId === result.npcPublicationId && x.recordType === expectedType); if (!plan || !publication || plan.requestId !== result.requestId || plan.correlationId !== result.correlationId || plan.resultingStateVersion !== result.resultingStateVersion || publication.reactionPlanId !== plan.reactionPlanId || publication.reactionResultingStateVersion !== result.resultingStateVersion || (result.reservationId && publication.reservationId !== result.reservationId)) fail("commitResult", "invalid_reference", "NPC commit must reference its plan and same-commit publication/reservation"); for (const id of result.createdEventIds) if (!events.some((x) => x.eventId === id)) fail("commitResult.createdEventIds", "dangling_reference", `event ${id} does not exist`); for (const id of result.createdClaimIds) if (!claims.some((x) => x.claimId === id)) fail("commitResult.createdClaimIds", "dangling_reference", `claim ${id} does not exist`); return true; }
+export function validateNpcPublicationFinalizationResultReferences(result, { publications = [] } = {}) { const finalization = publications.find((x) => x.recordType === "npc_publication_finalized" && x.finalizationId === result.finalizationId); if (!finalization) fail("finalizationResult.finalizationId", "dangling_reference", "stored finalization does not exist"); for (const key of ["publicationId", "reservationId", "reactionPlanId", "source", "locale", "selectedVariantId", "selectedVariantVersion", "fallbackUsed", "finalizationReason", "publicationSlotOrder", "recordAppendOrder", "createdAt"]) if (canonicalJson(finalization[key]) !== canonicalJson(result[key])) fail(`finalizationResult.${key}`, "result_mismatch", "result must exactly mirror stored finalization"); return true; }
+export function validateCommitResultReferences(results, context = {}) { results.forEach((result) => result.commitType === "player_conversation" ? validatePlayerConversationCommitResultReferences(result, context) : validateNpcReactionCommitResultReferences(result, context)); return true; }
 
-export function validatePublicationReferences(publications, { inputRecords = [], displayPlans = [], reactionPlans = [], pendingRendererRequests = [] } = {}) {
-  const inputs = uniqueIndex(inputRecords, "inputRecordId", "input record"), plans = uniqueIndex(displayPlans, "displayPlanId", "display plan"), reactions = uniqueIndex(reactionPlans, "reactionPlanId", "reaction plan"), pending = uniqueIndex(pendingRendererRequests, "rendererRequestId", "renderer request"), reservations = uniqueIndex(publications.filter((item) => item.recordType === "npc_publication_reserved"), "reservationId", "reservation");
-  for (const record of publications) { if (record.recordType === "player_utterance_published" && (!inputs.has(record.inputRecordId) || plans.get(record.displayPlanId)?.inputRecordId !== record.inputRecordId)) fail(`invalid player publication ${record.publicationId}`); if (record.reactionPlanId) { const plan = reactions.get(record.reactionPlanId); if (!plan || plan.locale !== record.locale) fail(`invalid reaction publication ${record.publicationId}`); } if (record.recordType === "npc_publication_finalized") { const reservation = reservations.get(record.reservationId), request = pending.get(record.source.rendererRequestId); if (!reservation || reservation.publicationId !== record.publicationId || reservation.locale !== record.locale || !request || request.reactionPlanId !== record.reactionPlanId || request.locale !== record.locale) fail(`invalid finalization ${record.finalizationId}`); } }
-  return true;
-}
-
-export function validateCommitResultReferences(results, { publications = [] } = {}) {
-  const publicationIndex = uniqueIndex(publications, "publicationId", "publication");
-  for (const result of results) { const publicationId = result.playerPublicationId ?? result.npcPublicationId, publication = publicationIndex.get(publicationId); if (!publication) fail(`dangling commit publication ${publicationId}`); if (result.reservationId && publication.reservationId !== result.reservationId) fail(`invalid commit reservation ${result.reservationId}`); }
-  return true;
-}
-
-export function validateReferentialIntegrity(graph) {
-  validateClaimReferences(graph.claims ?? [], graph);
-  validateEventReferences(graph.events ?? [], graph);
-  validateReactionPlanReferences(graph.reactionPlans ?? [], graph);
-  validateDisplayPlanReferences(graph.displayPlans ?? [], graph);
-  validatePublicationReferences(graph.publications ?? [], graph);
-  validateCommitResultReferences(graph.commitResults ?? [], graph);
-  return true;
-}
+export function validateReferentialIntegrity(graph) { validateClaimReferences(graph.claims ?? [], graph); validateEventReferences(graph.events ?? [], graph); validateReactionPlanReferences(graph.reactionPlans ?? [], graph); validateDisplayPlanReferences(graph.displayPlans ?? [], graph); validatePersistedPublicationReferences(graph.publications ?? [], graph); validateCommitResultReferences(graph.commitResults ?? [], graph); return true; }

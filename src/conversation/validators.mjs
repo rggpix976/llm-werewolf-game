@@ -2,7 +2,10 @@ import { ID_PATTERN, SHA256_PATTERN, SCHEMA_VERSION, acceptedTypeForCandidate, c
 import { assertUniqueIds } from "./ids.mjs";
 
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-function fail(path, message) { throw new TypeError(`${path}: ${message}`); }
+export class ConversationValidationError extends TypeError {
+  constructor(path, code, message) { super(`${path}: ${message}`); this.name = "ConversationValidationError"; this.path = path; this.code = code; }
+}
+function fail(path, message, code = "invalid_value") { throw new ConversationValidationError(path, code, message); }
 function object(value, path) { if (!value || typeof value !== "object" || Array.isArray(value)) fail(path, "must be an object"); }
 function exact(value, required, optional = [], path = "value") {
   object(value, path); const allowed = new Set([...required, ...optional]);
@@ -131,6 +134,16 @@ export function validateNpcReactionPlan(value) {
 function validateCanonicalSegments(segments, descriptors) { const compatible = { role_claim: "canonical_claim", result_claim: "canonical_claim", vote_declaration: "canonical_vote", suspicion: "canonical_suspicion" }; if (!Array.isArray(segments) || segments.length < 1 || segments.length > 16 || segments.length !== descriptors.length) fail("reactionPlan.canonicalSegments", "must cover descriptors exactly once"); segments.forEach((s, i) => { const field = s.type === "canonical_claim" ? "claimId" : s.type === "canonical_vote" ? "voteEventId" : s.type === "canonical_suspicion" ? "suspicionEventId" : fail(`canonicalSegments[${i}]`, "unknown type"); exact(s, ["segmentId", "descriptorId", "type", field], [], `canonicalSegments[${i}]`); ["segmentId", "descriptorId", field].forEach((k) => id(s[k], `canonicalSegments[${i}].${k}`)); if (s.descriptorId !== descriptors[i].descriptorId || s.type !== compatible[descriptors[i].descriptorType]) fail(`canonicalSegments[${i}]`, "segment type and order must match its descriptor"); }); assertUniqueIds(segments.map((s) => s.segmentId), "canonicalSegmentIds"); }
 
 export function validateControlledCommentaryVariant(value) { const p = "variant"; exact(value, ["schemaVersion", "variantId", "variantVersion", "locale", "renderMode", "intent", "text", "enabled", "maximumRenderedChars", "toneTags", "lifecycle"], [], p); schema(value, p); id(value.variantId, `${p}.variantId`); integer(value.variantVersion, 1, `${p}.variantVersion`); enumField(value, "locale", enums.supportedLocale, p); literal(value.renderMode, "controlled_commentary", `${p}.renderMode`); enumField(value, "intent", enums.commentaryIntent, p); if (typeof value.text !== "string" || [...value.text].length < 1 || [...value.text].length > 240 || /\{[^}]*\}/.test(value.text)) fail(`${p}.text`, "must be placeholder-free text of 1-240 code points"); bool(value.enabled, `${p}.enabled`); integer(value.maximumRenderedChars, [...value.text].length, `${p}.maximumRenderedChars`, 240); if (!Array.isArray(value.toneTags) || value.toneTags.length > 4 || new Set(value.toneTags).size !== value.toneTags.length) fail(`${p}.toneTags`, "must contain 0-4 unique tags"); value.toneTags.forEach((tag) => oneOf(tag, enums.toneTag, `${p}.toneTags`)); enumField(value, "lifecycle", enums.variantLifecycle, p); return value; }
+
+export function validateAllowedCommentaryVariantProjection(value, path = "allowedVariant") {
+  exact(value, ["schemaVersion", "variantId", "variantVersion", "locale", "intent", "toneTags"], [], path); schema(value, path); id(value.variantId, `${path}.variantId`); integer(value.variantVersion, 1, `${path}.variantVersion`); enumField(value, "locale", enums.supportedLocale, path); enumField(value, "intent", enums.commentaryIntent, path);
+  if (!Array.isArray(value.toneTags) || value.toneTags.length > 4 || new Set(value.toneTags).size !== value.toneTags.length) fail(`${path}.toneTags`, "must contain 0-4 unique tags"); value.toneTags.forEach((tag) => oneOf(tag, enums.toneTag, `${path}.toneTags`)); return value;
+}
+
+export function validateAllowedCommentaryVariantProjections(values) {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 8) fail("allowedVariants", "must contain 1-8 entries"); const exactKeys = new Set(), idsSeen = new Set();
+  values.forEach((value, index) => { validateAllowedCommentaryVariantProjection(value, `allowedVariants[${index}]`); const key = `${value.variantId}\0${value.variantVersion}\0${value.locale}`; if (exactKeys.has(key)) fail(`allowedVariants[${index}]`, "duplicate registry key"); if (idsSeen.has(value.variantId)) fail(`allowedVariants[${index}].variantId`, "only one version per variant ID is permitted"); exactKeys.add(key); idsSeen.add(value.variantId); }); return values;
+}
 
 export function validateSelectedCommentaryVariant(value) { exact(value, ["variantId", "variantVersion", "locale"], [], "selection"); id(value.variantId, "selection.variantId"); integer(value.variantVersion, 1, "selection.variantVersion"); enumField(value, "locale", enums.supportedLocale, "selection"); return value; }
 

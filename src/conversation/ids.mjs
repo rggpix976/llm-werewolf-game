@@ -24,8 +24,14 @@ export function canonicalJson(value) {
     }
     if (typeof current !== "object") throw new TypeError(`canonical JSON rejects ${typeof current}`);
     if (stack.has(current)) throw new TypeError("canonical JSON rejects cyclic values");
+    if (Object.getOwnPropertySymbols(current).length > 0) throw new TypeError("canonical JSON rejects symbol-keyed properties");
     if (!Array.isArray(current) && Object.getPrototypeOf(current) !== Object.prototype && Object.getPrototypeOf(current) !== null) {
       throw new TypeError("canonical JSON accepts only arrays and plain objects");
+    }
+    if (Array.isArray(current)) {
+      for (let index = 0; index < current.length; index += 1) {
+        if (!Object.hasOwn(current, index)) throw new TypeError("canonical JSON rejects sparse arrays");
+      }
     }
     stack.add(current);
     const result = Array.isArray(current)
