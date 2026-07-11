@@ -1,7 +1,7 @@
 import { canonicalJson, npcClaimIdempotencyKey, playerClaimIdempotencyKey } from "./ids.mjs";
 import { resolveHistoricalVariant, validateRendererSelection } from "./canonicalRenderer.mjs";
 import { ConversationValidationError, validateAcceptedSpeechAct, validateCanonicalClaim, validateConversationCommitResult, validateDisplayPublicationRecord, validateNpcPublicationFinalizationResult, validateNpcReactionPlan, validatePendingRendererRequest, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent } from "./validators.mjs";
-import { validateAcceptedActCoverage, validateFinalizationResultCompleteness, validatePublicationCompleteness, validateRequestIdentityCompleteness } from "./completeness.mjs";
+import { validateAcceptedActCoverage, validateCommitCompleteness, validateFinalizationResultCompleteness, validatePublicationCompleteness, validateReactionDescriptorCoverage, validateRequestIdentityCompleteness } from "./completeness.mjs";
 
 function fail(path, code, message) { throw new ConversationValidationError(path, code, message); }
 function uniqueIndex(values, key, label) { const index = new Map(); values.forEach((value, position) => { const id = value[key]; if (index.has(id)) fail(`${label}[${position}].${key}`, "duplicate_id", `duplicate ${key} ${id}`); index.set(id, value); }); return index; }
@@ -165,6 +165,6 @@ export function validatePreparedConversationGraph(graph) {
   (graph.finalizationResults ?? []).forEach(validateNpcPublicationFinalizationResult);
   validateClaimReferences(graph.claims ?? [], graph); validateEventReferences(graph.events ?? [], graph); validateReactionPlanReferences(graph.reactionPlans ?? [], graph); validateDisplayPlanReferences(graph.displayPlans ?? [], graph); validatePersistedPublicationReferences(graph.publications ?? [], graph); validatePlayerPublicationReferences(graph.publications ?? [], graph); validateCommitResultReferences(graph.commitResults ?? [], graph); const finalizationIds = new Set(), finalizationPublications = new Set(); (graph.finalizationResults ?? []).forEach((result, index) => { if (finalizationIds.has(result.finalizationId) || finalizationPublications.has(result.publicationId)) fail(`finalizationResults[${index}]`, "duplicate_finalization_result", "finalization result identity must be unique"); finalizationIds.add(result.finalizationId); finalizationPublications.add(result.publicationId); validateNpcPublicationFinalizationResultReferences(result, graph); }); return true;
 }
-export function validateCommittedConversationGraph(graph) { validatePreparedConversationGraph(graph); validateAcceptedActCoverage(graph); validatePublicationCompleteness(graph); validateFinalizationResultCompleteness(graph); validateRequestIdentityCompleteness(graph); return true; }
+export function validateCommittedConversationGraph(graph) { validatePreparedConversationGraph(graph); validateCommitCompleteness(graph); validateAcceptedActCoverage(graph); validateReactionDescriptorCoverage(graph); validatePublicationCompleteness(graph); validateFinalizationResultCompleteness(graph); validateRequestIdentityCompleteness(graph); return true; }
 export const validateConversationGraph = validateCommittedConversationGraph;
 export const validateReferentialIntegrity = validatePreparedConversationGraph;

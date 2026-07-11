@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { canonicalJson, classifyIdempotentWrite, npcClaimIdempotencyKey, playerClaimIdempotencyKey, sha256Fingerprint } from "../src/conversation/ids.mjs";
-import { renderCanonicalClaim, renderCanonicalSuspicion, renderCanonicalVote, resolveHistoricalVariant, validateRendererSelection } from "../src/conversation/canonicalRenderer.mjs";
+import { renderCanonicalClaim, renderCanonicalSuspicion, renderCanonicalVote, resolveHistoricalVariant, validateCanonicalRenderingContext, validateRendererSelection } from "../src/conversation/canonicalRenderer.mjs";
 import { candidateFields, enums } from "../src/conversation/domain.mjs";
 import { validateAcceptedSpeechAct, validateCanonicalClaim, validateControlledCommentaryVariant, validateConversationCommitResult, validateDisplayPublicationRecord, validateInterpreterModelOutput, validateNpcPublicationFinalizationResult, validateNpcReactionPlan, validatePendingRendererRequest, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent, validateReferentialIntegrity, validateSelectedCommentaryVariant, validateSpeechActCandidates, validateSourceSpan } from "../src/conversation/validators.mjs";
 import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateCommitResultReferences, validateCommittedConversationGraph, validateConversationGraph, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePlayerPublicationReferences, validatePreparedConversationGraph, validatePublicationFinalizationAtAppend, validateReactionPlanReferences } from "../src/conversation/references.mjs";
-import { validateAcceptedActCoverage, validateFinalizationResultCompleteness, validatePublicationCompleteness, validateRequestIdentityCompleteness } from "../src/conversation/completeness.mjs";
+import { validateAcceptedActCoverage, validateCommitCompleteness, validateFinalizationResultCompleteness, validatePublicationCompleteness, validateReactionDescriptorCoverage, validateRequestIdentityCompleteness } from "../src/conversation/completeness.mjs";
+import { validateAuxiliaryProjection, validateClaimProjection, validateClarificationOutcome, validateErrorEnvelope, validateInterpreterHttpResponse, validateInterpreterProviderResult, validateInterpreterRequest, validatePendingConversationRequest, validateProviderDiagnostics, validatePublicEventProjection, validateRendererCorrelationChain, validateRendererHttpResponse, validateRendererModelOutput, validateRendererProviderResult, validateRendererRequest } from "../src/conversation/contracts.mjs";
 
 const fingerprint = "a".repeat(64);
 const input = { schemaVersion: 1, inputRecordId: "input-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", capturedStateVersion: 0, actorId: "player", rawText: "😀占い師です。Beniが怪しい。", locale: "ja-JP", createdOrder: 0 };
@@ -13,7 +14,8 @@ const playerSource = { sourceType: "player_accepted_act", acceptedSpeechActIds: 
 const claim = { schemaVersion: 1, claimId: "claim-1", claimRevision: 1, actorId: "player", source: playerSource, idempotencyKey: playerClaimIdempotencyKey({ requestId: "request-1", acceptedSpeechActIds: ["act-1"], actorId: "player", claimKind: "role_claim" }), createdTurnId: "turn-1", createdStateVersion: 1, repeatsClaimId: null, contradictsClaimIds: [], status: "asserted", type: "role_claim", claimedRole: "seer" };
 const actBase = { schemaVersion: 1, speechActId: "act-1", requestId: "request-1", acceptedTurnId: "turn-1", acceptedStateVersion: 0, acceptedPhase: "day_discussion", inputRecordId: "input-1", actorId: "player", causationId: "cause-1", correlationId: "corr-1", idempotencyKey: "idem-1", sourceSpan: { start: 1, end: 7 } };
 const roleAct = { ...actBase, type: "accepted_role_claim", claimedRole: "seer" };
-const participantsById = Object.freeze({ player: Object.freeze({ id: "player", displayName: "Player" }), "npc-1": Object.freeze({ id: "npc-1", displayName: "Aoi" }), "npc-2": Object.freeze({ id: "npc-2", displayName: "Beni" }) });
+const publicParticipantsById = Object.freeze({ player: Object.freeze({ participantId: "player", displayName: "Player" }), "npc-1": Object.freeze({ participantId: "npc-1", displayName: "Aoi" }), "npc-2": Object.freeze({ participantId: "npc-2", displayName: "Beni" }) });
+const renderingContext = Object.freeze({ locale: "en", publicParticipantsById });
 const playerEventSource = { sourceType: "player_accepted_act", acceptedSpeechActId: "act-1", inputRecordId: "input-1", requestId: "request-1" };
 const eventBase = { schemaVersion: 1, requestId: "request-1", turnId: "turn-1", actorId: "player", causationId: "cause-1", correlationId: "corr-1", idempotencyKey: "idem-1", source: playerEventSource, stateVersion: 1, occurredPhase: "day_discussion", createdOrder: 0 };
 
@@ -126,10 +128,10 @@ test("canonical JSON rejects ambiguous values and detects payload conflicts", ()
 });
 
 test("canonical renderers validate schemas and resolve safe display names", () => {
-  assert.equal(renderCanonicalClaim(claim, { locale: "en", participantsById }), "Player claimed to be a seer.");
+  assert.equal(renderCanonicalClaim(claim, renderingContext), "Player claimed to be a seer.");
   const source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, vote = { ...eventBase, eventId: "vote-1", actorId: "npc-1", eventType: "vote_declared", targetId: "npc-2", source };
-  assert.equal(renderCanonicalVote(vote, { locale: "ja", participantsById }), "AoiはBeniへの投票を宣言しました。"); assert.equal(renderCanonicalSuspicion({ ...vote, eventId: "suspicion-1", eventType: "suspicion_expressed" }, { locale: "en-US", participantsById }), "Aoi expressed suspicion of Beni.");
-  assert.throws(() => renderCanonicalClaim({ ...claim, actorId: "unknown" }, { locale: "en", participantsById })); assert.throws(() => renderCanonicalClaim({ ...claim, claimedRole: "fox" }, { locale: "en", participantsById })); assert.throws(() => renderCanonicalClaim(claim, { locale: "en", participantsById: { ...participantsById, player: { id: "player", displayName: "<b>Player</b>" } } })); assert.equal(participantsById.player.displayName, "Player");
+  assert.equal(renderCanonicalVote(vote, { locale: "ja", publicParticipantsById }), "AoiはBeniへの投票を宣言しました。"); assert.equal(renderCanonicalSuspicion({ ...vote, eventId: "suspicion-1", eventType: "suspicion_expressed" }, { locale: "en-US", publicParticipantsById }), "Aoi expressed suspicion of Beni.");
+  assert.throws(() => renderCanonicalClaim({ ...claim, actorId: "unknown" }, renderingContext)); assert.throws(() => renderCanonicalClaim({ ...claim, claimedRole: "fox" }, renderingContext)); assert.throws(() => renderCanonicalClaim(claim, { locale: "en", publicParticipantsById: { ...publicParticipantsById, player: { participantId: "player", displayName: "<b>Player</b>" } } })); assert.equal(publicParticipantsById.player.displayName, "Player");
 });
 
 test("exported schema definitions are deeply immutable", () => {
@@ -444,7 +446,7 @@ test("accepted act coverage enforces generated objects and canonical display own
 test("prepared and committed graph APIs have distinct completeness guarantees", () => {
   const informationAct = { ...actBase, type: "accepted_information_request", topic: "rules" }, partial = { inputRecords: [input], acceptedSpeechActs: [informationAct] };
   assert.equal(validatePreparedConversationGraph(partial), true);
-  assert.throws(() => validateCommittedConversationGraph(partial), (error) => error.code === "publication_cardinality");
+  assert.throws(() => validateCommittedConversationGraph(partial), (error) => error.code === "commit_result_cardinality");
   assert.equal(validateConversationGraph, validateCommittedConversationGraph);
 });
 
@@ -465,4 +467,87 @@ test("claim idempotency keys are recomputed from Player and NPC provenance", () 
   const plan = canonicalPlan(), source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, npcClaim = { ...claim, actorId: "npc-1", source, idempotencyKey: npcClaimIdempotencyKey({ reactionCommitRequestId: "reaction-request-1", reactionPlanId: "plan-1", descriptorId: "desc-1", actorId: "npc-1", claimKind: "role_claim" }) };
   assert.doesNotThrow(() => validateClaimReferences([npcClaim], { reactionPlans: [plan] }));
   assert.throws(() => validateClaimReferences([{ ...npcClaim, idempotencyKey: "e".repeat(64) }], { reactionPlans: [plan] }), (error) => error.code === "idempotency_key_mismatch");
+});
+
+const publicEventProjections = [
+  { schemaVersion: 1, projectionType: "public_statement_event", eventId: "event-1", actorId: "player", turnId: "turn-1", occurredPhase: "day_discussion" },
+  { schemaVersion: 1, projectionType: "public_question_event", eventId: "event-2", actorId: "player", targetId: "npc-1", turnId: "turn-1", occurredPhase: "day_discussion", topic: "role" },
+  { schemaVersion: 1, projectionType: "suspicion_event", eventId: "event-3", actorId: "player", targetId: "npc-1", turnId: "turn-1", occurredPhase: "day_discussion" },
+  { schemaVersion: 1, projectionType: "vote_event", eventId: "event-4", actorId: "player", targetId: "npc-1", turnId: "turn-1", occurredPhase: "day_discussion" },
+  { schemaVersion: 1, projectionType: "role_claim_event", eventId: "event-5", actorId: "player", claimId: "claim-public-role", turnId: "turn-1", occurredPhase: "day_discussion" },
+  { schemaVersion: 1, projectionType: "result_claim_event", eventId: "event-6", actorId: "player", claimId: "claim-public-result", turnId: "turn-1", occurredPhase: "day_discussion" }
+];
+const publicClaimProjections = [{ schemaVersion: 1, projectionType: "role_claim", claimId: "claim-public-role", actorId: "player", claimedRole: "seer" }, { schemaVersion: 1, projectionType: "result_claim", claimId: "claim-public-result", actorId: "player", targetId: "npc-1", result: "werewolf" }];
+const publicRoster = [{ playerId: "player", displayName: "Player", publicStatus: "alive" }, { playerId: "npc-1", displayName: "Aoi", publicStatus: "alive" }];
+const diagnostics = { providerName: "provider", model: "model-1", attemptCount: 1, elapsedMs: 10 };
+
+function rendererRequestFixture() { return { schemaVersion: 1, requestId: "renderer-request-1", correlationId: "corr-1", reactionPlanId: "plan-1", turnId: "turn-1", resultingStateVersion: 2, npcId: "npc-1", locale: "ja-JP", renderMode: "controlled_commentary", commentaryPlan: { intent: "acknowledge", allowedPublicReferenceIds: ["event-1"] }, publicEvents: [publicEventProjections[0]], publicClaims: [], publicVotes: [], executions: [], attackDeaths: [], allowedPublicReferenceIds: ["event-1"], allowedVariants: [{ schemaVersion: 1, variantId: "variant-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }] }; }
+function interpreterRequestFixture() { return { schemaVersion: 1, requestId: "interpreter-request-1", correlationId: "corr-1", turnId: "turn-1", preconditionStateVersion: 0, preconditionPhase: "day_discussion", locale: "ja-JP", rawText: "x", playerContext: { playerId: "player", publicStatus: "alive" }, publicRoster, allowedCandidateTypes: ["non_game_statement"], publicContext: { publicEvents: [publicEventProjections[0]], publicClaims: [] }, limits: { maxAlternatives: 3, maxActsPerAlternative: 4, maxNestingDepth: 8 } }; }
+
+test("all public projection union members are strict", () => {
+  publicEventProjections.forEach((projection) => assert.doesNotThrow(() => validatePublicEventProjection(projection)));
+  publicClaimProjections.forEach((projection) => assert.doesNotThrow(() => validateClaimProjection(projection)));
+  const auxiliary = [{ schemaVersion: 1, projectionType: "public_vote", voteEventId: "event-4", actorId: "player", targetId: "npc-1", turnId: "turn-1", occurredPhase: "vote" }, { schemaVersion: 1, projectionType: "execution", executionEventId: "execution-1", executedPlayerId: "npc-1", turnId: "turn-1", occurredPhase: "execution" }, { schemaVersion: 1, projectionType: "attack_death", attackEventId: "attack-1", attackedPlayerId: "npc-1", turnId: "turn-1", occurredPhase: "werewolf_attack" }];
+  auxiliary.forEach((projection) => assert.doesNotThrow(() => validateAuxiliaryProjection(projection)));
+  for (const projection of [...publicEventProjections, ...publicClaimProjections]) { const validate = projection.eventId ? validatePublicEventProjection : validateClaimProjection; assert.throws(() => validate({ ...projection, unknown: true })); assert.throws(() => validate({ ...projection, projectionType: "unknown" })); }
+});
+
+test("Interpreter contracts are strict and preserve request identity", () => {
+  const request = interpreterRequestFixture(), modelOutput = { schemaVersion: 1, alternatives: [{ alternativeId: "alt-1", confidence: 1, speechActs: [{ type: "non_game_statement", sourceSpan: { start: 0, end: 1 } }] }] }, result = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, modelOutput, diagnostics }, response = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, serverCorrelationId: "server-corr-1", result };
+  assert.doesNotThrow(() => validateInterpreterRequest(request)); assert.doesNotThrow(() => validateProviderDiagnostics(diagnostics)); assert.doesNotThrow(() => validateInterpreterProviderResult(result, request)); assert.doesNotThrow(() => validateInterpreterHttpResponse(response, request));
+  assert.throws(() => validateInterpreterRequest({ ...request, privateMemory: [] })); assert.throws(() => validateInterpreterRequest({ ...request, publicRoster: [...request.publicRoster, request.publicRoster[0]] })); assert.throws(() => validateInterpreterProviderResult({ ...result, correlationId: "other" }, request)); assert.throws(() => validateInterpreterHttpResponse({ ...response, requestId: "other" }, request));
+});
+
+test("Renderer contracts enforce correlation and omit publicRoster", () => {
+  const request = rendererRequestFixture(), modelOutput = { schemaVersion: 1, selectedVariantId: "variant-1", selectedVariantVersion: 1 }, result = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, reactionPlanId: request.reactionPlanId, modelOutput, diagnostics }, response = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, serverCorrelationId: "server-corr-1", reactionPlanId: request.reactionPlanId, result }, pending = { ...pendingRenderer(), requestId: request.requestId };
+  assert.doesNotThrow(() => validateRendererRequest(request)); assert.doesNotThrow(() => validateRendererModelOutput(modelOutput, request)); assert.doesNotThrow(() => validateRendererProviderResult(result, request)); assert.doesNotThrow(() => validateRendererHttpResponse(response, request));
+  assert.equal(validateRendererCorrelationChain({ reactionPlan: controlledPlan(), rendererRequest: request, pendingRendererRequest: pending, providerResult: result, httpResponse: response }), true);
+  assert.throws(() => validateRendererRequest({ ...request, publicRoster })); assert.throws(() => validateRendererRequest({ ...request, correlationId: undefined })); assert.throws(() => validateRendererRequest({ ...request, allowedPublicReferenceIds: ["missing"], commentaryPlan: { ...request.commentaryPlan, allowedPublicReferenceIds: ["missing"] } })); assert.throws(() => validateRendererProviderResult({ ...result, correlationId: "other" }, request));
+  assert.throws(() => validateRendererCorrelationChain({ reactionPlan: controlledPlan(), rendererRequest: request, pendingRendererRequest: { ...pending, correlationId: "other" }, providerResult: result, httpResponse: response }));
+});
+
+test("pending, clarification, and error unions reject sibling and unknown fields", () => {
+  const interpreterPending = { schemaVersion: 1, pendingType: "interpreter", requestId: "pending-1", correlationId: "corr-1", turnId: "turn-1", preconditionStateVersion: 0, inputRecordId: "input-1", targetNpcId: "npc-1", operation: "interpret_player_input", status: "pending", startedAt: "2026-07-11T00:00:00Z" };
+  assert.doesNotThrow(() => validatePendingConversationRequest(interpreterPending)); assert.doesNotThrow(() => validatePendingConversationRequest(pendingRenderer())); assert.throws(() => validatePendingConversationRequest({ ...interpreterPending, reactionPlanId: "plan-1" }));
+  const clarification = { schemaVersion: 1, requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", preconditionStateVersion: 0, reason: "ambiguous_target", templateId: "ask_for_target", allowedTargetIds: ["npc-1"] };
+  assert.doesNotThrow(() => validateClarificationOutcome(clarification, publicRoster)); assert.throws(() => validateClarificationOutcome({ ...clarification, allowedTargetIds: ["missing"] }, publicRoster));
+  const error = { schemaVersion: 1, requestId: null, correlationId: "server-corr-1", error: { code: "malformed_json", retryable: false } };
+  assert.doesNotThrow(() => validateErrorEnvelope(error)); assert.throws(() => validateErrorEnvelope({ ...error, message: "secret" })); assert.throws(() => validateErrorEnvelope({ ...error, error: { ...error.error, code: "unknown" } }));
+});
+
+test("CanonicalRenderingContext is strict, local-only, and immutable", () => {
+  assert.equal(validateCanonicalRenderingContext(renderingContext), renderingContext); assert.equal(renderingContext.publicParticipantsById.player.displayName, "Player");
+  assert.throws(() => validateCanonicalRenderingContext({ ...renderingContext, privateRole: "seer" })); assert.throws(() => validateCanonicalRenderingContext({ locale: "en", publicParticipantsById: { a: { participantId: "same", displayName: "A" }, b: { participantId: "same", displayName: "B" } } })); assert.throws(() => validateCanonicalRenderingContext({ locale: "en", publicParticipantsById: { player: { participantId: "player", displayName: "Player", role: "seer" } } }));
+});
+
+test("committed graph uses CommitResult as authoritative 1-4 act evidence", () => {
+  const informationAct = { ...actBase, type: "accepted_information_request", topic: "rules" }, displayPlan = { schemaVersion: 1, displayPlanId: "display-info", inputRecordId: "input-1", turnId: "turn-1", stateVersion: 1, segments: [{ segmentId: "raw-info", type: "raw_input", inputRecordId: "input-1", sourceSpan: { start: 0, end: 16 } }] }, publication = { schemaVersion: 1, recordType: "player_utterance_published", publicationId: "pub-info", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", gameStateVersion: 1, occurredPhase: "day_discussion", actorId: "player", inputRecordId: "input-1", displayPlanId: "display-info", idempotencyKey: "idem-info", publicationSlotOrder: 0, recordAppendOrder: 0 }, result = { schemaVersion: 1, requestId: "request-1", correlationId: "corr-1", requestFingerprint: fingerprint, commitType: "player_conversation", preconditionStateVersion: 0, resultingStateVersion: 1, inputRecordId: "input-1", displayPlanId: "display-info", playerPublicationId: "pub-info", createdEventIds: [], createdClaimIds: [], createdAtOrder: 0 }, graph = { inputRecords: [input], acceptedSpeechActs: [informationAct], displayPlans: [displayPlan], publications: [publication], commitResults: [result] };
+  assert.equal(validateCommittedConversationGraph(graph), true);
+  assert.throws(() => validateCommitCompleteness({ inputRecords: [input], commitResults: [result] }), (error) => error.code === "accepted_act_cardinality");
+  assert.throws(() => validateCommitCompleteness({ inputRecords: [input], acceptedSpeechActs: Array.from({ length: 5 }, (_, index) => ({ ...informationAct, speechActId: `act-${index}` })), commitResults: [result] }), (error) => error.code === "accepted_act_cardinality");
+  assert.throws(() => validateCommittedConversationGraph({ ...graph, commitResults: [] }), (error) => error.code === "commit_result_cardinality");
+});
+
+test("NPC descriptor generation coverage is bidirectional", () => {
+  const plan = canonicalPlan(), source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, npcClaim = { ...claim, claimId: "npc-claim", actorId: "npc-1", source, createdStateVersion: 2, idempotencyKey: npcClaimIdempotencyKey({ reactionCommitRequestId: "reaction-request-1", reactionPlanId: "plan-1", descriptorId: "desc-1", actorId: "npc-1", claimKind: "role_claim" }) }, event = { ...eventBase, eventId: "npc-role-event", requestId: "reaction-request-1", actorId: "npc-1", source, stateVersion: 2, eventType: "role_claim_recorded", claimId: "npc-claim" };
+  assert.equal(validateReactionDescriptorCoverage({ reactionPlans: [plan], claims: [npcClaim], events: [event] }), true); assert.throws(() => validateReactionDescriptorCoverage({ reactionPlans: [plan], claims: [npcClaim], events: [] })); assert.throws(() => validateReactionDescriptorCoverage({ reactionPlans: [plan], claims: [], events: [event] }));
+});
+
+test("AcceptedSpeechAct generation matrix covers every member in both directions", () => {
+  const cases = [
+    { act: { ...actBase, type: "accepted_non_game_statement" }, eventType: "public_statement_recorded" },
+    { act: { ...actBase, type: "accepted_question", targetId: "npc-1", topic: "role" }, eventType: "public_question_recorded" },
+    { act: { ...actBase, type: "accepted_suspicion", targetId: "npc-1" }, eventType: "suspicion_expressed", segmentType: "canonical_suspicion", segmentField: "suspicionEventId" },
+    { act: { ...actBase, type: "accepted_vote_declaration", targetId: "npc-1" }, eventType: "vote_declared", segmentType: "canonical_vote", segmentField: "voteEventId" },
+    { act: roleAct, eventType: "role_claim_recorded", claimType: "role_claim" },
+    { act: { ...actBase, type: "accepted_result_claim", targetId: "npc-1", result: "werewolf" }, eventType: "result_claim_recorded", claimType: "result_claim" },
+    { act: { ...actBase, type: "accepted_information_request", topic: "rules" } }
+  ];
+  cases.forEach(({ act, eventType, claimType, segmentType, segmentField }, index) => {
+    const eventId = `matrix-event-${index}`, claimId = `matrix-claim-${index}`, source = { sourceType: "player_accepted_act", acceptedSpeechActId: act.speechActId, inputRecordId: act.inputRecordId, requestId: act.requestId }, events = eventType ? [{ source, eventType, eventId, ...(claimType ? { claimId } : {}) }] : [], claims = claimType ? [{ source: { sourceType: "player_accepted_act", acceptedSpeechActIds: [act.speechActId], inputRecordId: act.inputRecordId, requestId: act.requestId }, type: claimType, claimId }] : [];
+    const segment = claimType ? { type: "canonical_claim", claimId } : segmentType ? { type: segmentType, [segmentField]: eventId } : null, displayPlans = segment ? [{ inputRecordId: act.inputRecordId, segments: [segment] }] : [];
+    assert.equal(validateAcceptedActCoverage({ acceptedSpeechActs: [act], claims, events, displayPlans }), true);
+    if (eventType) assert.throws(() => validateAcceptedActCoverage({ acceptedSpeechActs: [act], claims, events: [], displayPlans }));
+    if (eventType) assert.throws(() => validateAcceptedActCoverage({ acceptedSpeechActs: [act], claims, events: [...events, ...events], displayPlans })); else assert.throws(() => validateAcceptedActCoverage({ acceptedSpeechActs: [act], claims, events: [{ source, eventType: "public_statement_recorded", eventId }], displayPlans }));
+  });
 });

@@ -20,6 +20,29 @@ export function validateAcceptedActCoverage({ acceptedSpeechActs = [], claims = 
   return true;
 }
 
+export function validateCommitCompleteness({ inputRecords = [], acceptedSpeechActs = [], reactionPlans = [], commitResults = [] }) {
+  const playerResults = commitResults.filter((result) => result.commitType === "player_conversation"), npcResults = commitResults.filter((result) => result.commitType === "npc_reaction");
+  for (const [index, result] of playerResults.entries()) {
+    const inputs = inputRecords.filter((input) => input.inputRecordId === result.inputRecordId && input.requestId === result.requestId), acts = acceptedSpeechActs.filter((act) => act.inputRecordId === result.inputRecordId && act.requestId === result.requestId);
+    if (inputs.length !== 1) fail(`commitResults[${index}].inputRecordId`, "commit_cardinality", "player commit requires exactly one input record");
+    if (acts.length < 1 || acts.length > 4) fail(`commitResults[${index}]`, "accepted_act_cardinality", "player commit requires 1-4 accepted speech acts");
+  }
+  for (const [index, act] of acceptedSpeechActs.entries()) if (count(playerResults, (result) => result.inputRecordId === act.inputRecordId && result.requestId === act.requestId) !== 1) fail(`acceptedSpeechActs[${index}]`, "commit_result_cardinality", "committed accepted act requires exactly one player commit result");
+  for (const [index, result] of npcResults.entries()) if (count(reactionPlans, (plan) => plan.reactionPlanId === result.reactionPlanId && plan.requestId === result.requestId) !== 1) fail(`commitResults[${index}].reactionPlanId`, "commit_cardinality", "NPC commit requires exactly one reaction plan");
+  for (const [index, plan] of reactionPlans.entries()) if (count(npcResults, (result) => result.reactionPlanId === plan.reactionPlanId && result.requestId === plan.requestId) !== 1) fail(`reactionPlans[${index}]`, "commit_result_cardinality", "committed reaction plan requires exactly one NPC commit result");
+  return true;
+}
+
+export function validateReactionDescriptorCoverage({ reactionPlans = [], claims = [], events = [] }) {
+  for (const [planIndex, plan] of reactionPlans.entries()) for (const descriptor of plan.intendedSpeechActs) {
+    const sourcedClaims = claims.filter((claim) => claim.source.sourceType === "npc_reaction" && claim.source.reactionPlanId === plan.reactionPlanId && claim.source.descriptorId === descriptor.descriptorId), sourcedEvents = events.filter((event) => event.source.sourceType === "npc_reaction" && event.source.reactionPlanId === plan.reactionPlanId && event.source.descriptorId === descriptor.descriptorId);
+    const expectedEventType = { role_claim: "role_claim_recorded", result_claim: "result_claim_recorded", vote_declaration: "vote_declared", suspicion: "suspicion_expressed" }[descriptor.descriptorType], expectedClaimType = descriptor.descriptorType === "role_claim" ? "role_claim" : descriptor.descriptorType === "result_claim" ? "result_claim" : null;
+    if (expectedClaimType ? sourcedClaims.length !== 1 || sourcedClaims[0].type !== expectedClaimType : sourcedClaims.length !== 0) fail(`reactionPlans[${planIndex}].intendedSpeechActs.${descriptor.descriptorId}`, "missing_generated_object", "reaction descriptor must generate exactly its required canonical claim set");
+    if (expectedEventType ? sourcedEvents.length !== 1 || sourcedEvents[0].eventType !== expectedEventType : sourcedEvents.length !== 0) fail(`reactionPlans[${planIndex}].intendedSpeechActs.${descriptor.descriptorId}`, "missing_generated_object", "reaction descriptor must generate exactly its required semantic event set");
+  }
+  return true;
+}
+
 export function validatePublicationCompleteness({ inputRecords = [], acceptedSpeechActs = [], displayPlans = [], reactionPlans = [], publications = [], commitResults = [] }) {
   const committedInputs = inputRecords.filter((input) => acceptedSpeechActs.some((act) => act.inputRecordId === input.inputRecordId));
   for (const input of committedInputs) {

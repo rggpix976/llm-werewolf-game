@@ -11,17 +11,26 @@ function language(locale) {
   return locale.startsWith("ja") ? "ja" : "en";
 }
 
+function exactKeys(value, keys, label) { if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) throw new TypeError(`${label} must be strict`); }
+
+export function validateCanonicalRenderingContext(options) {
+  exactKeys(options, ["locale", "publicParticipantsById"], "canonical rendering context"); language(options.locale);
+  const entries = options.publicParticipantsById instanceof Map ? [...options.publicParticipantsById.entries()] : Object.entries(options.publicParticipantsById ?? {}), ids = new Set();
+  for (const [key, value] of entries) { exactKeys(value, ["participantId", "displayName"], `participant ${key}`); if (value.participantId !== key || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(value.participantId) || ids.has(value.participantId)) throw new TypeError(`invalid or duplicate participant ${key}`); ids.add(value.participantId); const length = [...value.displayName].length; if (length < 1 || length > 80 || /[<>&\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value.displayName)) throw new TypeError(`unsafe display name for ${key}`); }
+  return options;
+}
+
 function participant(participantsById, participantId) {
   const value = participantsById instanceof Map ? participantsById.get(participantId) : participantsById?.[participantId];
-  if (!value || value.id !== participantId || typeof value.displayName !== "string") throw new TypeError(`unknown participant ${participantId}`);
+  if (!value || value.participantId !== participantId) throw new TypeError(`unknown participant ${participantId}`);
   const length = [...value.displayName].length;
-  if (length < 1 || length > 64 || /[<>&\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value.displayName)) throw new TypeError(`unsafe display name for ${participantId}`);
+  if (length < 1 || length > 80 || /[<>&\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value.displayName)) throw new TypeError(`unsafe display name for ${participantId}`);
   return value.displayName;
 }
 
 function context(options) {
-  if (!options || typeof options !== "object" || !options.participantsById) throw new TypeError("renderer requires an engine-owned participant projection");
-  return { locale: options.locale, lang: language(options.locale), participantsById: options.participantsById };
+  validateCanonicalRenderingContext(options);
+  return { locale: options.locale, lang: language(options.locale), participantsById: options.publicParticipantsById };
 }
 
 export function renderCanonicalClaim(claim, options) {
