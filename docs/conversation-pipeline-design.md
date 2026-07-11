@@ -205,6 +205,8 @@ The engine-generated representation of a bound act.
 - **requestId**: String (Required, Linked to request)
 - **acceptedTurnId**: String (Required)
 - **acceptedStateVersion**: Integer (Required, Pre-commit version)
+- **acceptedPhase**: `GamePhase` (Required, authoritative pre-commit phase in which validation succeeded)
+- **inputRecordId**: ID (Required)
 - **actorId**: String (Required, Bound by engine)
 - **causationId**: String (Required)
 - **correlationId**: String (Required)
@@ -266,16 +268,16 @@ The engine-generated representation of a bound act.
 
 ## 10. `PublicEvent` Types (Strict Discriminated Union)
 
-Authoritative public records. Every ID is a non-empty ASCII identifier of 1-64 characters matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`. The union has six semantic event types plus `PlayerUtterancePublishedEvent`; every member has `additionalProperties: false`.
+Authoritative public records. Every ID is a non-empty ASCII identifier of 1-64 characters matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`. The union has six semantic event types plus player and NPC publication events; every member has `additionalProperties: false`.
 
-`PublicEvent = PublicStatementRecordedEvent | PublicQuestionRecordedEvent | SuspicionExpressedEvent | VoteDeclaredEvent | RoleClaimRecordedEvent | ResultClaimRecordedEvent | PlayerUtterancePublishedEvent`, discriminated by `eventType`.
+`PublicEvent = PublicStatementRecordedEvent | PublicQuestionRecordedEvent | SuspicionExpressedEvent | VoteDeclaredEvent | RoleClaimRecordedEvent | ResultClaimRecordedEvent | PlayerUtterancePublishedEvent | NpcUtterancePublishedEvent`, discriminated by `eventType`. The NPC publication member is fully defined in section 17.
 
 ### Common Required Fields (`EventMetadata`)
 
 - **schemaVersion**: integer literal `1`
-- **eventId**, **requestId**, **turnId**, **actorId**, **acceptedSpeechActId**, **causationId**, **correlationId**, **idempotencyKey**: ID
+- **eventId**, **requestId**, **turnId**, **actorId**, **sourceAcceptedSpeechActId**, **causationId**, **correlationId**, **idempotencyKey**: ID
 - **stateVersion**: integer, minimum `0`
-- **phase**: `GamePhase`
+- **occurredPhase**: `GamePhase` (authoritative phase in which the event semantically occurred)
 - **createdOrder**: integer, minimum `0`, unique across the event stream
 
 All semantic player-speech events require **inputRecordId** as an audit reference. They never carry `displayPlanId` or `sourceSpan`; segmentation is owned exclusively by `PlayerUtteranceDisplayPlan`, and display activation belongs exclusively to `PlayerUtterancePublishedEvent`.
@@ -293,9 +295,9 @@ All semantic player-speech events require **inputRecordId** as an audit referenc
 
 ### PlayerUtterancePublishedEvent
 
-This independent strict event requires `schemaVersion: 1`, `eventId: ID`, discriminator `eventType: "player_utterance_published"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `phase: GamePhase`, `actorId: ID`, `inputRecordId: ID`, `displayPlanId: ID`, `idempotencyKey: ID`, and `createdOrder: integer >= 0`. It has no optional or nullable fields, forbids every unlisted field (including `acceptedSpeechActId`, `sourceSpan`, semantic payload fields), and sets `additionalProperties: false`.
+This independent strict event requires `schemaVersion: 1`, `eventId: ID`, discriminator `eventType: "player_utterance_published"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `occurredPhase: GamePhase`, `actorId: ID`, `inputRecordId: ID`, `displayPlanId: ID`, `idempotencyKey: ID`, and `createdOrder: integer >= 0`. It has no optional or nullable fields, forbids every unlisted field (including `sourceAcceptedSpeechActId`, `sourceSpan`, semantic payload fields), and sets `additionalProperties: false`.
 
-At most one is created per accepted player input, including claim-only and multi-act input. It is the sole event that triggers UI display, public-history display, and replay display of the player utterance. Semantic events never trigger rendering. Its input and display-plan references must resolve to the same committed input, turn, actor, and resulting state version. Duplicate `requestId` or idempotency replay is a no-op, so one `displayPlanId` is never displayed twice.
+Exactly one is created per committed displayable player input, including claim-only, multi-act, question-only, non-game statement, and accepted information-request input. All accepted player inputs in this baseline are displayable; `UninterpretableCandidate` is not accepted and instead uses `ClarificationOutcome`. The publication event is the sole trigger for UI, public-history, and replay display. Semantic events never trigger rendering. Its input and display-plan references must resolve to the same committed input, turn, actor, and resulting state version. A display plan is referenced by exactly one publication event. Duplicate replay returns the stored commit result and never displays again.
 
 | Candidate | Accepted act | Semantic event/domain object | Display-owner event |
 | :--- | :--- | :--- | :--- |
@@ -305,7 +307,7 @@ At most one is created per accepted player input, including claim-only and multi
 | vote | `AcceptedVoteDeclaration` | `VoteDeclaredEvent` | same single owner |
 | role claim | `AcceptedRoleClaim` | `RoleCanonicalClaim` + `RoleClaimRecordedEvent` | same single owner |
 | result claim | `AcceptedResultClaim` | `ResultCanonicalClaim` + `ResultClaimRecordedEvent` | same single owner |
-| information request | `AcceptedInformationRequest` | no semantic public event | same single owner when publicly displayed |
+| information request | `AcceptedInformationRequest` | no semantic public event | same single owner |
 
 Semantic events never initiate display. The publication event resolves its `inputRecordId` and `displayPlanId`; the plan then resolves raw ranges from the immutable input and canonical ranges from referenced claims/events through engine-owned renderers.
 
@@ -316,7 +318,7 @@ Semantic events never initiate display. The publication event resolves its `inpu
 - **claimId**: String (Required)
 - **claimRevision**: Integer (Required, starts at 1)
 - **actorId**: String (Required)
-- **sourceSpeechActIds**: Array of String (Required, unique)
+- **sourceAcceptedSpeechActIds**: Array of ID (Required, 1-4 unique references)
 - **idempotencyKey**: String (Required, `source act key + claimKind`)
 - **createdTurnId**: String (Required)
 - **createdStateVersion**: Integer (Required)
@@ -340,7 +342,7 @@ Semantic events never initiate display. The publication event resolves its `inpu
 
 Examples: `Beni is werewolf` followed by `Beni is not_werewolf` is a contradiction when the same actor made both result claims about Beni. `Beni is werewolf` followed by `Aoi is not_werewolf` is not a contradiction because the subjects differ.
 
-## 12. `PlayerInputRecord` and `DisplayPlan`
+## 12. `PlayerInputRecord` and `PlayerUtteranceDisplayPlan`
 
 ### PlayerInputRecord
 - **schemaVersion**: 1 (Integer, Required)
@@ -376,15 +378,17 @@ Segments follow source order. Segment IDs are unique. Raw spans belong to the pl
 
 ## 13. `NpcReactionPlan` Schema (Strict Union)
 
+`NpcReactionPlan = CanonicalOnlyReactionPlan | ControlledCommentaryReactionPlan`, discriminated by `renderMode`.
+
 ### CanonicalOnlyReactionPlan
-- **Required**: `schemaVersion: 1`, `reactionPlanId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `npcId: ID`, `renderMode: "canonical_only"`, `intendedSpeechActs: CanonicalSpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `canonicalSegments: CanonicalSegment[1..16]`, `maxChars: integer 1..1000`
+- **Required**: `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `causationEventIds: ID[1..16]`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `renderMode: "canonical_only"`, `intendedSpeechActs: CanonicalSpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `canonicalSegments: CanonicalSegment[1..16]`, `maxChars: integer 1..1000`
 - **Forbidden**: `commentaryPlan`, `allowedVariants`
 - **additionalProperties**: false
 
 Every plan containing a state-changing descriptor uses this type. `CanonicalSpeechActDescriptor` is exactly `RoleClaimDescriptor | ResultClaimDescriptor | VoteDeclarationDescriptor | SuspicionDescriptor`; answers, acknowledgements, pondering, declines, clarification, and every other non-state-changing descriptor are forbidden. Its ordered canonical segments completely represent every intended descriptor. It never invokes the Renderer; only the engine-owned canonical renderer displays it.
 
 ### ControlledCommentaryReactionPlan
-- **Required**: `schemaVersion: 1`, `reactionPlanId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `npcId: ID`, `renderMode: "controlled_commentary"`, `intendedSpeechActs: CommentarySpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `commentaryPlan: ControlledCommentaryPlan`, `maxChars: integer 1..1000`
+- **Required**: `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `causationEventIds: ID[1..16]`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `renderMode: "controlled_commentary"`, `intendedSpeechActs: CommentarySpeechActDescriptor[1..16]`, `policies: ReactionPolicies`, `commentaryPlan: ControlledCommentaryPlan`, `maxChars: integer 1..1000`
 - **Forbidden**: `canonicalSegments`
 - **additionalProperties**: false
 
@@ -457,7 +461,7 @@ The registry key is `(variantId, variantVersion, locale)`. Entries are immutable
 
 ### RendererRequest and RendererModelOutput
 
-`RendererRequest` requires `schemaVersion: 1`, `requestId: ID`, `reactionPlanId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `npcId: ID`, `locale: LocaleTag`, `renderMode: "controlled_commentary"`, `commentaryPlan: ControlledCommentaryPlan`, `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, `allowedPublicReferenceIds: ID[0..32]`, and `allowedVariants: AllowedCommentaryVariantProjection[1..8]`; it has no optional fields and `additionalProperties: false`.
+`RendererRequest` requires `schemaVersion: 1`, `requestId: ID`, `reactionPlanId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `npcId: ID`, `locale: LocaleTag`, `renderMode: "controlled_commentary"`, `commentaryPlan: ControlledCommentaryPlan`, `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, `allowedPublicReferenceIds: ID[0..32]`, and `allowedVariants: AllowedCommentaryVariantProjection[1..8]`; it has no optional fields and `additionalProperties: false`.
 
 Every allowed public reference ID is unique and exists in one of the same request's public projection arrays; private and unknown IDs are prohibited. Projection IDs are globally unambiguous within the request. Allowed variants have unique `(variantId, variantVersion)` pairs, and a request must not contain multiple versions of one `variantId`.
 
@@ -471,12 +475,12 @@ Schema-valid example:
   "requestId": "request-1001",
   "reactionPlanId": "reaction-1001",
   "turnId": "turn-7",
-  "stateVersion": 12,
+  "resultingStateVersion": 12,
   "npcId": "npc-aoi",
   "locale": "ja-JP",
   "renderMode": "controlled_commentary",
   "commentaryPlan": { "intent": "acknowledge", "allowedPublicReferenceIds": ["event-1001"] },
-  "publicEvents": [{ "schemaVersion": 1, "projectionType": "public_statement_event", "eventId": "event-1001", "actorId": "player", "turnId": "turn-7", "phase": "day_discussion" }],
+  "publicEvents": [{ "schemaVersion": 1, "projectionType": "public_statement_event", "eventId": "event-1001", "actorId": "player", "turnId": "turn-7", "occurredPhase": "day_discussion" }],
   "publicClaims": [],
   "publicVotes": [],
   "executions": [],
@@ -496,18 +500,19 @@ All projection objects require `schemaVersion: 1`, use the closed `projectionTyp
 
 | Projection | `projectionType` | Other required fields | Forbidden fields (in addition to every unlisted field) |
 | :--- | :--- | :--- | :--- |
-| `PublicStatementEventProjection` | `public_statement_event` | `eventId: ID`, `actorId: ID`, `turnId: ID`, `phase: GamePhase` | `targetId`, `claimId`, `role`, `result`, `publicStatus` |
-| `PublicQuestionEventProjection` | `public_question_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `phase: GamePhase`, `topic: QuestionTopic` | `claimId`, `role`, `result`, `publicStatus` |
-| `SuspicionEventProjection` | `suspicion_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `phase: GamePhase` | `claimId`, `role`, `result`, `publicStatus`, `score` |
-| `VoteEventProjection` | `vote_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `phase: GamePhase` | `claimId`, `role`, `result`, `publicStatus` |
-| `RoleClaimEventProjection` | `role_claim_event` | `eventId: ID`, `actorId: ID`, `claimId: ID`, `turnId: ID`, `phase: GamePhase` | `targetId`, `role`, `result`, `publicStatus` |
-| `ResultClaimEventProjection` | `result_claim_event` | `eventId: ID`, `actorId: ID`, `claimId: ID`, `turnId: ID`, `phase: GamePhase` | `targetId`, `role`, `result`, `publicStatus` |
-| `PlayerUtterancePublishedEventProjection` | `player_utterance_published_event` | `eventId: ID`, `actorId: ID`, `inputRecordId: ID`, `displayPlanId: ID`, `turnId: ID`, `phase: GamePhase` | `targetId`, `claimId`, `role`, `result`, `publicStatus` |
-| `RoleClaimProjection` | `role_claim` | `claimId: ID`, `actorId: ID`, `claimedRole: ClaimableRole` | `targetId`, `result`, `phase`, `publicStatus` |
-| `ResultClaimProjection` | `result_claim` | `claimId: ID`, `actorId: ID`, `targetId: ID`, `result: ClaimResult` | `claimedRole`, `phase`, `publicStatus` |
-| `PublicVoteProjection` | `public_vote` | `voteEventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `phase: GamePhase` | `claimId`, `role`, `result`, `publicStatus` |
-| `ExecutionProjection` | `execution` | `executionEventId: ID`, `executedPlayerId: ID`, `turnId: ID`, `phase: GamePhase` | `actorId`, `targetId`, `claimId`, `role`, `result`, `publicStatus` |
-| `AttackDeathProjection` | `attack_death` | `attackEventId: ID`, `attackedPlayerId: ID`, `turnId: ID`, `phase: GamePhase` | `actorId`, `targetId`, `claimId`, `role`, `result`, `publicStatus` |
+| `PublicStatementEventProjection` | `public_statement_event` | `eventId: ID`, `actorId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `targetId`, `claimId`, `role`, `result`, `publicStatus` |
+| `PublicQuestionEventProjection` | `public_question_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `occurredPhase: GamePhase`, `topic: QuestionTopic` | `claimId`, `role`, `result`, `publicStatus` |
+| `SuspicionEventProjection` | `suspicion_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `claimId`, `role`, `result`, `publicStatus`, `score` |
+| `VoteEventProjection` | `vote_event` | `eventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `claimId`, `role`, `result`, `publicStatus` |
+| `RoleClaimEventProjection` | `role_claim_event` | `eventId: ID`, `actorId: ID`, `claimId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `targetId`, `role`, `result`, `publicStatus` |
+| `ResultClaimEventProjection` | `result_claim_event` | `eventId: ID`, `actorId: ID`, `claimId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `targetId`, `role`, `result`, `publicStatus` |
+| `PlayerUtterancePublishedEventProjection` | `player_utterance_published_event` | `eventId: ID`, `actorId: ID`, `inputRecordId: ID`, `displayPlanId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `targetId`, `claimId`, `role`, `result`, `publicStatus` |
+| `NpcUtterancePublishedEventProjection` | `npc_utterance_published_event` | `eventId: ID`, `actorId: ID`, `reactionPlanId: ID`, `turnId: ID`, `occurredPhase: GamePhase`, `renderMode: RenderMode` | `targetId`, `claimId`, `role`, `result`, `publicStatus` |
+| `RoleClaimProjection` | `role_claim` | `claimId: ID`, `actorId: ID`, `claimedRole: ClaimableRole` | `targetId`, `result`, `occurredPhase`, `publicStatus` |
+| `ResultClaimProjection` | `result_claim` | `claimId: ID`, `actorId: ID`, `targetId: ID`, `result: ClaimResult` | `claimedRole`, `occurredPhase`, `publicStatus` |
+| `PublicVoteProjection` | `public_vote` | `voteEventId: ID`, `actorId: ID`, `targetId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `claimId`, `role`, `result`, `publicStatus` |
+| `ExecutionProjection` | `execution` | `executionEventId: ID`, `executedPlayerId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `actorId`, `targetId`, `claimId`, `role`, `result`, `publicStatus` |
+| `AttackDeathProjection` | `attack_death` | `attackEventId: ID`, `attackedPlayerId: ID`, `turnId: ID`, `occurredPhase: GamePhase` | `actorId`, `targetId`, `claimId`, `role`, `result`, `publicStatus` |
 
 `PublicRosterEntry` does not contain `publiclyKnownStatus`; public suspicion is represented only by `SuspicionEventProjection`, preserving both the actor and target. It is derived solely from public events and never from internal suspicion scores or private memory.
 
@@ -515,7 +520,7 @@ Each request array has the maximum shown in `RendererRequest`, rejects duplicate
 
 ### Projection unions
 
-`PublicEventProjection` is the strict discriminated union `PublicStatementEventProjection | PublicQuestionEventProjection | SuspicionEventProjection | VoteEventProjection | RoleClaimEventProjection | ResultClaimEventProjection | PlayerUtterancePublishedEventProjection`. Its discriminator is `projectionType`; members, required fields, forbidden fields, ID limits, closed enums, nullability, and `additionalProperties: false` are exactly those in the table above. Event and claim references must resolve inside the same request projection graph. Publication projections uniquely reference one input and display plan.
+`PublicEventProjection` is the strict discriminated union `PublicStatementEventProjection | PublicQuestionEventProjection | SuspicionEventProjection | VoteEventProjection | RoleClaimEventProjection | ResultClaimEventProjection | PlayerUtterancePublishedEventProjection | NpcUtterancePublishedEventProjection`. Its discriminator is `projectionType`; members, required fields, forbidden fields, ID limits, closed enums, nullability, and `additionalProperties: false` are exactly those in the table above. Event and claim references must resolve inside the same request projection graph. Publication projections uniquely reference their display owner.
 
 `ClaimProjection` is the strict discriminated union `RoleClaimProjection | ResultClaimProjection`. Its discriminator is `projectionType`; both members require `schemaVersion`, `claimId`, and `actorId`, accept no nulls or optional fields, and obey the member-specific fields and prohibitions above. Referenced actors and result targets must exist in `publicRoster`.
 
@@ -532,7 +537,7 @@ Closed enum: `werewolf`, `not_werewolf`. Every candidate, accepted act, canonica
 
 ### Other Closed Enums
 
-- **PublicEventType**: `public_statement_recorded`, `public_question_recorded`, `suspicion_expressed`, `vote_declared`, `role_claim_recorded`, `result_claim_recorded`, `player_utterance_published`
+- **PublicEventType**: `public_statement_recorded`, `public_question_recorded`, `suspicion_expressed`, `vote_declared`, `role_claim_recorded`, `result_claim_recorded`, `player_utterance_published`, `npc_utterance_published`
 - **QuestionTopic**: `role`, `result`, `vote`, `suspicion`, `opinion`, `reasoning`, `rules`, `other`. Candidate, accepted act, interpreter request/output validation, public event, and public projection all reference this one enum; no implicit topic conversion is permitted.
 - **GamePhase**: `day_discussion`, `player_question`, `npc_response`, `vote`, `execution`, `night`, `seer_action`, `werewolf_attack`, `win_check`. These exact values come from the authoritative `PHASES` in `src/constants.mjs` and are enforced by `src/gameEngine.mjs`; any rename requires a future migration and schema-version change.
 - **PublicStatus**: `alive`, `dead`; suspicion is deliberately not a roster status
@@ -543,6 +548,13 @@ Closed enum: `werewolf`, `not_werewolf`. Every candidate, accepted act, canonica
 - **ClarificationReason**: `ambiguous_target`, `ambiguous_intent`, `multiple_alternatives`, `uninterpretable`
 - **ClarificationTemplateId**: `ask_for_target`, `ask_for_clarification`, `report_gibberish`
 - **CandidateType**: `non_game_statement`, `question`, `suspicion`, `vote_declaration`, `role_claim`, `result_claim`, `information_request`, `uninterpretable`
+- **RenderMode**: `canonical_only`, `controlled_commentary`
+- **CommitType**: `player_conversation`, `npc_reaction`
+- **PendingStatus**: `pending`, `aborting`, `completed`, `failed`
+- **Sha256Fingerprint**: 64 lowercase ASCII hexadecimal characters matching `^[0-9a-f]{64}$`
+- **RFC3339Utc**: 20-35 ASCII characters, UTC timestamp ending in `Z`
+- **ClientCorrelationId**: ID supplied for browser-domain causality and validated as untrusted input
+- **ServerCorrelationId**: ID generated by the server immediately on HTTP receipt, before body parsing
 - **LocaleTag**: String, 2-35 ASCII characters matching `^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})+$`
 
 ### Phase permission table
@@ -552,8 +564,8 @@ All candidate, accepted-act, interpreter-request, public-event, and stale-respon
 | Phase | Player speech acts accepted | Notes |
 | :--- | :--- | :--- |
 | `day_discussion` | statements, questions, suspicions, role/result claims, information requests | vote declarations are rejected until `vote` |
-| `player_question` | same alternative already being interpreted | new requests are rejected while pending |
-| `npc_response` | none | renderer correlation only |
+| `player_question` | none in the structured pipeline | compatibility-only phase; never represents pending interpretation |
+| `npc_response` | none in the structured pipeline | compatibility-only phase; never represents pending rendering |
 | `vote` | vote declarations and information requests | claims/questions are rejected |
 | `execution` | none | engine transition only |
 | `night` | none | engine transition only |
@@ -561,39 +573,63 @@ All candidate, accepted-act, interpreter-request, public-event, and stale-respon
 | `werewolf_attack` | none | engine-owned action only |
 | `win_check` | none | engine-owned check only |
 
-## 17. Atomic conversation commit
+## 17. Atomic conversation commits
 
-One logical browser-engine commit contains one immutable `PlayerInputRecord`, `AcceptedSpeechAct[]`, `CanonicalClaim[]`, `PublicEvent[]` including at most one `PlayerUtterancePublishedEvent`, one `PlayerUtteranceDisplayPlan`, suspicion deltas, NPC-memory updates, public-history updates, idempotency records, and any turn/state-version update.
+The structured order is `PlayerConversationCommit -> NpcReactionPreparation -> NpcReactionCommit -> optional Renderer call -> NPC utterance display`. Player and NPC commits are separate atomic transactions with distinct state-version increments.
 
-### Prepare phase
+### PlayerConversationCommit
 
-The exact order is: capture immutable player input; receive and validate interpretation; bind the authoritative actor; validate every act; prepare accepted acts; prepare canonical claims; prepare semantic and publication events; prepare the display plan; prepare suspicion, memory, and history deltas; verify idempotency; verify the state-version precondition; then enter atomic commit. Prepare builds an isolated `ConversationCommitDelta` and never mutates authoritative state.
+One player commit contains one immutable `PlayerInputRecord`, `AcceptedSpeechAct[]`, `CanonicalClaim[]`, semantic `PublicEvent[]`, one `PlayerUtteranceDisplayPlan`, exactly one `PlayerUtterancePublishedEvent`, suspicion/memory/history deltas, one idempotency record, and any turn/phase transition. For precondition version N, success produces N+1.
 
-`ConversationCommitDelta` is runtime-internal and contains `preconditionStateVersion`, `resultingStateVersion`, all objects/deltas listed above, and the proposed turn/phase transition. It is complete before commit and is either applied wholly or discarded.
+Prepare order is: capture staged immutable input; validate interpretation; bind actor; validate all acts; prepare accepted acts, claims, semantic events, display plan, publication event, and deltas; verify idempotency and state/phase preconditions; then commit. Preparation mutates no authoritative state.
 
-### Commit preconditions
+### ConversationCommitDelta
 
-Immediately before applying the delta, the engine rechecks: current `turnId` equals request `turnId`; current `stateVersion` equals request `stateVersion`; `requestId` is not committed; every referenced ID still exists; referenced alive/dead conditions still hold; and every phase permission still holds. Failure discards the delta: no accepted act, claim, event, display plan, history, suspicion, memory, idempotency record, turn, phase, or version changes.
+The strict runtime delta requires `schemaVersion: 1`, `commitType: CommitType`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionPhase: GamePhase`, `resultingPhase: GamePhase`, `preconditionStateVersion: integer >= 0`, `resultingStateVersion: integer >= 1`, the complete prepared object/delta sets, and `requestFingerprint: Sha256Fingerprint`. It has no optional or nullable fields and `additionalProperties: false`. `resultingStateVersion` must equal precondition plus one.
 
-### Commit and rollback behavior
+Immediately before application, the engine rechecks turn, precondition phase/version, request idempotency, referenced IDs, alive/dead conditions, and phase permissions. Failure persists nothing and changes no counter, phase, turn, history, suspicion, memory, or version. Application uses copy-on-write or a reversible delta; exceptions restore the exact snapshot. All acts commit together. `AcceptedSpeechAct.acceptedStateVersion` and `acceptedPhase` store preconditions; claims, events, display plan, and publication store the common resulting version, while events store their semantic `occurredPhase`.
 
-- All acts in the accepted alternative commit together; partial commit is prohibited.
-- Application uses a rollback-capable state delta or copy-on-write snapshot. Any exception restores the exact pre-commit state, including counters and idempotency indexes.
-- Success increments `stateVersion` exactly once. A required turn/phase transition is part of the same commit.
-- Renderer invocation occurs only after success. Renderer failure never rolls back committed claims/events; the engine displays a deterministic canonical or registered fallback and records developer diagnostics.
-- Clarification produces no commit and no authoritative domain objects.
+### NpcReactionPreparation
 
-### Version semantics
+After player success at N+1, the engine prepares without side effects: one `NpcReactionPlan`, any canonical claims and semantic public events, NPC suspicion/memory/public-history deltas, one NPC publication record, and one reaction idempotency record. The preparation stores turn, `preconditionPhase`, `resultingPhase`, and precondition version N+1.
 
-`preconditionStateVersion` is the request and pre-commit version; `resultingStateVersion = preconditionStateVersion + 1`. `AcceptedSpeechAct.acceptedStateVersion` stores the precondition version. Every `CanonicalClaim.createdStateVersion`, `PublicEvent.stateVersion`, and `PlayerUtteranceDisplayPlan.stateVersion` created in the logical commit stores the identical resulting version. Pending runtime records retain the precondition version.
+### NpcReactionCommit
+
+Immediately before commit, the engine requires matching current turn, phase, and N+1 version; an uncommitted reaction request; existing participants and referenced claims/events; valid phase permission; and a living actor when speech requires it. Failure discards preparation. Success atomically applies all reaction objects/deltas and increments N+1 to N+2. The reaction plan, claims, events, and NPC publication record all store N+2. Partial commit is prohibited and exceptions roll back exactly.
+
+Canonical-only plans display immediately after commit, never call Renderer, and reference only claims/events committed in that same or an earlier transaction. Controlled commentary contains no state-changing claim/event, calls Renderer only after commit, and accepts only an engine-owned variant ID/version. Timeout, abort, or Renderer failure displays a deterministic engine-owned fallback and never rolls back committed NPC state.
+
+### NpcUtterancePublishedEvent
+
+This strict display-owner event requires `schemaVersion: 1`, `eventId: ID`, discriminator `eventType: "npc_utterance_published"`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `occurredPhase: GamePhase`, `actorId: ID`, `reactionPlanId: ID`, `renderMode: RenderMode`, `displayReference: NpcDisplayReference`, `idempotencyKey: ID`, and `createdOrder: integer >= 0`; it has no optional/null fields and `additionalProperties: false`.
+
+`NpcDisplayReference` is a strict union: `CanonicalNpcDisplayReference` requires discriminator `displayType: "canonical_segments"` and `segmentIds: ID[1..16]`; `VariantNpcDisplayReference` requires `displayType: "selected_variant"`, `variantId: ID`, `variantVersion: integer >= 1`, `locale: LocaleTag`, and `fallbackUsed: boolean`. Both reject unlisted fields. Exactly one NPC publication event exists per committed reaction. Semantic events never display directly; replay reuses the event and exact references without duplicate output.
+
+For canonical-only, the reaction commit materializes the event immediately. For controlled commentary, the reaction commit atomically creates non-displayable `NpcPublicationReservation`, requiring `schemaVersion: 1`, `eventId: ID`, `reactionPlanId: ID`, `resultingStateVersion: integer >= 1`, `fallbackVariant: SelectedCommentaryVariant`, `idempotencyKey: ID`, and `status: "reserved"`, with no optional fields and `additionalProperties: false`. Renderer success replaces the reserved selection before one-time event finalization, while failure finalizes the reserved fallback. Finalization is append-only publication metadata, does not change authoritative game state or increment `stateVersion`, and can occur exactly once. Thus the committed reaction always owns one publication identity without requiring uncommitted model output.
+
+### ConversationCommitResult
+
+`ConversationCommitResult = PlayerConversationCommitResult | NpcReactionCommitResult`, discriminated by `commitType`. This persisted strict union is keyed by request ID and fingerprint:
+
+- `PlayerConversationCommitResult` requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `requestFingerprint: Sha256Fingerprint`, discriminator `commitType: "player_conversation"`, `preconditionStateVersion: integer >= 0`, `resultingStateVersion: integer >= 1`, `inputRecordId: ID`, `displayPlanId: ID`, `publicationEventId: ID`, `createdEventIds: ID[1..64]`, `createdClaimIds: ID[0..4]`, `reactionPlanId: null`, and `createdAtOrder: integer >= 0`.
+- `NpcReactionCommitResult` requires the same common/version/fingerprint fields, discriminator `commitType: "npc_reaction"`, `inputRecordId: ID` (originating input), `displayPlanId: null`, `publicationEventId: ID`, `createdEventIds: ID[1..64]`, `createdClaimIds: ID[0..4]`, `reactionPlanId: ID`, and `createdAtOrder: integer >= 0`.
+
+Both have no optional fields and `additionalProperties: false`; the explicit null fields have only the stated null value. A committed duplicate request does not invoke a provider, create objects, advance version, or redisplay. It returns the stored result with original IDs. `requestFingerprint` is SHA-256 over canonical JSON of authoritative request fields, including raw text, actor, turn, precondition phase/version, target, operation, and allowed IDs. Same request ID plus different fingerprint is `idempotency_conflict`; exact match returns the original result.
 
 ## 18. Pending conversation request
 
-Provider waiting is runtime control state, not authoritative game phase. `PendingConversationRequest` is a strict runtime-only schema requiring `requestId: ID`, `correlationId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `inputRecordId: ID`, `targetNpcId: ID`, `operation: PendingOperation`, `status: PendingStatus`, and `startedAt: string` in RFC 3339 UTC format (maximum 35 ASCII characters). It has no optional or nullable fields, forbids every unlisted field, and sets `additionalProperties: false`.
+Provider waiting is runtime control state, not authoritative phase. `PendingConversationRequest = PendingInterpreterRequest | PendingRendererRequest`, discriminated by `pendingType`; both members have no optional/null fields and `additionalProperties: false`.
 
-`PendingOperation` is the closed enum `interpret_player_input | render_npc_utterance`; `PendingStatus` is `pending | aborting | completed | failed`. The pending map is keyed by request ID, is not a public event/history entry, and rejects duplicate submission for the same input/operation while active.
+- `PendingInterpreterRequest` requires `schemaVersion: 1`, `pendingType: "interpreter"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `inputRecordId: ID`, `targetNpcId: ID`, `operation: "interpret_player_input"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
+- `PendingRendererRequest` requires `schemaVersion: 1`, `pendingType: "renderer"`, a distinct `requestId: ID`, `correlationId: ID`, `causationId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `reactionPlanId: ID`, `originatingInputRecordId: ID`, `targetNpcId: ID`, `operation: "render_npc_utterance"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
 
-No provider call changes `game.state.phase` in advance. Timeout, abort, disconnect, schema failure, and stale response leave authoritative phase, turn, and version unchanged. Responses must match the pending request, correlation, turn, version, input, operation, and status. Commit alone performs required transitions. The current `player_question` and `npc_response` phases remain compatibility values during migration; Phase 9 removes or redefines them only after all call sites use pending runtime state. If retained, transition into them occurs inside a successful authoritative commit, never at provider-start time. Browser reload or session destruction aborts all controllers, discards pending records, and commits nothing.
+The Interpreter member forbids `resultingStateVersion`, `reactionPlanId`, `originatingInputRecordId`, and `causationId`. The Renderer member forbids `preconditionStateVersion` and `inputRecordId`. This exclusion prevents one version field from acquiring two meanings.
+
+Interpreter pending stores the player precondition version. Renderer pending is created only after `NpcReactionCommit`, stores that committed resulting version, and starts only when it equals current authoritative version. Renderer response validation uses this field and never compares against the old player precondition. Interpreter and Renderer request IDs are different and session-unique. Renderer `causationId` resolves to the NPC reaction commit result or reaction plan.
+
+The runtime map is keyed by request ID. Active records reject duplicate submission. On terminal status, the controller is released immediately; completed/failed records move to a bounded developer-only audit ring and leave the active map before the next event-loop task. Aborted requests use `aborting`, then `failed`, and follow the same removal. The audit ring is not authoritative state or public history and is discarded on reload/session destruction.
+
+No provider operation changes authoritative phase. Timeout, abort, disconnect, schema/provider failure, or stale discard leaves phase/turn/version unchanged. Responses match the member-specific correlation, turn, operation, status, and version field. Pending-map state, not phase, blocks duplicate input. `player_question` and `npc_response` remain compatibility-only legacy phases and are not accepted-input phases in the structured pipeline; Phase 9 removes their premature-mutation call sites and legacy pending control.
 
 ## 19. Alternative acceptance and clarification
 
@@ -610,7 +646,7 @@ No provider call changes `game.state.phase` in advance. Timeout, abort, disconne
 
 ### ClarificationOutcome
 
-This strict schema requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `reason: ClarificationReason`, `templateId: ClarificationTemplateId`, and `allowedTargetIds: ID[0..16]` with unique items. It has no optional or nullable fields and `additionalProperties: false`. Target IDs must exist in the request's public roster.
+This strict schema requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `reason: ClarificationReason`, `templateId: ClarificationTemplateId`, and `allowedTargetIds: ID[0..16]` with unique items. It has no optional or nullable fields and `additionalProperties: false`. Target IDs must exist in the request's public roster.
 
 The engine discards an outcome whose request/correlation does not match the pending request or whose turn/state version is not current. A clarification creates no accepted act, public event, canonical claim, turn advance, or state-version advance. Display uses only the engine-owned template identified by `templateId`; AI-generated explanation text is prohibited.
 
@@ -624,7 +660,7 @@ interpretPlayerInput(request, { signal })
 
 ### InterpreterRequest
 
-Required fields are `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `stateVersion: integer >= 0`, `locale: LocaleTag`, `rawText: string[1..2000 code points]`, `playerContext: InterpreterPlayerContext`, `phase: GamePhase`, `publicRoster: PublicRosterEntry[1..16]`, `allowedCandidateTypes: CandidateType[1..8]`, `publicContext: InterpreterPublicContext`, and `limits: InterpreterLimits`. There are no optional or nullable fields and `additionalProperties: false`.
+Required fields are `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `locale: LocaleTag`, `rawText: string[1..2000 code points]`, `playerContext: InterpreterPlayerContext`, `publicRoster: PublicRosterEntry[1..16]`, `allowedCandidateTypes: CandidateType[1..8]`, `publicContext: InterpreterPublicContext`, and `limits: InterpreterLimits`. There are no optional or nullable fields and `additionalProperties: false`.
 
 `InterpreterPlayerContext` requires only `playerId: ID` and `publicStatus: PublicStatus`. `PublicRosterEntry` requires `playerId: ID`, `displayName: string[1..80]`, and `publicStatus: PublicStatus`. `InterpreterPublicContext` requires `publicEvents: PublicEventProjection[0..64]` and `publicClaims: ClaimProjection[0..64]`. `InterpreterLimits` requires `maxAlternatives: integer 1..3`, `maxActsPerAlternative: integer 1..4`, and `maxNestingDepth: integer 1..8`. Each nested type has no optional fields, rejects null, and has `additionalProperties: false`; IDs are unique and references resolve within the request.
 
@@ -644,7 +680,7 @@ This strict provider-layer schema requires `schemaVersion: 1`, `requestId: ID`, 
 
 ### InterpreterHttpResponse
 
-The HTTP success envelope requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, and `result: InterpreterProviderResult`, with no optional fields, no nulls, and `additionalProperties: false`. Envelope IDs must equal the request and nested provider result.
+The HTTP success envelope requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ClientCorrelationId`, `serverCorrelationId: ServerCorrelationId`, and `result: InterpreterProviderResult`, with no optional fields, no nulls, and `additionalProperties: false`. Client IDs must equal the validated request and nested provider result; server correlation is transport-owned.
 
 ## 21. Renderer contract
 
@@ -664,28 +700,29 @@ This strict schema requires `schemaVersion: 1`, `requestId: ID`, `correlationId:
 
 ### RendererHttpResponse
 
-The HTTP success envelope requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `reactionPlanId: ID`, and `result: RendererProviderResult`, with no optional fields, no nulls, and `additionalProperties: false`. All IDs must match the request and nested result. A stale or mismatched response is discarded without retry or state mutation.
+The HTTP success envelope requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ClientCorrelationId`, `serverCorrelationId: ServerCorrelationId`, `reactionPlanId: ID`, and `result: RendererProviderResult`, with no optional fields, no nulls, and `additionalProperties: false`. Client/domain IDs must match the request and nested result. A stale or mismatched response is discarded without retry or state mutation.
 
 ## 22. HTTP endpoint contract
 
-Both endpoints accept only `Content-Type: application/json; charset=utf-8`, reject content encoding, and limit the decoded request body to 64 KiB. The server validates transport schemas and correlation only; it never decides authoritative game state, phase legality, claim permission, or roster membership.
+Both endpoints accept only `Content-Type: application/json; charset=utf-8`, reject content encoding, and limit the decoded request body to 64 KiB. Before reading or parsing the body, the server generates a unique `ServerCorrelationId`; it is returned in every success/error response and used in logs. Body `correlationId` is an untrusted `ClientCorrelationId` and never replaces the server ID. The server validates transport schemas and correlation only; it never decides authoritative game state, phase legality, claim permission, or roster membership.
 
 | Endpoint | Request | 200 response |
 | :--- | :--- | :--- |
 | `POST /api/interpret-player-input` | `InterpreterRequest` | `InterpreterHttpResponse` |
 | `POST /api/render-npc-utterance` | `RendererRequest` | `RendererHttpResponse` |
 
-For both endpoints: malformed JSON returns 400 `malformed_json`; schema violations return 400 `invalid_schema`; unsupported `schemaVersion` returns 400 `unsupported_schema_version`; unsupported media type returns 415; oversized body returns 413; server rate limit returns 429; invalid provider output or provider authentication failure returns 502; unavailable provider returns 503; provider timeout returns 504. Client disconnect aborts body read, provider call, and backoff and sends no new response. The request `AbortSignal` is propagated through the entire chain.
+For both endpoints: malformed JSON returns 400 `malformed_json`; schema violations return 400 `invalid_schema`; unsupported `schemaVersion` returns 400 `unsupported_schema_version`; idempotency fingerprint conflict returns 409 `idempotency_conflict`; unsupported media type returns 415; oversized body returns 413; server rate limit returns 429; invalid provider output or provider authentication failure returns 502; unavailable provider returns 503; provider timeout returns 504. Client disconnect aborts body read, provider call, and backoff and sends no new response. The request `AbortSignal` is propagated through the entire chain.
 
-Logs may include request/correlation IDs, endpoint, status, duration, attempt count, and normalized error code. They must not include raw provider responses, stack traces in client responses, API keys, prompts, private data, variant registry text, or raw player text.
+Logs always include `serverCorrelationId` and may include a validated client correlation/request ID, endpoint, status, duration, attempt count, and normalized error code. They must not include raw bodies, raw provider responses, stack traces in client responses, API keys, prompts, private data, variant registry text, or raw player text.
 
 ## 23. ErrorEnvelope
 
-`ErrorEnvelope` requires `schemaVersion: 1`, `requestId: ID | null`, `correlationId: ID`, and `error: ErrorDetail`; it has no optional fields and `additionalProperties: false`. `requestId` is null only when malformed transport prevents safe extraction. `ErrorDetail` requires `code: ErrorCode` and `retryable: boolean`, has no optional or nullable fields, and sets `additionalProperties: false`. Here `retryable` means `clientRequestRetryable`: whether the browser may initiate a new HTTP request. It does not expose `providerInternalRetryable` or internal attempt state.
+`ErrorEnvelope` requires `schemaVersion: 1`, `requestId: ID | null`, `correlationId: ServerCorrelationId`, and `error: ErrorDetail`; it has no optional fields and `additionalProperties: false`. Here `correlationId` is always the server-generated transport ID, including malformed JSON; `requestId` is null when safe extraction is impossible. A parsed client correlation is never trusted as this field. `ErrorDetail` requires `code: ErrorCode` and `retryable: boolean`, has no optional or nullable fields, and sets `additionalProperties: false`. `retryable` means `clientRequestRetryable`, not internal attempt state.
 
 | HTTP | ErrorCode | Retryable |
 | :--- | :--- | :--- |
 | 400 | `malformed_json`, `invalid_schema`, `unsupported_schema_version` | false |
+| 409 | `idempotency_conflict` | false |
 | 413 | `body_too_large` | false |
 | 415 | `unsupported_media_type` | false |
 | 429 | `server_rate_limited` | true only when a usable `Retry-After` fits the deadline |
@@ -704,7 +741,7 @@ The error response contains no message field and never exposes provider bodies, 
 - `minimumAttemptBudget`: 1 second.
 - `responseValidationBudget`: 500 milliseconds.
 - `maximumRetryAfter`: 2 seconds.
-- `requestId`, `correlationId`, `turnId`, and `stateVersion` remain unchanged across attempts.
+- `requestId`, `correlationId`, `turnId`, and the operation-specific precondition/resulting version remain unchanged across attempts.
 - One AbortSignal chain covers HTTP body/request lifecycle, provider call, per-attempt timeout, and backoff; client disconnect aborts the same chain.
 - A next attempt starts only when `remaining deadline >= backoff + minimumAttemptBudget + responseValidationBudget`. Its attempt timeout is capped by the remaining deadline after reserved validation budget.
 - Provider authentication failure, invalid request/output schema, wrong correlation ID, and stale response are never retried. Stale responses are discarded.
@@ -713,7 +750,26 @@ The error response contains no message field and never exposes provider bodies, 
 
 `providerInternalRetryable` controls hidden attempts inside one HTTP request; the request ID and idempotency key remain unchanged. `clientRequestRetryable` is the public `ErrorEnvelope.error.retryable`. An exact browser retry of the same logical input reuses `requestId`, `correlationId`, `inputRecordId`, and the stable idempotency key; it is a transport re-attempt, not a new logical request. A user-edited or newly submitted input gets new IDs. Server-internal retry details are never exposed as authorization or state.
 
-## 25. Migration plan
+## 25. Referential integrity
+
+Targets must exist before the source or be created in the same atomic commit. Dangling references are rejected. Replay never substitutes IDs. Committed history objects are append-only and never physically deleted; cleanup is limited to derived caches and bounded runtime pending-audit records.
+
+| Source object | Reference field | Target object | Cardinality | Creation ordering | Replay rule | Deletion rule |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `PlayerInputRecord` | `requestId` | `ConversationRequestIdentity` / idempotency record | exactly 1 | identity staged before provider; committed together | reuse same request/fingerprint | append-only |
+| `AcceptedSpeechAct` | `inputRecordId` | `PlayerInputRecord` | exactly 1 | same player commit | preserve ID | append-only |
+| `CanonicalClaim` | `sourceAcceptedSpeechActIds` | `AcceptedSpeechAct` | 1-4 | same or earlier commit; actor/type compatible | preserve ordered IDs | append-only |
+| semantic `PublicEvent` | `sourceAcceptedSpeechActId` | `AcceptedSpeechAct` | exactly 1 | same player commit | preserve ID | append-only |
+| `PlayerUtterancePublishedEvent` | `inputRecordId` | `PlayerInputRecord` | exactly 1 | same player commit | reuse event | append-only |
+| `PlayerUtterancePublishedEvent` | `displayPlanId` | `PlayerUtteranceDisplayPlan` | exactly 1 and target unique | same player commit | never redisplay | append-only |
+| `NpcReactionPlan` | `causationEventIds` | committed `PublicEvent` | 1-16 unique | earlier player commit or earlier event in reaction commit | preserve IDs | append-only |
+| `NpcUtterancePublishedEvent` | `reactionPlanId` | `NpcReactionPlan` | exactly 1 | same reaction commit/reservation | reuse publication | append-only |
+| `PendingRendererRequest` | `reactionPlanId` | committed `ControlledCommentaryReactionPlan` | exactly 1 | after reaction commit | validate same plan/version | runtime record removable; target append-only |
+| `ConversationCommitResult` | `publicationEventId` | matching player/NPC publication event | exactly 1 | same commit or reserved/finalized publication | return original ID | append-only |
+
+`ConversationRequestIdentity` is the pair `(requestId, requestFingerprint)` stored in the idempotency index; request ID is unique, and a mismatched fingerprint is rejected.
+
+## 26. Migration plan
 
 The first implementation PR is Phase 1 only. It changes no production flow, provider calls, HTTP endpoints, browser integration, state mutation, or regex semantic parsing. Each later phase requires its own review and rollback boundary.
 
@@ -722,16 +778,16 @@ The first implementation PR is Phase 1 only. It changes no production flow, prov
 | 1. Pure schemas, validators, canonical renderers | Add side-effect-free schemas, validators, ID helpers, canonical claim/event renderers | `src/validator.mjs`, `src/utteranceGuard.mjs`, `tests/validator.test.mjs`, `tests/utteranceGuard.test.mjs` | likely `src/conversationSchemas.mjs`, `src/canonicalRenderer.mjs`, matching tests | all production paths | schema, Unicode, renderer, idempotency units | independently deployable unused modules behind no call site; revert files; risk is schema drift | none; no old path removed |
 | 2. Interpreter transport in shadow mode | Call interpreter without consuming result; add pending runtime request tracking without phase mutation | `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/httpResponseProvider.mjs`, tests | interpreter transport tests | authoritative regex path and mutations | HTTP, timeout, abort, privacy, duplicate pending submission | `INTERPRETER_SHADOW_MODE`; disable flag; risk cost/latency | shadow parity and privacy gates pass |
 | 3. Candidate validation without authoritative mutation | Validate/log candidates only | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current response and mutation behavior | candidate, phase, alternative tests | validation-only flag; disable; risk diagnostic divergence | stable shadow metrics |
-| 4. AcceptedSpeechAct and PublicEvent | Introduce prepare/commit separation, rollback-capable deltas, state-version preconditions, duplicate-request handling, pending runtime state, `PlayerUtterancePublishedEvent`, and single-owner display plans | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-delta helper if needed | NPC response provider path | conversion, atomic success/failure, rollback, one-display-owner, replay, stale tests | dual-write flag with read-old; discard prepared delta or rollback snapshot; risk duplicate events/display | atomic/idempotent replay and single-display ownership proven |
+| 4. AcceptedSpeechAct and PublicEvent | Add `PlayerConversationCommit`, rollback delta, `ConversationCommitResult`, duplicate replay, exact player publication ownership, and precondition/occurred/resulting phase semantics | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-result helper if needed | NPC response provider path | conversion, rollback, duplicate/fingerprint, exact display owner, phase/version tests | dual-write flag with read-old; discard/rollback delta; risk duplicate events/display | atomic replay, original CommitResult return, and exact publication proven |
 | 5. Player Claim migration | Move player claims to canonical claim model/rendering | `src/gameEngine.mjs`, `public/browserApp.mjs`, tests | claim registry helper if needed | NPC claims and response generation | relation, display, replay tests | player-claim flag; rollback old rendering; compatibility risk in history | old/new claim parity and replay migration pass |
-| 6. NpcReactionPlan | Produce strict reaction plans | `src/responseGenerator.mjs`, `src/gameEngine.mjs`, `src/responseProvider.mjs`, tests | reaction-plan validator if not Phase 1 | existing provider remains selected | strict-union, canonical coverage tests | plan-generation flag; fall back before mutation; risk descriptor mismatch | all state-changing plans canonically render |
-| 7. Controlled Renderer integration | Select registered variants for non-state speech | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | variant registry module and renderer contract tests | canonical-only plans bypass renderer | selection, registry replay, HTTP tests | renderer flag; engine-owned deterministic fallback; risk retired version availability | stable selection and replay coverage |
+| 6. NpcReactionPlan | Add side-effect-free `NpcReactionPreparation`, atomic `NpcReactionCommit`, state-changing NPC claims/events, reaction idempotency, and exactly one `NpcUtterancePublishedEvent` | `src/responseGenerator.mjs`, `src/gameEngine.mjs`, `src/responseProvider.mjs`, tests | reaction-plan/commit validator if not Phase 1 | existing provider remains selected | strict union, rollback, canonical committed-reference, NPC publication tests | reaction-commit flag; discard preparation/rollback; risk descriptor/reference mismatch | all state-changing reactions commit atomically and canonically render |
+| 7. Controlled Renderer integration | Add `PendingRendererRequest`, validate committed resulting version, select registered variants, and use engine fallback without NPC rollback | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | variant registry module and renderer contract tests | canonical-only plans bypass renderer | version separation, selection, failure fallback, registry replay, HTTP tests | renderer flag; deterministic fallback; risk retired version availability | stable selection, replay, and no-rollback coverage |
 | 8. Suspicion and memory migration | Move updates behind accepted events | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, tests | none expected | voting/night/win logic | atomic update, rollback, regression tests | per-effect flag; revert to old effect path; risk scoring changes | parity criteria and audit logs pass |
-| 9. Obsolete-path removal | Remove regex/baseText/shadow compatibility paths | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `src/validator.mjs`, `src/utteranceGuard.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/browserApp.mjs`, `public/httpResponseProvider.mjs`, `tests/` | none | game rules and public behavior | full suite and migration fixtures | deploy only after flags stable; rollback previous release; high compatibility risk | all flags fully enabled, telemetry clean, replay compatibility proven |
+| 9. Obsolete-path removal | Remove regex/baseText/shadow paths, premature `player_question`/`npc_response` mutation, legacy phase-based pending control, direct NPC text generation, and duplicate semantic-event display triggers | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `src/validator.mjs`, `src/utteranceGuard.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/browserApp.mjs`, `public/httpResponseProvider.mjs`, `tests/` | none | game rules and public behavior | full suite, phase, pending, single-owner migration fixtures | deploy only after flags stable; rollback release; high compatibility risk | structured pending map owns all waits, publication owners cover all display, no legacy direct-text consumer remains |
 
 The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProvider.mjs` or `src/pseudoResponseProvider.mjs` today. Pseudo behavior currently lives in `src/responseProvider.mjs`, so migration plans use actual file names and may split files only in a separately reviewed phase.
 
-## 26. Test strategy
+## 27. Test strategy
 
 - Schema validation unit tests cover every strict union member, unknown/forbidden fields, closed enums, bounds, nullability, duplicate IDs, and reference integrity.
 - Candidate/Accepted/Event conversion tests cover every type and all-or-nothing rejection.
@@ -750,9 +806,15 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Atomic tests cover successful commit, prepare failure with unchanged state, exception rollback, multi-act all-or-nothing, renderer failure after commit, and clarification with no commit.
 - Display ownership tests cover one publication event for claim-only input, one for multi-act input, and no duplicate display on replay.
 - Pending-state tests cover duplicate submission blocking, timeout/abort with unchanged authoritative phase, and stale response with unchanged state.
+- Version tests prove Interpreter pending uses precondition version, Renderer pending uses committed resulting version, Renderer is not compared with the old player version, and player/NPC commits increment separately.
+- NPC reaction tests prove canonical claims are created only in reaction commit, canonical segments never reference uncommitted claims/events, renderer failure preserves committed state, and one reaction yields exactly one NPC publication.
+- Phase tests prove provider pending does not mutate phase, accepted acts record `acceptedPhase`, events record `occurredPhase`, and commit deltas record `resultingPhase`.
+- Duplicate tests prove a committed retry returns the stored CommitResult without provider execution or mutation and rejects same request ID with a changed fingerprint.
+- Publication tests prove every displayable input has exactly one player publication and replay duplicates neither player nor NPC publication.
+- Malformed-JSON tests prove a server-generated correlation ID appears in response/logs while raw body and untrusted client correlation do not.
 - A repository CI check must reject bidi controls, zero-width characters, and other unapproved default-ignorable Unicode in design/schema sources. Code-block identifiers and enum literals remain ASCII.
 
-## 27. Design invariants
+## 28. Design invariants
 
 ### Nesting depth calculation
 
@@ -760,7 +822,7 @@ Root object depth is 1; each nested object or array adds 1; primitives add none.
 
 ### Correlation and replay
 
-The engine discards responses when `requestId`, `correlationId`, `turnId`, `stateVersion`, or `schemaVersion` differs from pending context; Renderer responses also require matching `reactionPlanId`. Duplicate event idempotency keys are no-ops. Replay uses stored events, display plans, and exact variant versions without reinterpreting text.
+The engine validates Interpreter responses against `preconditionStateVersion` and Renderer responses against the committed `resultingStateVersion`; both also match request, client correlation, turn, schema, operation, and pending member. Renderer additionally matches `reactionPlanId`. Duplicate committed requests return stored CommitResult; replay uses stored events, display plans, publications, and exact variants without reinterpreting or redisplaying.
 
 | Invariant | Status |
 | :--- | :--- |
@@ -778,7 +840,7 @@ The engine discards responses when `requestId`, `correlationId`, `turnId`, `stat
 | **AbortSignal support** | REQUIRED |
 | **Nesting depth limits** | ENFORCED (8/5/10) |
 | **Unapproved hidden/default-ignorable Unicode** | PROHIBITED and future-CI rejected |
-| **Player utterance publication count** | AT MOST ONE per accepted input |
+| **Player utterance publication count** | EXACTLY ONE per committed displayable input |
 | **Player utterance display trigger** | ONLY `PlayerUtterancePublishedEvent` |
 | **Accepted-alternative domain mutations** | ATOMIC |
 | **Provider wait changes authoritative phase** | PROHIBITED |
@@ -786,3 +848,12 @@ The engine discards responses when `requestId`, `correlationId`, `turnId`, `stat
 | **Every intended reaction descriptor** | REPRESENTED EXACTLY ONCE in display output |
 | **Renderer failure rolls back committed state** | PROHIBITED |
 | **Clarification creates authoritative objects** | PROHIBITED |
+| **Interpreter pending version** | PRECONDITION state version |
+| **Renderer pending version** | COMMITTED RESULTING state version |
+| **Player and NPC commits** | SEPARATE ATOMIC COMMITS |
+| **Canonical NPC segment references uncommitted object** | PROHIBITED |
+| **NPC utterance publication count** | EXACTLY ONE per committed reaction |
+| **AcceptedSpeechAct phase** | STORED AS `acceptedPhase` |
+| **PublicEvent phase** | STORED AS `occurredPhase` |
+| **Duplicate committed request** | RETURNS ORIGINAL CommitResult, NO MUTATION |
+| **Renderer failure rolls back committed NPC state** | PROHIBITED |
