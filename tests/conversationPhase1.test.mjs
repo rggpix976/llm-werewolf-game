@@ -4,12 +4,13 @@ import { canonicalJson, classifyIdempotentWrite, npcClaimIdempotencyKey, playerC
 import { renderCanonicalClaim, renderCanonicalSuspicion, renderCanonicalVote, resolveHistoricalVariant, validateRendererSelection } from "../src/conversation/canonicalRenderer.mjs";
 import { candidateFields, enums } from "../src/conversation/domain.mjs";
 import { validateAcceptedSpeechAct, validateCanonicalClaim, validateControlledCommentaryVariant, validateConversationCommitResult, validateDisplayPublicationRecord, validateInterpreterModelOutput, validateNpcPublicationFinalizationResult, validateNpcReactionPlan, validatePendingRendererRequest, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent, validateReferentialIntegrity, validateSelectedCommentaryVariant, validateSpeechActCandidates, validateSourceSpan } from "../src/conversation/validators.mjs";
-import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateCommitResultReferences, validateConversationGraph, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePlayerPublicationReferences, validatePublicationFinalizationAtAppend, validateReactionPlanReferences } from "../src/conversation/references.mjs";
+import { classifyPublicationFinalizationAttempt, validateClaimReferences, validateCommitResultReferences, validateCommittedConversationGraph, validateConversationGraph, validateDisplayPlanReferences, validateEventReferences, validateNpcPublicationFinalizationResultReferences, validateNpcReactionCommitResultReferences, validatePersistedPublicationReferences, validatePlayerConversationCommitResultReferences, validatePlayerPublicationReferences, validatePreparedConversationGraph, validatePublicationFinalizationAtAppend, validateReactionPlanReferences } from "../src/conversation/references.mjs";
+import { validateAcceptedActCoverage, validateFinalizationResultCompleteness, validatePublicationCompleteness, validateRequestIdentityCompleteness } from "../src/conversation/completeness.mjs";
 
 const fingerprint = "a".repeat(64);
 const input = { schemaVersion: 1, inputRecordId: "input-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", capturedStateVersion: 0, actorId: "player", rawText: "😀占い師です。Beniが怪しい。", locale: "ja-JP", createdOrder: 0 };
 const playerSource = { sourceType: "player_accepted_act", acceptedSpeechActIds: ["act-1"], inputRecordId: "input-1", requestId: "request-1" };
-const claim = { schemaVersion: 1, claimId: "claim-1", claimRevision: 1, actorId: "player", source: playerSource, idempotencyKey: fingerprint, createdTurnId: "turn-1", createdStateVersion: 1, repeatsClaimId: null, contradictsClaimIds: [], status: "asserted", type: "role_claim", claimedRole: "seer" };
+const claim = { schemaVersion: 1, claimId: "claim-1", claimRevision: 1, actorId: "player", source: playerSource, idempotencyKey: playerClaimIdempotencyKey({ requestId: "request-1", acceptedSpeechActIds: ["act-1"], actorId: "player", claimKind: "role_claim" }), createdTurnId: "turn-1", createdStateVersion: 1, repeatsClaimId: null, contradictsClaimIds: [], status: "asserted", type: "role_claim", claimedRole: "seer" };
 const actBase = { schemaVersion: 1, speechActId: "act-1", requestId: "request-1", acceptedTurnId: "turn-1", acceptedStateVersion: 0, acceptedPhase: "day_discussion", inputRecordId: "input-1", actorId: "player", causationId: "cause-1", correlationId: "corr-1", idempotencyKey: "idem-1", sourceSpan: { start: 1, end: 7 } };
 const roleAct = { ...actBase, type: "accepted_role_claim", claimedRole: "seer" };
 const participantsById = Object.freeze({ player: Object.freeze({ id: "player", displayName: "Player" }), "npc-1": Object.freeze({ id: "npc-1", displayName: "Aoi" }), "npc-2": Object.freeze({ id: "npc-2", displayName: "Beni" }) });
@@ -208,7 +209,7 @@ test("claim repeat and contradiction semantics use array order", () => {
   assert.doesNotThrow(() => validateClaimReferences([claim, repeat], { acceptedSpeechActs: [roleAct] }));
   assert.throws(() => validateClaimReferences([claim, { ...repeat, actorId: "npc-1" }], { acceptedSpeechActs: [roleAct] }));
   assert.throws(() => validateClaimReferences([claim, { ...repeat, claimedRole: "citizen" }], { acceptedSpeechActs: [roleAct] }));
-  const citizenAct = { ...roleAct, speechActId: "act-citizen", claimedRole: "citizen" }, contradiction = { ...claim, claimId: "claim-contradiction", createdStateVersion: 2, claimedRole: "citizen", source: { ...claim.source, acceptedSpeechActIds: ["act-citizen"] }, repeatsClaimId: null, contradictsClaimIds: ["claim-1"] };
+  const citizenAct = { ...roleAct, speechActId: "act-citizen", claimedRole: "citizen" }, contradiction = { ...claim, claimId: "claim-contradiction", createdStateVersion: 2, claimedRole: "citizen", source: { ...claim.source, acceptedSpeechActIds: ["act-citizen"] }, idempotencyKey: playerClaimIdempotencyKey({ requestId: "request-1", acceptedSpeechActIds: ["act-citizen"], actorId: "player", claimKind: "role_claim" }), repeatsClaimId: null, contradictsClaimIds: ["claim-1"] };
   assert.doesNotThrow(() => validateClaimReferences([claim, contradiction], { acceptedSpeechActs: [roleAct, citizenAct] }));
   assert.throws(() => validateClaimReferences([claim, { ...contradiction, claimedRole: "seer" }], { acceptedSpeechActs: [roleAct] }));
   assert.doesNotThrow(() => validateClaimReferences([contradiction, claim], { acceptedSpeechActs: [roleAct, citizenAct] }));
@@ -274,7 +275,7 @@ test("Player and NPC claim provenance enforce type and payload", () => {
   assert.throws(() => validateClaimReferences([claim], { acceptedSpeechActs: [{ ...roleAct, claimedRole: "citizen" }] }));
   const { claimedRole: _role, ...resultBase } = claim, resultClaim = { ...resultBase, claimId: "claim-result", type: "result_claim", targetId: "npc-2", result: "werewolf", source: { sourceType: "player_accepted_act", acceptedSpeechActIds: ["act-result"], inputRecordId: "input-1", requestId: "request-1" } }, resultAct = { ...actBase, speechActId: "act-result", type: "accepted_result_claim", targetId: "npc-1", result: "werewolf" };
   assert.throws(() => validateClaimReferences([resultClaim], { acceptedSpeechActs: [resultAct] }));
-  const plan = canonicalPlan(), npcClaim = { ...claim, actorId: "npc-1", source: { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" } };
+  const plan = canonicalPlan(), npcClaim = { ...claim, actorId: "npc-1", source: { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, idempotencyKey: npcClaimIdempotencyKey({ reactionCommitRequestId: "reaction-request-1", reactionPlanId: "plan-1", descriptorId: "desc-1", actorId: "npc-1", claimKind: "role_claim" }) };
   assert.doesNotThrow(() => validateClaimReferences([npcClaim], { reactionPlans: [plan] })); assert.throws(() => validateClaimReferences([{ ...npcClaim, claimedRole: "citizen" }], { reactionPlans: [plan] }));
 });
 
@@ -346,7 +347,7 @@ test("CommitResult created IDs exactly equal its transaction object sets", () =>
 });
 
 test("complete graph validation includes finalization result mirrors", () => {
-  const { reservation, finalization } = controlledPublicationFixtures(), { recordType: _recordType, actorId: _actorId, correlationId: _correlationId, turnId: _turnId, stateVersion: _stateVersion, ...result } = finalization, graph = { inputRecords: [input], reactionPlans: [controlledPlan()], publications: [reservation, finalization], finalizationResults: [result] };
+  const { reservation, finalization } = controlledPublicationFixtures(), { recordType: _recordType, actorId: _actorId, correlationId: _correlationId, turnId: _turnId, stateVersion: _stateVersion, ...result } = finalization, reactionResult = { schemaVersion: 1, requestId: "reaction-request-1", correlationId: "corr-1", requestFingerprint: fingerprint, commitType: "npc_reaction", resultMode: "controlled_commentary", preconditionStateVersion: 1, resultingStateVersion: 2, reactionPlanId: "plan-1", npcPublicationId: "pub-controlled", reservationId: "reservation-1", createdEventIds: [], createdClaimIds: [], createdAtOrder: 0 }, graph = { inputRecords: [input], reactionPlans: [controlledPlan()], publications: [reservation, finalization], commitResults: [reactionResult], finalizationResults: [result] };
   assert.equal(validateConversationGraph(graph), true);
   assert.throws(() => validateConversationGraph({ ...graph, finalizationResults: [{ ...result, selectedVariantVersion: 2 }] }));
 });
@@ -362,8 +363,8 @@ test("PublicEvent payload must match AcceptedSpeechAct and NPC descriptor", () =
 
 test("conversation graph binds every AcceptedSpeechAct to PlayerInputRecord metadata", () => {
   const informationAct = { ...actBase, type: "accepted_information_request", topic: "rules" }, graph = { inputRecords: [input], acceptedSpeechActs: [informationAct] };
-  assert.equal(validateConversationGraph(graph), true);
-  for (const changed of [{ requestId: "other" }, { correlationId: "other" }, { acceptedTurnId: "other" }, { acceptedStateVersion: 1 }, { actorId: "npc-1" }]) assert.throws(() => validateConversationGraph({ ...graph, acceptedSpeechActs: [{ ...informationAct, ...changed }] }));
+  assert.equal(validatePreparedConversationGraph(graph), true);
+  for (const changed of [{ requestId: "other" }, { correlationId: "other" }, { acceptedTurnId: "other" }, { acceptedStateVersion: 1 }, { actorId: "npc-1" }]) assert.throws(() => validatePreparedConversationGraph({ ...graph, acceptedSpeechActs: [{ ...informationAct, ...changed }] }));
 });
 
 test("finalization version must match reservation, plan, and pending request", () => {
@@ -426,4 +427,42 @@ test("graph enforces commit identity, finalization identity, and stream order un
   assert.throws(() => validateConversationGraph({ inputRecords: [input, { ...input, inputRecordId: "input-2" }] }));
   const firstEvent = { ...eventBase, eventId: "event-a", eventType: "public_statement_recorded" }, secondEvent = { ...eventBase, eventId: "event-b", createdOrder: 0, eventType: "public_statement_recorded", source: { ...playerEventSource, acceptedSpeechActId: "act-2" } };
   assert.throws(() => validateConversationGraph({ inputRecords: [input], events: [firstEvent, secondEvent] }));
+});
+
+test("accepted act coverage enforces generated objects and canonical display ownership", () => {
+  const roleEvent = { ...eventBase, eventId: "role-event", eventType: "role_claim_recorded", claimId: "claim-1" };
+  const canonicalDisplay = { inputRecordId: "input-1", segments: [{ segmentId: "canonical-role", type: "canonical_claim", claimId: "claim-1" }] };
+  assert.equal(validateAcceptedActCoverage({ acceptedSpeechActs: [roleAct], claims: [claim], events: [roleEvent], displayPlans: [canonicalDisplay] }), true);
+  assert.throws(() => validateAcceptedActCoverage({ acceptedSpeechActs: [roleAct], claims: [], events: [roleEvent], displayPlans: [canonicalDisplay] }));
+  assert.throws(() => validateAcceptedActCoverage({ acceptedSpeechActs: [roleAct], claims: [claim], events: [], displayPlans: [canonicalDisplay] }));
+  assert.throws(() => validateAcceptedActCoverage({ acceptedSpeechActs: [roleAct], claims: [claim], events: [roleEvent], displayPlans: [{ ...canonicalDisplay, segments: [{ segmentId: "raw-role", type: "raw_input", inputRecordId: "input-1", sourceSpan: roleAct.sourceSpan }] }] }));
+  const informationAct = { ...actBase, type: "accepted_information_request", topic: "rules" };
+  assert.equal(validateAcceptedActCoverage({ acceptedSpeechActs: [informationAct] }), true);
+  assert.throws(() => validateAcceptedActCoverage({ acceptedSpeechActs: [informationAct], events: [{ ...eventBase, eventId: "unexpected", eventType: "public_statement_recorded" }] }));
+});
+
+test("prepared and committed graph APIs have distinct completeness guarantees", () => {
+  const informationAct = { ...actBase, type: "accepted_information_request", topic: "rules" }, partial = { inputRecords: [input], acceptedSpeechActs: [informationAct] };
+  assert.equal(validatePreparedConversationGraph(partial), true);
+  assert.throws(() => validateCommittedConversationGraph(partial), (error) => error.code === "publication_cardinality");
+  assert.equal(validateConversationGraph, validateCommittedConversationGraph);
+});
+
+test("committed publication, finalization result, and request identities are complete", () => {
+  const { reservation, finalization } = controlledPublicationFixtures(), reactionPlan = controlledPlan(), reactionResult = { schemaVersion: 1, requestId: "reaction-request-1", correlationId: "corr-1", requestFingerprint: fingerprint, commitType: "npc_reaction", resultMode: "controlled_commentary", preconditionStateVersion: 1, resultingStateVersion: 2, reactionPlanId: "plan-1", npcPublicationId: "pub-controlled", reservationId: "reservation-1", createdEventIds: [], createdClaimIds: [], createdAtOrder: 0 };
+  assert.equal(validatePublicationCompleteness({ reactionPlans: [reactionPlan], publications: [reservation], commitResults: [reactionResult] }), true);
+  assert.throws(() => validatePublicationCompleteness({ reactionPlans: [reactionPlan], publications: [], commitResults: [reactionResult] }));
+  assert.throws(() => validatePublicationCompleteness({ reactionPlans: [reactionPlan], publications: [reservation], commitResults: [] }));
+  assert.throws(() => validateFinalizationResultCompleteness({ publications: [reservation, finalization], finalizationResults: [] }));
+  assert.equal(validateRequestIdentityCompleteness({ inputRecords: [input], reactionPlans: [reactionPlan] }), true);
+  assert.throws(() => validateRequestIdentityCompleteness({ inputRecords: [input, { ...input, inputRecordId: "input-2" }] }));
+  assert.throws(() => validateRequestIdentityCompleteness({ inputRecords: [input], reactionPlans: [{ ...reactionPlan, requestId: input.requestId }] }));
+});
+
+test("claim idempotency keys are recomputed from Player and NPC provenance", () => {
+  assert.doesNotThrow(() => validateClaimReferences([claim], { acceptedSpeechActs: [roleAct] }));
+  assert.throws(() => validateClaimReferences([{ ...claim, idempotencyKey: "f".repeat(64) }], { acceptedSpeechActs: [roleAct] }), (error) => error.code === "idempotency_key_mismatch");
+  const plan = canonicalPlan(), source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, npcClaim = { ...claim, actorId: "npc-1", source, idempotencyKey: npcClaimIdempotencyKey({ reactionCommitRequestId: "reaction-request-1", reactionPlanId: "plan-1", descriptorId: "desc-1", actorId: "npc-1", claimKind: "role_claim" }) };
+  assert.doesNotThrow(() => validateClaimReferences([npcClaim], { reactionPlans: [plan] }));
+  assert.throws(() => validateClaimReferences([{ ...npcClaim, idempotencyKey: "e".repeat(64) }], { reactionPlans: [plan] }), (error) => error.code === "idempotency_key_mismatch");
 });
