@@ -9,7 +9,7 @@ import { SeededRandom } from "./seededRandom.mjs";
 import { containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
 import { createPhase3Binding, validatePhase3Response } from "./interpreterValidation.mjs";
 import { sha256Fingerprint } from "./conversation/ids.mjs";
-import { ID_PATTERN } from "./conversation/domain.mjs";
+import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
 import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
 
 const DEFAULT_PLAYERS = [
@@ -152,6 +152,7 @@ export class WerewolfGame {
     this.now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
     this.pendingInterpreterRequests = new Map();
     this.interpreterTerminalAudit = new Map();
+    this.activeNpcReaction = null;
     this._commandInProgress = false;
     this._destroyed = false;
   }
@@ -240,28 +241,49 @@ export class WerewolfGame {
   _actionResult(actionType, result, logCursor) { return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries: this.state.playerLog.slice(logCursor), nextLogCursor: this.state.playerLog.length }; }
 
   _replayPlayerConversation(action, logCursor) {
+    if (typeof action.replayRequestId !== "string" || !ID_PATTERN.test(action.replayRequestId) || typeof action.replayRequestFingerprint !== "string" || !SHA256_PATTERN.test(action.replayRequestFingerprint)) throw typedError("invalid_replay_identity");
     const record = this.state.conversation?.idempotencyRecords.find((entry) => entry.requestId === action.replayRequestId);
     if (!record) throw typedError("replay_not_found");
-    if (action.replayRequestFingerprint && action.replayRequestFingerprint !== record.requestFingerprint) throw typedError("idempotency_conflict");
+    if (action.replayRequestFingerprint !== record.requestFingerprint) throw typedError("idempotency_conflict");
     return this._actionResult(action.type, { responded: false, replayed: true, conversationCommitResult: structuredClone(record.result) }, logCursor);
   }
 
   async _commitStructuredPlayerQuestion(action, interpreted, preconditionVersion) {
     const target = this.getPlayer(action.targetId ?? action.target ?? action.npcId);
+    const claimRegistryFingerprint = sha256Fingerprint(this.state.conversation.claims);
     const prepared = preparePlayerConversationCommit({ state: this.state, binding: interpreted.binding, alternative: interpreted.outcome.selectedAlternative, targetNpcId: target.id, createId: this.createId, fault: this.phase4FaultInjector });
     if (prepared.replay) return { responded: false, replayed: true, conversationCommitResult: prepared.result };
     const working = this._workingCopy(), delta = prepared.delta;
-    if (this.state.stateVersion !== preconditionVersion || this.state.turnId !== delta.turnId || this.state.turnOrder !== interpreted.binding.turnOrder || this.state.phase !== delta.preconditionPhase || this.state.gameSessionId !== delta.gameSessionId) throw typedError("stale_commit_precondition");
+    this._assertPlayerCommitCas(interpreted, delta, target.id, preconditionVersion, claimRegistryFingerprint);
     for (const [key, values] of Object.entries(delta.objects)) working.state.conversation[key].push(...structuredClone(values));
     working.state.conversation.idempotencyRecords.push(structuredClone(delta.idempotencyRecord)); Object.assign(working.state.conversation, delta.counters);
     working.state.playerLog.push(structuredClone(delta.legacyDelta.playerLogEntry)); working.state.publicInfo.push(structuredClone(delta.legacyDelta.publicInfoEntry));
     working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
     this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; commitState(this.state, working.state);
-    const npcWorking = this._workingCopy(), reaction = await npcWorking.handlePlayerQuestion(target.id, action.input ?? action.question, { skipPlayerSide: true });
-    if (this.state.stateVersion !== preconditionVersion + 1 || this.state.turnId !== npcWorking.state.turnId) throw typedError("stale_reaction");
-    if (reaction?.reason === "response_provider_error") return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
-    this.phase4FaultInjector("npc_final_state_replacement"); npcWorking.state.stateVersion = preconditionVersion + 2; commitState(this.state, npcWorking.state);
-    return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
+    const reactionBinding = Object.freeze({ gameSessionId: this.state.gameSessionId, turnId: this.state.turnId, turnOrder: this.state.turnOrder, preconditionPhase: this.state.phase, preconditionStateVersion: this.state.stateVersion, targetNpcId: target.id, requestId: delta.requestId, correlationId: delta.correlationId, inputRecordId: delta.inputRecordId, requestFingerprint: delta.requestFingerprint });
+    const controller = new AbortController(), active = { binding: reactionBinding, controller }; this.activeNpcReaction = active;
+    try {
+      const npcWorking = this._workingCopy(), reaction = await npcWorking.handlePlayerQuestion(target.id, action.input ?? action.question, { skipPlayerSide: true, signal: controller.signal });
+      this._assertNpcReactionCas(active, npcWorking);
+      if (reaction?.reason === "response_provider_error") return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
+      this.phase4FaultInjector("npc_final_state_replacement"); npcWorking.state.stateVersion = preconditionVersion + 2; commitState(this.state, npcWorking.state);
+      return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
+    } finally { if (this.activeNpcReaction === active) this.activeNpcReaction = null; }
+  }
+
+  _assertPlayerCommitCas(interpreted, delta, targetNpcId, version, claimRegistryFingerprint) {
+    const binding = interpreted.binding, terminal = this.interpreterTerminalAudit.get(binding.requestId), target = this.getPlayer(targetNpcId);
+    const identityMatches = binding.requestId === delta.requestId && binding.correlationId === delta.correlationId && binding.inputRecordId === delta.inputRecordId && binding.actorId === "player" && binding.requestFingerprint === delta.requestFingerprint && binding.targetNpcId === targetNpcId && binding.request.requestId === binding.requestId && binding.request.correlationId === binding.correlationId && binding.request.inputRecordId === binding.inputRecordId && sha256Fingerprint(binding.request) === binding.requestFingerprint;
+    const terminalMatches = terminal?.status === "completed" && terminal.responseFingerprint === interpreted.responseFingerprint && terminal.outcome?.category === "validated";
+    const liveMatches = !this._destroyed && this.state.stateVersion === version && this.state.turnId === delta.turnId && this.state.turnOrder === binding.turnOrder && this.state.phase === delta.preconditionPhase && this.state.gameSessionId === delta.gameSessionId && target?.id === targetNpcId && sha256Fingerprint(this.state.conversation.claims) === claimRegistryFingerprint;
+    if (!identityMatches || !terminalMatches || !liveMatches) throw typedError("stale_commit_precondition");
+  }
+
+  _assertNpcReactionCas(active, npcWorking) {
+    const binding = active.binding, target = this.getPlayer(binding.targetNpcId), record = this.state.conversation.idempotencyRecords.find((entry) => entry.requestId === binding.requestId);
+    const identityMatches = this.activeNpcReaction === active && !active.controller.signal.aborted && record?.requestFingerprint === binding.requestFingerprint && record.result.correlationId === binding.correlationId && record.result.inputRecordId === binding.inputRecordId;
+    const liveMatches = !this._destroyed && this.state.gameSessionId === binding.gameSessionId && this.state.turnId === binding.turnId && this.state.turnOrder === binding.turnOrder && this.state.phase === binding.preconditionPhase && this.state.stateVersion === binding.preconditionStateVersion && target?.id === binding.targetNpcId && npcWorking.state.gameSessionId === binding.gameSessionId && npcWorking.state.turnId === binding.turnId;
+    if (!identityMatches || !liveMatches) throw typedError("stale_reaction");
   }
 
   _validateCommand(action) {
@@ -289,7 +311,7 @@ export class WerewolfGame {
       const redacted = Object.freeze({ correlationId: binding.correlationId, inputRecordId: binding.inputRecordId, turnId: binding.turnId, capturedStateVersion: binding.preconditionStateVersion, outcomeCategory: observation?.category ?? "failure", candidateCount: observation?.candidateCount ?? 0, alternativeCount: observation?.alternativeCount ?? 0, reasonCode: observation?.reasonCode ?? "observer_failure", stale: observation?.stale === true, latencyMs: Math.max(0, this.now() - started), retryAttempt: pending.attemptCount ?? 1, terminalStatus: pending.status });
       try { this.interpreterObserver(redacted); } catch {}
     }
-    return { binding, outcome: observation };
+    return { binding, outcome: observation, responseFingerprint: pending.responseFingerprint };
   }
 
   _rememberTerminal(requestId, pending) { const { selectedAlternative: _private, ...safeOutcome } = pending.outcome ?? {}; this.interpreterTerminalAudit.set(requestId, Object.freeze({ status: pending.status, turnId: pending.binding.turnId, responseFingerprint: pending.responseFingerprint, outcome: Object.freeze(safeOutcome) })); while (this.interpreterTerminalAudit.size > 100) this.interpreterTerminalAudit.delete(this.interpreterTerminalAudit.keys().next().value); }
@@ -301,7 +323,7 @@ export class WerewolfGame {
     const outcome = validatePhase3Response(response, pending.binding, this.state); pending.responseFingerprint = fingerprint; return outcome;
   }
 
-  destroy() { this._destroyed = true; for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } }
+  destroy() { this._destroyed = true; for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
 
   async handlePlayerQuestion(targetIdOrName, playerInput, options = {}) {
     if (this.state.winner) {
@@ -346,7 +368,7 @@ export class WerewolfGame {
       if (typeof this.responseProvider?.generateResponse !== "function") {
         throw new TypeError("Response provider must implement generateResponse(request)");
       }
-      const rawProviderResult = await this.responseProvider.generateResponse(prepared.request);
+      const rawProviderResult = await this.responseProvider.generateResponse(prepared.request, { signal: options.signal });
       providerResult = validateProviderResponse(rawProviderResult, providerName);
     } catch (error) {
       this.addPlayerLog(`${npc.name}から回答を得られませんでした。`);

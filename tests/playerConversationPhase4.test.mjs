@@ -41,7 +41,15 @@ test("exact replay returns stored result without providers, mutation, IDs, order
   await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); const record = instance.state.conversation.idempotencyRecords[0], before = structuredClone({ stateVersion: instance.state.stateVersion, turnOrder: instance.state.turnOrder, conversation: instance.state.conversation, playerLog: instance.state.playerLog });
   const replay = await instance.dispatchPlayerAction({ type: "ask_npc", replayRequestId: record.requestId, replayRequestFingerprint: record.requestFingerprint });
   assert.equal(replay.result.replayed, true); assert.deepEqual(replay.result.conversationCommitResult, record.result); assert.deepEqual({ stateVersion: instance.state.stateVersion, turnOrder: instance.state.turnOrder, conversation: instance.state.conversation, playerLog: instance.state.playerLog }, before); assert.deepEqual([interpreterCalls, npcCalls], [1, 1]);
-  await assert.rejects(instance.dispatchPlayerAction({ type: "ask_npc", replayRequestId: record.requestId, replayRequestFingerprint: "changed" }), (error) => error.code === "idempotency_conflict");
+  await assert.rejects(instance.dispatchPlayerAction({ type: "ask_npc", replayRequestId: record.requestId, replayRequestFingerprint: "0".repeat(64) }), (error) => error.code === "idempotency_conflict");
+});
+
+test("replay requires both exact identities and malformed attempts are side-effect free", async () => {
+  let interpreterCalls = 0, npcCalls = 0; const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { interpreterProvider: { async interpretPlayerInput(request) { interpreterCalls += 1; return interpreterFor([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }]).interpretPlayerInput(request); } }, responseProvider: { async generateResponse() { npcCalls += 1; return { text: "response", providerName: "test", model: "test", usage: null, notes: [] }; } } });
+  await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); const record = instance.state.conversation.idempotencyRecords[0], before = structuredClone({ version: instance.state.stateVersion, turn: instance.state.turnId, order: instance.state.turnOrder, conversation: instance.state.conversation, log: instance.state.playerLog });
+  for (const action of [{ type: "ask_npc", replayRequestId: record.requestId }, { type: "ask_npc", replayRequestId: record.requestId, replayRequestFingerprint: "" }]) await assert.rejects(instance.dispatchPlayerAction(action), (error) => error.code === "invalid_replay_identity");
+  await assert.rejects(instance.dispatchPlayerAction({ type: "ask_npc", replayRequestId: "unknown-request", replayRequestFingerprint: record.requestFingerprint }), (error) => error.code === "replay_not_found");
+  assert.deepEqual({ version: instance.state.stateVersion, turn: instance.state.turnId, order: instance.state.turnOrder, conversation: instance.state.conversation, log: instance.state.playerLog }, before); assert.deepEqual([interpreterCalls, npcCalls], [1, 1]);
 });
 
 test("pre-publication fault injection leaves no structured or legacy partial write and no NPC call", async () => {
@@ -81,6 +89,31 @@ test("every preparation fault stage rolls back counters, registries, display, an
 test("NPC publication failure rolls back only reaction and leaves player commit at N+1", async () => {
   const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { phase4FaultInjector(stage) { if (stage === "npc_final_state_replacement") throw new Error("npc rollback"); } });
   await assert.rejects(instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }), /npc rollback/); assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: response"), false);
+});
+
+test("destroy aborts pending NPC provider and discards a late successful response at N+1", async () => {
+  let resolveProvider, enteredProvider, providerSignal; const entered = new Promise((resolve) => { enteredProvider = resolve; }), waiting = new Promise((resolve) => { resolveProvider = resolve; });
+  const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { responseProvider: { async generateResponse(_request, options) { providerSignal = options.signal; enteredProvider(); await waiting; return { text: "late response", providerName: "test", model: "test", usage: null, notes: [] }; } } });
+  const pending = instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); await entered; assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.phase, "player_question");
+  instance.destroy(); assert.equal(providerSignal.aborted, true); resolveProvider(); await assert.rejects(pending, (error) => error.code === "stale_reaction");
+  assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: late response"), false); assert.equal(instance.activeNpcReaction, null);
+});
+
+test("late NPC reaction CAS rejects every live binding dimension without publishing effects", async () => {
+  const mutations = [
+    (instance) => { instance.state.gameSessionId = "game-replaced"; },
+    (instance) => { instance.state.turnId = "turn-replaced"; },
+    (instance) => { instance.state.turnOrder += 1; },
+    (instance) => { instance.state.phase = "vote"; },
+    (instance) => { instance.state.stateVersion += 1; },
+    (instance) => { instance.state.players = instance.state.players.filter((player) => player.id !== "npc1"); }
+  ];
+  for (const mutate of mutations) {
+    let resolveProvider, enteredProvider; const entered = new Promise((resolve) => { enteredProvider = resolve; }), waiting = new Promise((resolve) => { resolveProvider = resolve; });
+    const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { responseProvider: { async generateResponse() { enteredProvider(); await waiting; return { text: "late response", providerName: "test", model: "test", usage: null, notes: [] }; } } });
+    const pending = instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); await entered; mutate(instance); resolveProvider(); await assert.rejects(pending, (error) => error.code === "stale_reaction");
+    assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: late response"), false);
+  }
 });
 
 test("flag OFF retains the single legacy transaction and creates no structured artifacts", async () => {
