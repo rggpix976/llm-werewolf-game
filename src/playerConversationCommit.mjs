@@ -1,5 +1,5 @@
 import { acceptedTypeForCandidate } from "./conversation/domain.mjs";
-import { playerClaimIdempotencyKey, sha256Fingerprint } from "./conversation/ids.mjs";
+import { playerClaimIdempotencyKey, sha256CanonicalJson, sha256Fingerprint } from "./conversation/ids.mjs";
 import { validateCommittedConversationGraph } from "./conversation/references.mjs";
 import { validateAcceptedSpeechAct, validateCanonicalClaim, validateConversationCommitResult, validateDisplayPublicationRecord, validatePlayerInputRecord, validatePlayerUtteranceDisplayPlan, validatePublicEvent } from "./conversation/validators.mjs";
 
@@ -20,6 +20,9 @@ export function preparePlayerConversationCommit({ state, binding, alternative, t
   const replay = existing.idempotencyRecords.find((record) => record.requestId === binding.requestId);
   if (replay) {
     if (replay.requestFingerprint !== binding.requestFingerprint) throw typedError("idempotency_conflict");
+    const mappings = existing.playerLegacyDisplayCompatibilityRecords.filter((record) => record.publicationId === replay.result.playerPublicationId); if (mappings.length === 0) throw typedError("replay_mapping_missing"); if (mappings.length !== 1) throw typedError("replay_mapping_conflict");
+    try { validateCommittedConversationGraph({ ...existing, gameSessionId: state.gameSessionId, legacyPlayerLog: state.playerLog }); }
+    catch { throw typedError("replay_mapping_conflict"); }
     return Object.freeze({ replay: true, result: structuredClone(replay.result) });
   }
   const nextVersion = binding.preconditionStateVersion + 1;
@@ -53,13 +56,23 @@ export function preparePlayerConversationCommit({ state, binding, alternative, t
   validatePlayerUtteranceDisplayPlan(displayPlan, inputRecord, { canonicalSpans: new Map(acts.filter((act) => claimForAct.has(act.speechActId) || ["accepted_vote_declaration", "accepted_suspicion"].includes(act.type)).map((act) => [act.speechActId, act.sourceSpan])) }); fault("display_plan");
   const publication = { schemaVersion: 1, recordType: "player_utterance_published", publicationId: id("publication", createId), correlationId: binding.correlationId, turnId: binding.turnId, actorId: binding.actorId, publicationSlotOrder: publicationSlotOrder++, recordAppendOrder: recordAppendOrder++, requestId: binding.requestId, gameStateVersion: nextVersion, occurredPhase: binding.preconditionPhase, inputRecordId: binding.inputRecordId, displayPlanId: displayPlan.displayPlanId, idempotencyKey: sha256Fingerprint(binding.requestId, binding.inputRecordId, "player_publication") };
   validateDisplayPublicationRecord(publication); fault("publication");
+  const targetName = state.players.find((player) => player.id === targetNpcId).name;
+  const legacyPlayerLogEntry = { day: state.day, phase: "player_question", message: `あなた -> ${targetName}: ${inputRecord.rawText}` };
+  const legacyLogAppendOrder = state.playerLog.length; fault("legacy_entry", legacyPlayerLogEntry);
+  const compatibilityMapping = {
+    schemaVersion: 1, recordType: "player_legacy_display_compatibility", compatibilityMappingId: id("compatibility-mapping", createId), gameSessionId: binding.gameSessionId,
+    publicationId: publication.publicationId, displayPlanId: displayPlan.displayPlanId, inputRecordId: binding.inputRecordId, requestId: binding.requestId, correlationId: binding.correlationId,
+    turnId: binding.turnId, legacyEntryId: id("legacy-entry", createId), legacyLogAppendOrder,
+    legacyEntryFingerprint: sha256CanonicalJson({ day: legacyPlayerLogEntry.day, phase: legacyPlayerLogEntry.phase, message: legacyPlayerLogEntry.message }),
+    playerCommitResultingStateVersion: nextVersion, createdOrder: createdOrder++
+  };
+  fault("compatibility_mapping", compatibilityMapping);
   const result = { schemaVersion: 1, requestId: binding.requestId, correlationId: binding.correlationId, requestFingerprint: binding.requestFingerprint, commitType: "player_conversation", preconditionStateVersion: binding.preconditionStateVersion, resultingStateVersion: nextVersion, createdEventIds: events.map((event) => event.eventId), createdClaimIds: claims.map((claim) => claim.claimId), createdAtOrder: createdOrder++, inputRecordId: binding.inputRecordId, displayPlanId: displayPlan.displayPlanId, playerPublicationId: publication.publicationId };
   validateConversationCommitResult(result); fault("commit_result");
-  const targetName = state.players.find((player) => player.id === targetNpcId).name;
-  const legacyDelta = Object.freeze({ playerLogEntry: { day: state.day, phase: "player_question", message: `あなた -> ${targetName}: ${inputRecord.rawText}` }, publicInfoEntry: { day: state.day, phase: "player_question", type: "player_question", actorId: "player", targetId: targetNpcId, text: `プレイヤーが${targetName}に質問: ${inputRecord.rawText}` } });
+  const legacyDelta = Object.freeze({ playerLogEntry: legacyPlayerLogEntry, publicInfoEntry: { day: state.day, phase: "player_question", type: "player_question", actorId: "player", targetId: targetNpcId, text: `プレイヤーが${targetName}に質問: ${inputRecord.rawText}` } });
   const idempotencyRecord = { requestId: binding.requestId, requestFingerprint: binding.requestFingerprint, result: structuredClone(result) }; fault("idempotency");
-  const objects = { inputRecords: [inputRecord], acceptedSpeechActs: acts, claims, events, displayPlans: [displayPlan], publications: [publication], commitResults: [result] };
-  validateCommittedConversationGraph({ inputRecords: [...existing.inputRecords, inputRecord], acceptedSpeechActs: [...existing.acceptedSpeechActs, ...acts], claims: [...existing.claims, ...claims], events: [...existing.events, ...events], displayPlans: [...existing.displayPlans, displayPlan], publications: [...existing.publications, publication], commitResults: [...existing.commitResults, result] });
+  const objects = { inputRecords: [inputRecord], acceptedSpeechActs: acts, claims, events, displayPlans: [displayPlan], publications: [publication], playerLegacyDisplayCompatibilityRecords: [compatibilityMapping], commitResults: [result] };
+  validateCommittedConversationGraph({ gameSessionId: state.gameSessionId, inputRecords: [...existing.inputRecords, inputRecord], acceptedSpeechActs: [...existing.acceptedSpeechActs, ...acts], claims: [...existing.claims, ...claims], events: [...existing.events, ...events], displayPlans: [...existing.displayPlans, displayPlan], publications: [...existing.publications, publication], playerLegacyDisplayCompatibilityRecords: [...existing.playerLegacyDisplayCompatibilityRecords, compatibilityMapping], commitResults: [...existing.commitResults, result], legacyPlayerLog: [...state.playerLog, legacyPlayerLogEntry] }); fault("committed_graph");
   const delta = validateConversationCommitDelta({ schemaVersion: 1, commitType: "player_conversation", gameSessionId: binding.gameSessionId, requestId: binding.requestId, correlationId: binding.correlationId, inputRecordId: binding.inputRecordId, turnId: binding.turnId, preconditionPhase: binding.preconditionPhase, resultingPhase: "player_question", preconditionStateVersion: binding.preconditionStateVersion, resultingStateVersion: nextVersion, requestFingerprint: binding.requestFingerprint, objects: structuredClone(objects), legacyDelta: structuredClone(legacyDelta), idempotencyRecord: structuredClone(idempotencyRecord), counters: { nextCreatedOrder: createdOrder, nextPublicationSlotOrder: publicationSlotOrder, nextRecordAppendOrder: recordAppendOrder } });
   return deepFreeze({ replay: false, result, delta });
 }
@@ -67,7 +80,7 @@ export function preparePlayerConversationCommit({ state, binding, alternative, t
 export function validateConversationCommitDelta(value) {
   exact(value, ["schemaVersion", "commitType", "gameSessionId", "requestId", "correlationId", "inputRecordId", "turnId", "preconditionPhase", "resultingPhase", "preconditionStateVersion", "resultingStateVersion", "requestFingerprint", "objects", "legacyDelta", "idempotencyRecord", "counters"]);
   if (value.schemaVersion !== 1 || value.commitType !== "player_conversation" || value.resultingStateVersion !== value.preconditionStateVersion + 1 || value.resultingPhase !== "player_question") throw typedError("invalid_commit_delta");
-  exact(value.objects, ["inputRecords", "acceptedSpeechActs", "claims", "events", "displayPlans", "publications", "commitResults"]); exact(value.legacyDelta, ["playerLogEntry", "publicInfoEntry"]); exact(value.idempotencyRecord, ["requestId", "requestFingerprint", "result"]); exact(value.counters, ["nextCreatedOrder", "nextPublicationSlotOrder", "nextRecordAppendOrder"]);
+  exact(value.objects, ["inputRecords", "acceptedSpeechActs", "claims", "events", "displayPlans", "publications", "playerLegacyDisplayCompatibilityRecords", "commitResults"]); exact(value.legacyDelta, ["playerLogEntry", "publicInfoEntry"]); exact(value.idempotencyRecord, ["requestId", "requestFingerprint", "result"]); exact(value.counters, ["nextCreatedOrder", "nextPublicationSlotOrder", "nextRecordAppendOrder"]);
   if (value.idempotencyRecord.requestId !== value.requestId || value.idempotencyRecord.requestFingerprint !== value.requestFingerprint) throw typedError("invalid_commit_delta");
   for (const counter of Object.values(value.counters)) if (!Number.isSafeInteger(counter) || counter < 0) throw typedError("invalid_commit_delta"); return value;
 }

@@ -165,6 +165,23 @@ export function validateDisplayPublicationRecord(value) {
   return value;
 }
 
+export function validatePlayerLegacyDisplayCompatibilityRecord(value, path = "playerLegacyDisplayCompatibilityRecord") {
+  try {
+  const fields = ["schemaVersion", "recordType", "compatibilityMappingId", "gameSessionId", "publicationId", "displayPlanId", "inputRecordId", "requestId", "correlationId", "turnId", "legacyEntryId", "legacyLogAppendOrder", "legacyEntryFingerprint", "playerCommitResultingStateVersion", "createdOrder"];
+  if (!value || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) fail(path, "must be a plain object");
+  exact(value, fields, [], path); schema(value, path); literal(value.recordType, "player_legacy_display_compatibility", `${path}.recordType`);
+  for (const key of ["compatibilityMappingId", "gameSessionId", "publicationId", "displayPlanId", "inputRecordId", "requestId", "correlationId", "turnId", "legacyEntryId"]) id(value[key], `${path}.${key}`);
+  integer(value.legacyLogAppendOrder, 0, `${path}.legacyLogAppendOrder`, Number.MAX_SAFE_INTEGER);
+  integer(value.playerCommitResultingStateVersion, 1, `${path}.playerCommitResultingStateVersion`, Number.MAX_SAFE_INTEGER);
+  integer(value.createdOrder, 0, `${path}.createdOrder`, Number.MAX_SAFE_INTEGER);
+  if (typeof value.legacyEntryFingerprint !== "string" || !SHA256_PATTERN.test(value.legacyEntryFingerprint)) fail(`${path}.legacyEntryFingerprint`, "must be SHA-256");
+  return value;
+  } catch (error) {
+    if (error instanceof ConversationValidationError && error.code === "invalid_value") throw new ConversationValidationError(error.path, "invalid_mapping_schema", error.message);
+    throw error;
+  }
+}
+
 export function validateNpcPublicationFinalizationResult(value) {
   const p = "finalizationResult";
   exact(value, ["schemaVersion", "publicationId", "reservationId", "finalizationId", "reactionPlanId", "source", "locale", "selectedVariantId", "selectedVariantVersion", "fallbackUsed", "finalizationReason", "publicationSlotOrder", "recordAppendOrder", "createdAt"], [], p);
