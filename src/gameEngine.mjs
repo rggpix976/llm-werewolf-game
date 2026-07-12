@@ -203,8 +203,8 @@ export class WerewolfGame {
     if (action.type === "get_state") return this._actionResult(action.type, null, logCursor);
     const rejected = this._validateCommand(action); if (rejected) return this._actionResult(action.type, rejected, logCursor);
     if (this._commandInProgress) throw typedError("input_in_progress");
-    if (!Number.isSafeInteger(this.state.stateVersion) || this.state.stateVersion === Number.MAX_SAFE_INTEGER) throw typedError("state_version_exhausted");
-    if (!Number.isSafeInteger(this.state.turnOrder) || this.state.turnOrder === Number.MAX_SAFE_INTEGER) throw typedError("turn_order_exhausted");
+    if (!Number.isSafeInteger(this.state.stateVersion) || this.state.stateVersion < 0 || this.state.stateVersion === Number.MAX_SAFE_INTEGER) throw typedError("state_version_exhausted");
+    if (!Number.isSafeInteger(this.state.turnOrder) || this.state.turnOrder < 0 || this.state.turnOrder === Number.MAX_SAFE_INTEGER) throw typedError("turn_order_exhausted");
     this._commandInProgress = true;
     const preconditionVersion = this.state.stateVersion;
     const continuation = this._clarificationContinuation(action); if (!continuation) { this.state.turnOrder += 1; this.state.turnId = engineId("turn", this.createId); }
@@ -963,7 +963,20 @@ function createConversationPolicy(role) {
 
 function cloneState(state) { const { rng, ...plain } = state, clonedRng = new SeededRandom(0); clonedRng.state = rng.state; return { ...structuredClone(plain), rng: clonedRng }; }
 function engineId(prefix, createId) { const value = `${prefix}-${createId()}`; if (!ID_PATTERN.test(value)) throw typedError("invalid_engine_id"); return value; }
-function commitState(target, source) { const players = new Map(target.players.map((player) => [player.id, player])); for (const next of source.players) { const current = players.get(next.id); for (const key of Object.keys(current)) delete current[key]; Object.assign(current, structuredClone(next)); } const rng = target.rng; for (const key of Object.keys(target)) if (!new Set(["players", "rng"]).has(key)) delete target[key]; Object.assign(target, structuredClone(Object.fromEntries(Object.entries(source).filter(([key]) => !new Set(["players", "rng"]).has(key))))); target.players = source.players.map((player) => players.get(player.id)); rng.state = source.rng.state; target.rng = rng; }
+function commitState(target, source) {
+  const currentPlayers = new Map(target.players.map((player) => [player.id, player]));
+  const preparedPlayers = source.players.map((player) => structuredClone(player));
+  const preparedState = structuredClone(Object.fromEntries(Object.entries(source).filter(([key]) => !new Set(["players", "rng"]).has(key))));
+  const publishedPlayers = preparedPlayers.map((next) => {
+    const current = currentPlayers.get(next.id);
+    if (!current) throw typedError("invalid_player_identity");
+    return { current, next };
+  });
+  const rng = target.rng;
+  for (const { current, next } of publishedPlayers) { for (const key of Object.keys(current)) delete current[key]; Object.assign(current, next); }
+  for (const key of Object.keys(target)) if (!new Set(["players", "rng"]).has(key)) delete target[key];
+  Object.assign(target, preparedState); target.players = publishedPlayers.map(({ current }) => current); rng.state = source.rng.state; target.rng = rng;
+}
 function typedError(code) { const error = new Error(code); error.code = code; return error; }
 function abortError() { const error = new Error("Aborted"); error.name = "AbortError"; return error; }
 

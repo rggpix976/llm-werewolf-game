@@ -4,7 +4,7 @@ import test from "node:test";
 import { createWebServer } from "../src/webServer.mjs";
 import { OpenAIInterpreterProvider, PseudoInterpreterProvider } from "../src/interpreterTransport.mjs";
 import { runProviderWithRetry } from "../src/providerRetry.mjs";
-import { buildShadowInterpreterRequest, InterpreterShadowClient } from "../public/interpreterShadowClient.mjs";
+import { buildShadowInterpreterRequest, InterpreterShadowClient, shouldObserveInterpreterShadow } from "../public/interpreterShadowClient.mjs";
 import { HttpResponseProvider, SessionManager } from "../public/httpResponseProvider.mjs";
 
 const snapshot = Object.freeze({ day: 1, phase: "day_discussion", winner: null, players: Object.freeze([{ id: "npc-1", name: "Aoi", alive: true }]) });
@@ -15,6 +15,13 @@ function providerResult(request) { return new PseudoInterpreterProvider().interp
 
 test("shadow feature flag defaults disabled and is safely public", async () => {
   const { parseConfig, getRuntimeConfig } = await import("../src/config.mjs"); assert.equal(parseConfig({}).interpreterShadowMode, false); assert.equal(parseConfig({}).interpreterValidationMode, false); assert.equal(parseConfig({ INTERPRETER_SHADOW_MODE: "true" }).interpreterShadowMode, true); assert.equal(parseConfig({ INTERPRETER_VALIDATION_MODE: "true" }).interpreterValidationMode, true); assert.throws(() => parseConfig({ INTERPRETER_SHADOW_MODE: "yes" })); assert.deepEqual(getRuntimeConfig(parseConfig({})), { provider: "pseudo", interpreterShadowMode: false, interpreterValidationMode: false });
+});
+
+test("Phase 2 and Phase 3 feature flags select exactly one Interpreter owner", () => {
+  assert.equal(shouldObserveInterpreterShadow({ interpreterShadowMode: false, interpreterValidationMode: false }), false);
+  assert.equal(shouldObserveInterpreterShadow({ interpreterShadowMode: true, interpreterValidationMode: false }), true);
+  assert.equal(shouldObserveInterpreterShadow({ interpreterShadowMode: false, interpreterValidationMode: true }), false);
+  assert.equal(shouldObserveInterpreterShadow({ interpreterShadowMode: true, interpreterValidationMode: true }), false);
 });
 
 test("disabled server endpoint never calls Interpreter provider", async () => {

@@ -1,7 +1,7 @@
 import { WerewolfGame } from "../src/gameEngine.mjs";
 import { HttpResponseProvider, SessionManager } from "./httpResponseProvider.mjs";
 import { PseudoResponseProvider } from "../src/responseProvider.mjs";
-import { InterpreterShadowClient } from "./interpreterShadowClient.mjs";
+import { InterpreterShadowClient, shouldObserveInterpreterShadow } from "./interpreterShadowClient.mjs";
 
 const elements = {
   statusLine: document.querySelector("#statusLine"),
@@ -76,7 +76,7 @@ elements.askForm.addEventListener("submit", async (event) => {
   }
 
   const gameIdAtSubmit = currentGameId;
-  if (runtimeConfig?.interpreterShadowMode && !runtimeConfig?.interpreterValidationMode && interpreterShadowClient) interpreterShadowClient.observe({ snapshot, rawText: input, gameId: gameIdAtSubmit, targetNpcId: target });
+  if (shouldObserveInterpreterShadow(runtimeConfig) && interpreterShadowClient) interpreterShadowClient.observe({ snapshot, rawText: input, gameId: gameIdAtSubmit, targetNpcId: target });
   const result = await dispatch({
     type: "ask_npc",
     target,
@@ -120,7 +120,7 @@ function startNewGame() {
   const responseProvider = new HttpResponseProvider({
     sessionManager
   });
-  interpreterShadowClient = runtimeConfig?.interpreterShadowMode && !runtimeConfig?.interpreterValidationMode ? new InterpreterShadowClient({ provider: responseProvider, sessionManager, observer: (entry) => { shadowObservations = [...shadowObservations.slice(-99), Object.freeze({ ...entry })]; } }) : null;
+  interpreterShadowClient = shouldObserveInterpreterShadow(runtimeConfig) ? new InterpreterShadowClient({ provider: responseProvider, sessionManager, observer: (entry) => { shadowObservations = [...shadowObservations.slice(-99), Object.freeze({ ...entry })]; } }) : null;
   shadowObservations = [];
 
   game = WerewolfGame.create({

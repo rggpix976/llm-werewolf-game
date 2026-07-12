@@ -25,7 +25,7 @@ Last updated: 2026-07-12
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2/3 Interpreter boundaries, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 207 automated tests.
+- Core game, conversation contracts, Phase 2/3 Interpreter boundaries, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 219 automated tests.
 
 ## Last Verified
 
@@ -36,7 +36,7 @@ Last updated: 2026-07-12
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 207/207 tests passed. `npm run sample` and `git diff --check` passed; all changed `.mjs` files pass syntax checks.
+- Result: 219/219 tests passed. `npm run sample` and `git diff --check` passed; all changed `.mjs` files pass syntax checks.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
