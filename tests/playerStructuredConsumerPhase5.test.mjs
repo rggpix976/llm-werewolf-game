@@ -65,6 +65,6 @@ test("same-message multiple turns, stale cursors, partial acknowledgement, and N
 
 test("browser and CLI adapters select derived entries and retain safe output boundaries", () => {
   const browser = readFileSync(new URL("../public/browserApp.mjs", import.meta.url), "utf8"), cli = readFileSync(new URL("../src/cli.mjs", import.meta.url), "utf8");
-  assert.match(browser, /playerStructuredConsumerEnabled/); assert.match(browser, /playerFacingLog\.push/); assert.match(browser, /message\.textContent = entry\.message/); assert.equal(browser.includes("message.innerHTML = entry.message"), false);
+  assert.match(browser, /result\.livePlayerDisplayEntries\.length/); assert.equal(browser.includes("playerFacingLog.push(...structuredClone(result.playerFacingEntries))"), false); assert.match(browser, /message\.textContent = entry\.message/); assert.equal(browser.includes("message.innerHTML = entry.message"), false);
   assert.match(cli, /action\?\.livePlayerDisplayEntries/); assert.match(cli, /sanitizeTerminalText/);
 });

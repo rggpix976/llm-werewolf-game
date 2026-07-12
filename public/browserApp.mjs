@@ -164,9 +164,7 @@ async function dispatch(action) {
       return null;
     }
 
-    if (runtimeConfig?.playerStructuredConsumerMode === true && action.type !== "get_state") {
-      await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured: async (entry, attempt) => { const node = appendBrowserLogEntry(entry); node.dataset.gameSessionId = attempt.gameSessionId; node.dataset.consumerId = attempt.consumerId; node.dataset.consumerGeneration = String(attempt.consumerGeneration); node.dataset.deliveryAttemptId = attempt.deliveryAttemptId; node.dataset.sinkType = attempt.sinkType; playerFacingLog.push(structuredClone(entry)); return node; }, writeLegacy: async (entry) => { playerFacingLog.push(structuredClone(entry)); } });
-    } else playerFacingLog.push(...structuredClone(result.playerFacingEntries));
+    if (result.livePlayerDisplayEntries.length) await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured: async (entry, attempt) => { const node = appendBrowserLogEntry(entry); node.dataset.publicationId = attempt.publicationId; node.dataset.gameSessionId = attempt.gameSessionId; node.dataset.consumerId = attempt.consumerId; node.dataset.consumerGeneration = String(attempt.consumerGeneration); node.dataset.deliveryAttemptId = attempt.deliveryAttemptId; node.dataset.sinkType = attempt.sinkType; node.dataset.deliveryMode = attempt.deliveryMode; playerFacingLog.push(structuredClone(entry)); return node; }, writeLegacy: async (entry, attempt) => { if (attempt) return appendLegacyPlayerPublication(entry, attempt); playerFacingLog.push(structuredClone(entry)); } });
     logCursor = result.nextLogCursor;
     render(result.publicSnapshot);
     if (isDevMode) {
@@ -620,7 +618,7 @@ function renderLogs() {
   const nodesByPublication = new Map([...elements.logList.querySelectorAll("[data-publication-id]")].map((node) => [node.dataset.publicationId, node]));
   for (const stored of playerPublicationDomBookkeeping.values()) {
     const identity = stored.identity, node = identity && nodesByPublication.get(identity.publicationId); if (!node) continue;
-    node.dataset.gameSessionId = identity.gameSessionId; node.dataset.consumerId = identity.consumerId; node.dataset.consumerGeneration = String(identity.consumerGeneration); node.dataset.deliveryAttemptId = identity.deliveryAttemptId; node.dataset.sinkType = identity.sinkType; node.dataset.receiptId = identity.receiptId; stored.value = node;
+    node.dataset.gameSessionId = identity.gameSessionId; node.dataset.consumerId = identity.consumerId; node.dataset.consumerGeneration = String(identity.consumerGeneration); node.dataset.deliveryAttemptId = identity.deliveryAttemptId; node.dataset.sinkType = identity.sinkType; node.dataset.deliveryMode = identity.deliveryMode; node.dataset.receiptId = identity.receiptId; stored.value = node;
   }
 }
 
@@ -628,6 +626,8 @@ function renderLogs() {
 function appendBrowserLogEntry(entry) {
   return appendBrowserPublicationNode({ document, container: elements.logList, entry, formatPhase });
 }
+
+function appendLegacyPlayerPublication(entry, attempt) { const node = appendBrowserLogEntry(entry); node.dataset.publicationId = attempt.publicationId; node.dataset.gameSessionId = attempt.gameSessionId; node.dataset.consumerId = attempt.consumerId; node.dataset.consumerGeneration = String(attempt.consumerGeneration); node.dataset.deliveryAttemptId = attempt.deliveryAttemptId; node.dataset.sinkType = attempt.sinkType; node.dataset.deliveryMode = attempt.deliveryMode; playerFacingLog.push({ ...structuredClone(entry), publicationId: attempt.publicationId }); return node; }
 
 function renderVotes() {
   if (!snapshot.voteHistory.length) {

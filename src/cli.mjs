@@ -149,8 +149,8 @@ function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
 async function printNewPlayerLog(action = null) {
   const write = async (entry) => { await writeCliPublication({ entry, write: async (text) => { if (text) console.log(`\n${text}`); } }); playerFacingHistory.push(structuredClone(entry)); };
   const liveEntries = action?.livePlayerDisplayEntries ?? game.state.playerLog.slice(printedLogIndex).map((entry) => ({ kind: "legacy_display", entry }));
-  if (runtimeConfig.playerStructuredConsumerMode && action) { await consumeLiveActionDisplay({ game, action, consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: write, writeLegacy: write });
-  } else { for (const envelope of liveEntries) await write(envelope.entry); }
+  if (action) await consumeLiveActionDisplay({ game, action, consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: write, writeLegacy: write });
+  else { for (const envelope of liveEntries) await write(envelope.entry); }
   printedLogIndex = game.state.playerLog.length;
 }
 
