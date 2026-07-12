@@ -12,7 +12,8 @@ import { sha256Fingerprint } from "./conversation/ids.mjs";
 import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
 import { validateCommittedConversationGraph, validatePlayerLegacyDisplayCompatibilityReferences } from "./conversation/references.mjs";
 import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
-import { mergeStructuredPlayerEntries, renderUnconsumedPlayerPublications, resolvePlayerStructuredConsumerPolicy } from "./playerStructuredConsumer.mjs";
+import { projectMappedPlayerEntries, renderUnacknowledgedPlayerPublications, renderPlayerPublication, resolvePlayerStructuredConsumerPolicy } from "./playerStructuredConsumer.mjs";
+import { PlayerPublicationDeliveryController } from "./playerPublicationDelivery.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -151,8 +152,8 @@ export class WerewolfGame {
     this.playerConversationCommitEnabled = resolvePlayerConversationCommitPolicy({ playerConversationCommitMode: options.playerConversationCommitEnabled === true, interpreterValidationMode: this.interpreterValidationEnabled }).enabled;
     this.playerStructuredConsumerEnabled = resolvePlayerStructuredConsumerPolicy({ playerStructuredConsumerMode: options.playerStructuredConsumerEnabled === true, playerConversationCommitMode: this.playerConversationCommitEnabled }).enabled;
     this._consumerModeObserved = this.playerStructuredConsumerEnabled;
-    this._consumedPlayerPublicationIds = new Set();
     this.playerStructuredConsumerObserver = options.playerStructuredConsumerObserver ?? (() => {});
+    this.playerPublicationDeliveryController = new PlayerPublicationDeliveryController({ gameSessionId: state.gameSessionId, createId: this.createId, observer: this.playerStructuredConsumerObserver, enabled: this.playerStructuredConsumerEnabled, initialWatermark: 0, listPublications: () => this.state.conversation.publications.filter((record) => record.recordType === "player_utterance_published").sort((a, b) => a.publicationSlotOrder - b.publicationSlotOrder), resolvePublication: (publicationId) => this._renderPlayerPublication(publicationId) });
     this.phase4FaultInjector = options.phase4FaultInjector ?? (() => {});
     this.interpreterObserver = options.interpreterObserver ?? (() => {});
     this.now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
@@ -246,21 +247,30 @@ export class WerewolfGame {
   }
 
   _actionResult(actionType, result, logCursor) {
-    const playerLogEntries = this.state.playerLog.slice(logCursor), structuredPlayerEntries = this.playerStructuredConsumerEnabled ? renderUnconsumedPlayerPublications({ gameSessionId: this.state.gameSessionId, activeGameSessionId: this.state.gameSessionId, conversation: this.state.conversation, publicParticipantsById: this._publicParticipantsById(), consumedPublicationIds: this._consumedPlayerPublicationIds }) : [];
-    for (const entry of structuredPlayerEntries) this._consumedPlayerPublicationIds.add(entry.publicationId);
-    for (const entry of structuredPlayerEntries) { try { this.playerStructuredConsumerObserver(Object.freeze({ gameSessionId: entry.gameSessionId, correlationId: entry.correlationId, publicationId: entry.publicationId, displayPlanId: entry.displayPlanId, outcomeCategory: "displayed", reasonCode: "publication_consumed", consumerMode: "structured", duplicateSuppressed: false })); } catch {} }
-    if (this.playerStructuredConsumerEnabled && result?.replayed === true) { const stored = result.conversationCommitResult; try { this.playerStructuredConsumerObserver(Object.freeze({ gameSessionId: this.state.gameSessionId, correlationId: stored.correlationId, publicationId: stored.playerPublicationId, displayPlanId: stored.displayPlanId, outcomeCategory: "suppressed", reasonCode: "publication_already_consumed", consumerMode: "structured", duplicateSuppressed: true })); } catch {} }
-    const playerFacingEntries = this.playerStructuredConsumerEnabled ? mergeStructuredPlayerEntries(playerLogEntries, structuredPlayerEntries) : structuredClone(playerLogEntries);
-    return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries, structuredPlayerEntries, playerFacingEntries, nextLogCursor: this.state.playerLog.length };
+    const playerLogEntries = this.state.playerLog.slice(logCursor); let structuredPlayerEntries = [], playerFacingEntries = structuredClone(playerLogEntries), deliveryPublicationIds = [];
+    if (this.playerStructuredConsumerEnabled) {
+      const historyEntries = this._renderPlayerPublicationIds(this.playerPublicationDeliveryController.historyPublicationIds()); playerFacingEntries = projectMappedPlayerEntries({ legacyEntries: playerLogEntries, legacyLogStartOrder: logCursor, structuredEntries: historyEntries });
+      if (actionType !== "get_state" && result?.replayed !== true) { deliveryPublicationIds = this.playerPublicationDeliveryController.discover(); structuredPlayerEntries = this._renderPlayerPublicationIds(deliveryPublicationIds).map((entry) => this._displayPlayerPublication(entry)); }
+    } else { const acknowledged = this.playerPublicationDeliveryController.acknowledgedPublicationIds(), suppressedOrders = new Set(this.state.conversation.playerLegacyDisplayCompatibilityRecords.filter((mapping) => acknowledged.has(mapping.publicationId)).map((mapping) => mapping.legacyLogAppendOrder)); playerFacingEntries = playerLogEntries.filter((_entry, index) => !suppressedOrders.has(logCursor + index)).map((entry) => structuredClone(entry)); }
+    return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries, structuredPlayerEntries, deliveryPublicationIds, playerFacingEntries, nextLogCursor: this.state.playerLog.length };
   }
 
   _syncStructuredConsumerMode() {
     if (this._consumerModeObserved === this.playerStructuredConsumerEnabled) return;
-    this._consumerModeObserved = this.playerStructuredConsumerEnabled;
-    if (this.playerStructuredConsumerEnabled) for (const record of this.state.conversation.publications) if (record.recordType === "player_utterance_published") this._consumedPlayerPublicationIds.add(record.publicationId);
+    this._consumerModeObserved = this.playerStructuredConsumerEnabled; this.playerPublicationDeliveryController.setEnabled(this.playerStructuredConsumerEnabled, this.state.conversation.nextPublicationSlotOrder);
   }
 
   _publicParticipantsById() { return Object.fromEntries([["player", { participantId: "player", displayName: "Player" }], ...this.state.players.map((player) => [player.id, { participantId: player.id, displayName: player.name }])]); }
+  _renderPlayerPublication(publicationId) { return renderPlayerPublication({ gameSessionId: this.state.gameSessionId, conversation: this.state.conversation, legacyPlayerLog: this.state.playerLog, publicationId, publicParticipantsById: this._publicParticipantsById(), resolveCompatibilityMapping: (id) => this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId: id }) }); }
+  _renderPlayerPublicationIds(publicationIds) { return renderUnacknowledgedPlayerPublications({ gameSessionId: this.state.gameSessionId, conversation: this.state.conversation, legacyPlayerLog: this.state.playerLog, publicationIds, publicParticipantsById: this._publicParticipantsById(), resolveCompatibilityMapping: (id) => this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId: id }) }); }
+  _displayPlayerPublication(entry) { const legacy = this.state.playerLog[entry.legacyLogAppendOrder]; return Object.freeze({ day: legacy.day, phase: legacy.phase, message: entry.renderedText, actorId: entry.actorId, publicationId: entry.publicationId, structured: true }); }
+  getPlayerPublicationDeliveryCandidates() { return this.playerPublicationDeliveryController.discover(); }
+  preparePlayerPublicationDelivery(value) { return this.playerPublicationDeliveryController.prepare(value); }
+  beginPlayerPublicationSink(value) { return this.playerPublicationDeliveryController.begin(value); }
+  completePlayerPublicationSink(capability) { return this.playerPublicationDeliveryController.complete(capability); }
+  failPlayerPublicationSink(capability) { return this.playerPublicationDeliveryController.fail(capability); }
+  acknowledgePlayerPublication(receipt) { return this.playerPublicationDeliveryController.acknowledge(receipt); }
+  getPlayerPublicationSinkReceipt(value) { return this.playerPublicationDeliveryController.receiptFor(value); }
 
   _replayPlayerConversation(action, logCursor) {
     if (typeof action.replayRequestId !== "string" || !ID_PATTERN.test(action.replayRequestId) || typeof action.replayRequestFingerprint !== "string" || !SHA256_PATTERN.test(action.replayRequestFingerprint)) throw typedError("invalid_replay_identity");
@@ -369,7 +379,7 @@ export class WerewolfGame {
     const outcome = validatePhase3Response(response, pending.binding, this.state); pending.responseFingerprint = fingerprint; return outcome;
   }
 
-  destroy() { this._destroyed = true; for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
+  destroy() { this._destroyed = true; this.playerPublicationDeliveryController.invalidate(); for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
 
   async handlePlayerQuestion(targetIdOrName, playerInput, options = {}) {
     if (this.state.winner) {

@@ -4,6 +4,7 @@ import { WerewolfGame } from "./gameEngine.mjs";
 import { parseConfig } from "./config.mjs";
 import { PseudoInterpreterProvider } from "./interpreterTransport.mjs";
 import { sanitizeTerminalText } from "./playerStructuredConsumer.mjs";
+import { deliverProjectedEntries, retryPlayerPublicationAcknowledgement, writeCliPublication } from "./playerDisplaySink.mjs";
 
 const showDev = process.argv.includes("--show-dev");
 const runtimeConfig = parseConfig(process.env);
@@ -18,11 +19,12 @@ const game = WerewolfGame.create({
 
 let printedLogIndex = 0;
 const playerFacingHistory = [];
+const cliPublicationBookkeeping = new Set();
 
 const rl = readline.createInterface({ input, output });
 
 printIntro();
-printNewPlayerLog();
+await printNewPlayerLog();
 
 while (true) {
   const line = (await rl.question("\n> ")).trim();
@@ -72,7 +74,7 @@ while (true) {
         input: question,
         logCursor: printedLogIndex
       });
-      printNewPlayerLog(action.playerFacingEntries);
+      await printNewPlayerLog(action.playerFacingEntries, action.structuredPlayerEntries);
       maybePrintDevTail();
       continue;
     }
@@ -82,7 +84,7 @@ while (true) {
         type: "advance_vote",
         logCursor: printedLogIndex
       });
-      printNewPlayerLog(voteAction.playerFacingEntries);
+      await printNewPlayerLog(voteAction.playerFacingEntries, voteAction.structuredPlayerEntries);
       maybePrintDevTail();
 
       if (!game.state.winner) {
@@ -90,7 +92,7 @@ while (true) {
           type: "run_night",
           logCursor: printedLogIndex
         });
-        printNewPlayerLog(nightAction.playerFacingEntries);
+        await printNewPlayerLog(nightAction.playerFacingEntries, nightAction.structuredPlayerEntries);
         maybePrintDevTail();
       }
 
@@ -144,12 +146,13 @@ function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
   console.log(`Alive NPCs: ${alive.join(", ")}`);
 }
 
-function printNewPlayerLog(entries = game.state.playerLog.slice(printedLogIndex)) {
-  playerFacingHistory.push(...structuredClone(entries));
-  const text = formatEntries(entries);
-  if (text) {
-    console.log(`\n${text}`);
-  }
+async function printNewPlayerLog(entries = game.state.playerLog.slice(printedLogIndex), structuredEntries = []) {
+  const write = async (entry) => { await writeCliPublication({ entry, write: async (text) => { if (text) console.log(`\n${text}`); } }); playerFacingHistory.push(structuredClone(entry)); };
+  if (runtimeConfig.playerStructuredConsumerMode) {
+    const represented = new Set(entries.filter((entry) => entry.structured).map((entry) => entry.publicationId)), deliveryEntries = [...structuredEntries.filter((entry) => !represented.has(entry.publicationId)), ...entries];
+    try { await deliverProjectedEntries({ game, entries: deliveryEntries, consumerId: "cli-main", sinkType: "cli", writeStructured: async (entry) => { if (cliPublicationBookkeeping.has(entry.publicationId)) throw new Error("duplicate_cli_publication"); await write(entry); cliPublicationBookkeeping.add(entry.publicationId); }, writeLegacy: write }); }
+    catch (error) { if (error.acknowledgementOnlyRetry && cliPublicationBookkeeping.has(error.publicationId)) retryPlayerPublicationAcknowledgement({ game, publicationId: error.publicationId }); else throw error; }
+  } else { for (const entry of entries) await write(entry); }
   printedLogIndex = game.state.playerLog.length;
 }
 

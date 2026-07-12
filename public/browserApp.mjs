@@ -2,6 +2,7 @@ import { WerewolfGame } from "../src/gameEngine.mjs";
 import { HttpResponseProvider, SessionManager } from "./httpResponseProvider.mjs";
 import { PseudoResponseProvider } from "../src/responseProvider.mjs";
 import { InterpreterShadowClient, shouldObserveInterpreterShadow } from "./interpreterShadowClient.mjs";
+import { appendBrowserPublicationNode, deliverProjectedEntries, retryPlayerPublicationAcknowledgement } from "../src/playerDisplaySink.mjs";
 
 const elements = {
   statusLine: document.querySelector("#statusLine"),
@@ -34,6 +35,7 @@ let currentGameId = 0;
 let interpreterShadowClient = null;
 let shadowObservations = [];
 let playerFacingLog = [];
+let playerPublicationDomBookkeeping = new Map();
 
 initializeApp();
 
@@ -137,6 +139,7 @@ function startNewGame() {
   snapshot = game.getPublicSnapshot();
   logCursor = snapshot.playerLog.length;
   playerFacingLog = structuredClone(snapshot.playerLog);
+  playerPublicationDomBookkeeping = new Map();
   devLogCursor = 0;
   devLogEntries = [];
   devLogFilterKind = "";
@@ -161,8 +164,12 @@ async function dispatch(action) {
       return null;
     }
 
+    if (runtimeConfig?.playerStructuredConsumerMode === true && action.type !== "get_state") {
+      const represented = new Set(result.playerFacingEntries.filter((entry) => entry.structured).map((entry) => entry.publicationId)), deliveryEntries = [...result.structuredPlayerEntries.filter((entry) => !represented.has(entry.publicationId)), ...result.playerFacingEntries];
+      try { await deliverProjectedEntries({ game, entries: deliveryEntries, consumerId: "browser-main", sinkType: "browser", writeStructured: async (entry) => { if (playerPublicationDomBookkeeping.has(entry.publicationId)) throw new Error("duplicate_browser_publication"); const node = appendBrowserLogEntry(entry); playerPublicationDomBookkeeping.set(entry.publicationId, node); playerFacingLog.push(structuredClone(entry)); }, writeLegacy: async (entry) => { playerFacingLog.push(structuredClone(entry)); } }); }
+      catch (error) { if (error.acknowledgementOnlyRetry && playerPublicationDomBookkeeping.has(error.publicationId)) retryPlayerPublicationAcknowledgement({ game, publicationId: error.publicationId }); else throw error; }
+    } else playerFacingLog.push(...structuredClone(result.playerFacingEntries));
     logCursor = result.nextLogCursor;
-    playerFacingLog.push(...result.playerFacingEntries);
     render(result.publicSnapshot);
     if (isDevMode) {
       refreshDiagnostics();
@@ -597,6 +604,7 @@ function renderLogs() {
     ...entries.map((entry) => {
       const row = document.createElement("div");
       row.className = "log-entry";
+      if (entry.publicationId) row.dataset.publicationId = entry.publicationId;
 
       const meta = document.createElement("div");
       meta.className = "log-meta";
@@ -611,6 +619,11 @@ function renderLogs() {
     })
   );
   elements.logList.scrollTop = elements.logList.scrollHeight;
+  playerPublicationDomBookkeeping = new Map([...elements.logList.querySelectorAll("[data-publication-id]")].map((node) => [node.dataset.publicationId, node]));
+}
+
+function appendBrowserLogEntry(entry) {
+  return appendBrowserPublicationNode({ document, container: elements.logList, entry, formatPhase });
 }
 
 function renderVotes() {

@@ -6,9 +6,9 @@ Last updated: 2026-07-13
 
 - Conversation pipeline migration Phases 1-4 are implemented from `master`: pure domain contracts/renderers, shadow transport, authoritative candidate validation, and atomic player conversation commit. Their feature flags remain default-off with strict dependencies.
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. The session-scoped mapping registry, immutable strict lookup, and fail-closed replay validation are available on this branch.
-- Migration Phase 5 implementation exists only on this Draft branch and is not complete or merged. Its current consumer still performs position-based legacy replacement and must be changed to exact compatibility-mapping resolution.
-- Sink-success receipts, explicit acknowledgement, retry/stale-ack handling, and browser/CLI behavioral tests are not implemented. The mapping-writer prerequisite has been incorporated from master. Phase 5 remains Draft pending exact mapping consumption, sink-success receipts, explicit acknowledgement, retry/stale-ack handling, and browser/CLI behavioral tests.
-- `PlayerUtterancePublishedRecord` becoming the sole active browser/CLI player display trigger is target behavior only when the Phase 5 flag is enabled after the remaining work is completed and reviewed. Until then, the Phase 4 legacy player display remains authoritative; the NPC display remains on the provisional legacy path.
+- Migration Phase 5 is implemented on this Draft branch and remains unmerged pending review. It resolves the exact Phase 4 compatibility mapping and legacy location; position-, phase-, FIFO-, cursor-, and message-based replacement are prohibited and removed.
+- Session-local sink-success receipts, explicit acknowledgement, retry and acknowledgement-only retry, duplicate/stale acknowledgement handling, and executable browser/CLI sink tests are implemented without changing authoritative game state.
+- With the default-off Phase 5 flag enabled, `PlayerUtterancePublishedRecord` is the sole active browser/CLI player display trigger. Legacy player entries remain stored and the NPC display remains on the provisional legacy path.
 - Exact replay performs no redisplay or provider call, and all migration feature flags remain default-off.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
 - 5-player werewolf prototype is implemented.
@@ -29,7 +29,7 @@ Last updated: 2026-07-13
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 253 automated tests on this Draft branch.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, Phase 5 delivery lifecycle, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 265 automated tests on this Draft branch.
 
 ## Last Verified
 
@@ -40,7 +40,7 @@ Last updated: 2026-07-13
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 246/253 tests passed; 7 existing Phase 5 consumer tests currently fail with `history_projection_failure` after incorporating the Phase 4 mapping writer. `git diff --check` and the conflict-marker scan passed; later validation commands were not run because the required test gate failed.
+- Result: 265/265 tests passed. `npm run sample`, changed-module syntax checks, `git diff --check`, conflict-marker, privacy, and forbidden-Unicode scans passed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
