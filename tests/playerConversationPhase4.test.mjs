@@ -19,7 +19,7 @@ test("atomic player commit stores strict artifacts at N+1 and NPC effects at N+2
   const instance = game([{ type: "question", targetId: "npc1", topic: "opinion", sourceSpan: { start: 0, end: 5 } }]);
   const result = await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" });
   assert.equal(instance.state.stateVersion, 2); assert.equal(result.result.conversationCommitResult.preconditionStateVersion, 0); assert.equal(result.result.conversationCommitResult.resultingStateVersion, 1);
-  assert.deepEqual(Object.fromEntries(Object.entries(instance.state.conversation).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.length])), { inputRecords: 1, acceptedSpeechActs: 1, claims: 0, events: 1, displayPlans: 1, publications: 1, commitResults: 1, idempotencyRecords: 1 });
+  assert.deepEqual(Object.fromEntries(Object.entries(instance.state.conversation).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.length])), { inputRecords: 1, acceptedSpeechActs: 1, claims: 0, events: 1, displayPlans: 1, publications: 1, playerLegacyDisplayCompatibilityRecords: 1, commitResults: 1, idempotencyRecords: 1 });
   assert.equal(instance.state.conversation.events[0].stateVersion, 1); assert.equal(instance.state.conversation.publications[0].gameStateVersion, 1);
   assert.equal(instance.state.playerLog.filter((entry) => entry.message.includes("hello")).length, 1);
 });
@@ -33,7 +33,7 @@ test("result claims are assertions, relate deterministically, and do not inspect
 test("provider failure preserves committed player N+1 and publishes no NPC transaction", async () => {
   const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { responseProvider: { async generateResponse() { throw new Error("provider failed"); } } });
   const result = await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" });
-  assert.equal(result.result.reason, "response_provider_error"); assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.publications.length, 1);
+  assert.equal(result.result.reason, "response_provider_error"); assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.publications.length, 1); assert.equal(instance.state.conversation.playerLegacyDisplayCompatibilityRecords.length, 1);
 });
 
 test("exact replay returns stored result without providers, mutation, IDs, orders, or display", async () => {
@@ -75,11 +75,11 @@ test("claim repeat and contradiction use prior committed claims without dual-wri
   await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); const npcClaimCount = instance.state.players.reduce((sum, player) => sum + player.publicClaims.length, 0);
   instance.setPhase("day_discussion"); instance.interpreterProvider = interpreterFor(first); await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); assert.equal(instance.state.conversation.claims.length, 2);
   instance.setPhase("day_discussion"); instance.interpreterProvider = interpreterFor([{ ...first[0], result: "not_werewolf" }]); await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); assert.equal(instance.state.conversation.claims.length, 3);
-  const [original, repeat, contradiction] = instance.state.conversation.claims; assert.equal(repeat.repeatsClaimId, original.claimId); assert.deepEqual(repeat.contradictsClaimIds, []); assert.equal(contradiction.repeatsClaimId, null); assert.deepEqual(contradiction.contradictsClaimIds, [original.claimId, repeat.claimId]); assert.equal(instance.state.players.reduce((sum, player) => sum + player.publicClaims.length, 0), npcClaimCount);
+  const [original, repeat, contradiction] = instance.state.conversation.claims; assert.equal(repeat.repeatsClaimId, original.claimId); assert.deepEqual(repeat.contradictsClaimIds, []); assert.equal(contradiction.repeatsClaimId, null); assert.deepEqual(contradiction.contradictsClaimIds, [original.claimId, repeat.claimId]); assert.equal(instance.state.players.reduce((sum, player) => sum + player.publicClaims.length, 0), npcClaimCount); assert.equal(instance.state.conversation.playerLegacyDisplayCompatibilityRecords.length, 3);
 });
 
 test("every preparation fault stage rolls back counters, registries, display, and provider call", async () => {
-  for (const stage of ["input", "acts", "claims", "relations", "events", "display_plan", "publication", "commit_result", "idempotency", "final_state_replacement"]) {
+  for (const stage of ["input", "acts", "claims", "relations", "events", "display_plan", "publication", "legacy_entry", "compatibility_mapping", "commit_result", "idempotency", "committed_graph", "mapping_registry_staged", "commit_result_insertion", "legacy_log_staged", "mapping_graph_validation", "final_state_replacement"]) {
     let npcCalls = 0; const instance = game([{ type: "role_claim", claimedRole: "seer", sourceSpan: { start: 0, end: 5 } }], { phase4FaultInjector(value) { if (value === stage) throw new Error(stage); }, responseProvider: { async generateResponse() { npcCalls += 1; } } });
     const before = structuredClone({ version: instance.state.stateVersion, conversation: instance.state.conversation, playerLog: instance.state.playerLog, publicInfo: instance.state.publicInfo }); await assert.rejects(instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }), new RegExp(stage));
     assert.deepEqual({ version: instance.state.stateVersion, conversation: instance.state.conversation, playerLog: instance.state.playerLog, publicInfo: instance.state.publicInfo }, before); assert.equal(npcCalls, 0);
@@ -96,7 +96,7 @@ test("destroy aborts pending NPC provider and discards a late successful respons
   const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { responseProvider: { async generateResponse(_request, options) { providerSignal = options.signal; enteredProvider(); await waiting; return { text: "late response", providerName: "test", model: "test", usage: null, notes: [] }; } } });
   const pending = instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); await entered; assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.phase, "player_question");
   instance.destroy(); assert.equal(providerSignal.aborted, true); resolveProvider(); await assert.rejects(pending, (error) => error.code === "stale_reaction");
-  assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: late response"), false); assert.equal(instance.activeNpcReaction, null);
+  assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.conversation.playerLegacyDisplayCompatibilityRecords.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: late response"), false); assert.equal(instance.activeNpcReaction, null);
 });
 
 test("late NPC reaction CAS rejects every live binding dimension without publishing effects", async () => {
@@ -118,5 +118,5 @@ test("late NPC reaction CAS rejects every live binding dimension without publish
 
 test("flag OFF retains the single legacy transaction and creates no structured artifacts", async () => {
   const instance = WerewolfGame.create({ seed: 1, scenario: "sample", shuffleRoles: false, createId: ids(), interpreterValidationEnabled: true, playerConversationCommitEnabled: false, interpreterProvider: interpreterFor([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }]), responseProvider: { async generateResponse() { return { text: "response", providerName: "test", model: "test", usage: null, notes: [] }; } } });
-  await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.inputRecords.length, 0); assert.equal(instance.state.conversation.publications.length, 0);
+  await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.inputRecords.length, 0); assert.equal(instance.state.conversation.publications.length, 0); assert.equal(instance.state.conversation.playerLegacyDisplayCompatibilityRecords.length, 0);
 });

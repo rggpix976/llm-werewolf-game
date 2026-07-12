@@ -44,7 +44,11 @@ export function canonicalJson(value) {
 }
 
 export function sha256Fingerprint(...parts) {
-  return createHash("sha256").update(canonicalJson(parts)).digest("hex");
+  return sha256CanonicalJson(parts);
+}
+
+export function sha256CanonicalJson(value) {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
 export function playerClaimIdempotencyKey({ requestId, acceptedSpeechActIds, actorId, claimKind }) {
