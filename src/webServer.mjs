@@ -1,12 +1,16 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseConfig, getRuntimeConfig } from "./config.mjs";
 import { OpenAIResponseProvider } from "./openaiProvider.mjs";
 import { PseudoResponseProvider, getProviderName } from "./responseProvider.mjs";
 import { validateNpcResponseRequest } from "./validator.mjs";
+import { validateInterpreterHttpResponse, validateInterpreterRequest } from "./conversation/contracts.mjs";
+import { sha256Fingerprint } from "./conversation/ids.mjs";
+import { OpenAIInterpreterProvider, PseudoInterpreterProvider } from "./interpreterTransport.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -29,6 +33,9 @@ export function createRequestHandler(options = {}) {
   const config = options.config || parseConfig();
   const provider = options.provider || createProvider(config);
   const rateLimiter = options.rateLimiter || createRateLimiter(config);
+  const interpreterRateLimiter = options.interpreterRateLimiter || createRateLimiter(config);
+  const interpreterProvider = config.interpreterShadowMode ? (options.interpreterProvider || createInterpreterProvider(config)) : null;
+  const interpreterRequests = new Map();
 
   return async (request, response) => {
     try {
@@ -42,6 +49,11 @@ export function createRequestHandler(options = {}) {
 
       if (pathname === "/api/npc-response" && request.method === "POST") {
         return await handleNpcResponse(request, response, provider, rateLimiter);
+      }
+
+      if (pathname === "/api/interpret-player-input" && request.method === "POST") {
+        if (!config.interpreterShadowMode) { response.writeHead(404, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify({ error: "Not found" })); return; }
+        return await handleInterpreterRequest(request, response, interpreterProvider, interpreterRateLimiter, interpreterRequests);
       }
 
       // Method not allowed for API
@@ -84,6 +96,34 @@ export function createRequestHandler(options = {}) {
     }
   };
 }
+
+async function handleInterpreterRequest(request, response, provider, rateLimiter, requestIndex) {
+  const serverCorrelationId = `server-${randomUUID()}`;
+  if (!rateLimiter.allow()) return sendInterpreterError(response, 429, null, serverCorrelationId, "server_rate_limited", true);
+  if (request.headers["content-encoding"] !== undefined) return sendInterpreterError(response, 415, null, serverCorrelationId, "unsupported_media_type", false);
+  if ((request.headers["content-type"] ?? "").trim().toLowerCase() !== "application/json; charset=utf-8") return sendInterpreterError(response, 415, null, serverCorrelationId, "unsupported_media_type", false);
+  const controller = new AbortController(), onAbort = () => controller.abort(); request.on("aborted", onAbort); const onClose = () => { if (!response.writableEnded) controller.abort(); }; response.on("close", onClose);
+  let body;
+  try { body = await readJsonBody(request, 64 * 1024); }
+  catch (error) { cleanup(); return sendInterpreterError(response, error.status === 413 ? 413 : 400, null, serverCorrelationId, error.status === 413 ? "body_too_large" : "malformed_json", false); }
+  let validated;
+  try { validated = validateInterpreterRequest(body); }
+  catch (error) { cleanup(); const code = body && Object.hasOwn(body, "schemaVersion") && body.schemaVersion !== 1 ? "unsupported_schema_version" : "invalid_schema"; return sendInterpreterError(response, 400, IDOrNull(body?.requestId), serverCorrelationId, code, false); }
+  const fingerprint = sha256Fingerprint(validated), prior = requestIndex.get(validated.requestId);
+  if (prior) { cleanup(); if (prior.fingerprint !== fingerprint) return sendInterpreterError(response, 409, validated.requestId, serverCorrelationId, "idempotency_conflict", false); return sendInterpreterSuccess(response, { ...prior.response, serverCorrelationId }); }
+  try {
+    const result = await provider.interpretPlayerInput(validated, { signal: controller.signal });
+    const envelope = validateInterpreterHttpResponse({ schemaVersion: 1, requestId: validated.requestId, correlationId: validated.correlationId, serverCorrelationId, result }, validated); requestIndex.set(validated.requestId, { fingerprint, response: envelope }); if (requestIndex.size > 1000) requestIndex.delete(requestIndex.keys().next().value); return sendInterpreterSuccess(response, envelope);
+  } catch (error) {
+    if (controller.signal.aborted || error?.name === "AbortError") return;
+    const transportCodes = new Set(["invalid_provider_response", "provider_auth_failure", "provider_unavailable", "provider_timeout", "server_rate_limited", "invalid_schema"]), code = transportCodes.has(error?.code) ? error.code : error?.name === "ConversationValidationError" || error instanceof TypeError ? "invalid_provider_response" : "provider_unavailable", status = { invalid_provider_response: 502, provider_auth_failure: 502, provider_unavailable: 503, provider_timeout: 504, server_rate_limited: 429, invalid_schema: 400 }[code] ?? 503, retryable = ["provider_unavailable", "provider_timeout", "server_rate_limited"].includes(code); return sendInterpreterError(response, status, validated.requestId, serverCorrelationId, code, retryable);
+  } finally { cleanup(); }
+  function cleanup() { request.removeListener("aborted", onAbort); response.removeListener("close", onClose); }
+}
+
+function IDOrNull(value) { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(value) ? value : null; }
+function sendInterpreterSuccess(response, body) { if (response.writableEnded || response.destroyed) return; response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }); response.end(JSON.stringify(body)); }
+function sendInterpreterError(response, status, requestId, correlationId, code, retryable) { if (response.writableEnded || response.destroyed) return; response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }); response.end(JSON.stringify({ schemaVersion: 1, requestId, correlationId, error: { code, retryable } })); }
 
 function handleRuntimeConfig(response, config) {
   const runtimeConfig = getRuntimeConfig(config);
@@ -235,15 +275,26 @@ async function readJsonBody(request, limit) {
       reject(err);
     };
 
+    const onAborted = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const error = new Error("Request aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+
     function cleanup() {
         request.removeListener("data", onData);
         request.removeListener("end", onEnd);
         request.removeListener("error", onError);
+        request.removeListener("aborted", onAborted);
     }
 
     request.on("data", onData);
     request.on("end", onEnd);
     request.on("error", onError);
+    request.on("aborted", onAborted);
   });
 }
 
@@ -259,6 +310,8 @@ function createProvider(config) {
   }
   return new PseudoResponseProvider();
 }
+
+function createInterpreterProvider(config) { if (config.provider === "openai") return new OpenAIInterpreterProvider(config.openai); return new PseudoInterpreterProvider(); }
 
 function createRateLimiter(config) {
   const maxPerMinute = config.openai?.maxRequestsPerMinute || 60;

@@ -5,6 +5,7 @@ export class HttpResponseProvider {
   constructor(options = {}) {
     this.name = "http-provider";
     this.sessionManager = options.sessionManager;
+    this.fetch = options.fetch;
   }
 
   async generateResponse(request) {
@@ -16,7 +17,7 @@ export class HttpResponseProvider {
     }
 
     try {
-      const response = await fetch("/api/npc-response", {
+      const response = await (this.fetch ?? globalThis.fetch)("/api/npc-response", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -42,15 +43,40 @@ export class HttpResponseProvider {
       }
     }
   }
+
+  async interpretPlayerInput(request, options = {}) {
+    validateInterpreterRequest(request);
+    const controller = new AbortController(), onExternalAbort = () => controller.abort(options.signal.reason), pending = { schemaVersion: 1, pendingType: "interpreter", requestId: request.requestId, correlationId: request.correlationId, turnId: request.turnId, preconditionStateVersion: request.preconditionStateVersion, inputRecordId: request.inputRecordId, targetNpcId: options.targetNpcId ?? request.publicRoster.find((entry) => entry.playerId !== request.playerContext.playerId)?.playerId ?? request.playerContext.playerId, operation: "interpret_player_input", status: "pending", startedAt: new Date().toISOString() };
+    validatePendingConversationRequest(pending);
+    if (options.signal?.aborted) controller.abort(options.signal.reason);
+    else options.signal?.addEventListener("abort", onExternalAbort, { once: true });
+    if (this.sessionManager) this.sessionManager.registerPendingRequest(pending, controller);
+    let terminalStatus = "failed";
+    try {
+      const response = await (this.fetch ?? globalThis.fetch)("/api/interpret-player-input", { method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(request), signal: controller.signal });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) { let validatedError; try { validatedError = validateErrorEnvelope(body); } catch { const malformed = new Error("Interpreter error response was invalid"); malformed.name = "InterpreterTransportError"; malformed.status = response.status; malformed.code = "invalid_provider_response"; malformed.retryable = false; throw malformed; } const error = new Error("Interpreter transport failed"); error.name = "InterpreterTransportError"; error.status = response.status; error.code = validatedError.error.code; error.retryable = validatedError.error.retryable; throw error; }
+      if (!body) throw new TypeError("Interpreter HTTP response must be JSON");
+      const validated = validateInterpreterHttpResponse(body, request); terminalStatus = "completed"; return validated;
+    } finally {
+      options.signal?.removeEventListener("abort", onExternalAbort);
+      if (this.sessionManager) this.sessionManager.completePendingRequest(request.requestId, terminalStatus);
+    }
+  }
 }
 
 /**
  * Manages game sessions and request cancellation.
  */
 export class SessionManager {
-  constructor() {
+  constructor(options = {}) {
     this.activeControllers = new Set();
+    this.pendingRequests = new Map();
+    this.shadowInputs = new Map();
     this.currentGameId = 0;
+    this.sessionId = null;
+    this.shadowSnapshotVersion = 0;
+    this.createId = options.createId ?? (() => globalThis.crypto.randomUUID());
   }
 
   startNewGame() {
@@ -59,7 +85,19 @@ export class SessionManager {
       controller.abort();
     }
     this.activeControllers.clear();
+    this.pendingRequests.clear();
+    this.shadowInputs.clear();
+    this.sessionId = `shadow-session-${this.createId()}`;
+    this.shadowSnapshotVersion = 0;
     return this.currentGameId;
+  }
+
+  stageShadowInput({ rawText, actorId = "player", locale = "ja-JP" }) {
+    if (!this.sessionId) throw new TypeError("shadow session has not started");
+    const binding = validateShadowInterpreterBinding({ schemaVersion: 1, sessionId: this.sessionId, inputRecordId: `shadow-input-${this.createId()}`, shadowTurnId: `shadow-turn-${this.createId()}`, shadowSnapshotVersion: this.shadowSnapshotVersion++ });
+    const record = validateShadowPlayerInputRecord({ ...binding, actorId, rawText, locale });
+    this.shadowInputs.set(binding.inputRecordId, Object.freeze(record));
+    return Object.freeze(binding);
   }
 
   registerRequest(controller) {
@@ -70,7 +108,24 @@ export class SessionManager {
     this.activeControllers.delete(controller);
   }
 
+  registerPendingRequest(pending, controller) {
+    if (this.pendingRequests.has(pending.requestId)) throw new TypeError(`duplicate pending request ${pending.requestId}`);
+    this.pendingRequests.set(pending.requestId, { pending, controller });
+    this.registerRequest(controller);
+  }
+
+  completePendingRequest(requestId, status = "completed") {
+    const active = this.pendingRequests.get(requestId);
+    if (!active) return false;
+    active.pending = Object.freeze({ ...active.pending, status });
+    this.pendingRequests.delete(requestId);
+    this.shadowInputs.delete(active.pending.inputRecordId);
+    this.unregisterRequest(active.controller);
+    return true;
+  }
+
   isCurrentGame(gameId) {
     return gameId === this.currentGameId;
   }
 }
+import { validateErrorEnvelope, validateInterpreterHttpResponse, validateInterpreterRequest, validatePendingConversationRequest, validateShadowInterpreterBinding, validateShadowPlayerInputRecord } from "../src/conversation/contracts.mjs";

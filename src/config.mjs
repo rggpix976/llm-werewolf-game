@@ -12,6 +12,7 @@ export function parseConfig(env = process.env) {
 
   const config = {
     provider,
+    interpreterShadowMode: parseBoolean(env.INTERPRETER_SHADOW_MODE, false, "INTERPRETER_SHADOW_MODE"),
     openai: null
   };
 
@@ -40,7 +41,8 @@ export function parseConfig(env = process.env) {
  */
 export function getRuntimeConfig(config) {
   const result = {
-    provider: config.provider
+    provider: config.provider,
+    interpreterShadowMode: config.interpreterShadowMode === true
   };
 
   if (config.openai) {
