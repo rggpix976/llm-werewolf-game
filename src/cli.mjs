@@ -4,7 +4,7 @@ import { WerewolfGame } from "./gameEngine.mjs";
 import { parseConfig } from "./config.mjs";
 import { PseudoInterpreterProvider } from "./interpreterTransport.mjs";
 import { sanitizeTerminalText } from "./playerStructuredConsumer.mjs";
-import { deliverProjectedEntries, retryPlayerPublicationAcknowledgement, writeCliPublication } from "./playerDisplaySink.mjs";
+import { consumeLiveActionDisplay, writeCliPublication } from "./playerDisplaySink.mjs";
 
 const showDev = process.argv.includes("--show-dev");
 const runtimeConfig = parseConfig(process.env);
@@ -19,7 +19,7 @@ const game = WerewolfGame.create({
 
 let printedLogIndex = 0;
 const playerFacingHistory = [];
-const cliPublicationBookkeeping = new Set();
+const cliPublicationBookkeeping = new Map();
 
 const rl = readline.createInterface({ input, output });
 
@@ -74,7 +74,7 @@ while (true) {
         input: question,
         logCursor: printedLogIndex
       });
-      await printNewPlayerLog(action.playerFacingEntries, action.structuredPlayerEntries);
+      await printNewPlayerLog(action);
       maybePrintDevTail();
       continue;
     }
@@ -84,7 +84,7 @@ while (true) {
         type: "advance_vote",
         logCursor: printedLogIndex
       });
-      await printNewPlayerLog(voteAction.playerFacingEntries, voteAction.structuredPlayerEntries);
+      await printNewPlayerLog(voteAction);
       maybePrintDevTail();
 
       if (!game.state.winner) {
@@ -92,7 +92,7 @@ while (true) {
           type: "run_night",
           logCursor: printedLogIndex
         });
-        await printNewPlayerLog(nightAction.playerFacingEntries, nightAction.structuredPlayerEntries);
+        await printNewPlayerLog(nightAction);
         maybePrintDevTail();
       }
 
@@ -146,15 +146,14 @@ function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
   console.log(`Alive NPCs: ${alive.join(", ")}`);
 }
 
-async function printNewPlayerLog(entries = game.state.playerLog.slice(printedLogIndex), structuredEntries = []) {
+async function printNewPlayerLog(action = null) {
   const write = async (entry) => { await writeCliPublication({ entry, write: async (text) => { if (text) console.log(`\n${text}`); } }); playerFacingHistory.push(structuredClone(entry)); };
-  if (runtimeConfig.playerStructuredConsumerMode) {
-    const represented = new Set(entries.filter((entry) => entry.structured).map((entry) => entry.publicationId)), deliveryEntries = [...structuredEntries.filter((entry) => !represented.has(entry.publicationId)), ...entries];
-    try { await deliverProjectedEntries({ game, entries: deliveryEntries, consumerId: "cli-main", sinkType: "cli", writeStructured: async (entry) => { if (cliPublicationBookkeeping.has(entry.publicationId)) throw new Error("duplicate_cli_publication"); await write(entry); cliPublicationBookkeeping.add(entry.publicationId); }, writeLegacy: write }); }
-    catch (error) { if (error.acknowledgementOnlyRetry && cliPublicationBookkeeping.has(error.publicationId)) retryPlayerPublicationAcknowledgement({ game, publicationId: error.publicationId }); else throw error; }
-  } else { for (const entry of entries) await write(entry); }
+  const liveEntries = action?.livePlayerDisplayEntries ?? game.state.playerLog.slice(printedLogIndex).map((entry) => ({ kind: "legacy_display", entry }));
+  if (runtimeConfig.playerStructuredConsumerMode && action) { await consumeLiveActionDisplay({ game, action, consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: write, writeLegacy: write });
+  } else { for (const envelope of liveEntries) await write(envelope.entry); }
   printedLogIndex = game.state.playerLog.length;
 }
+
 
 function formatEntries(entries) { return entries.map((entry) => `[Day ${entry.day} / ${entry.phase}] ${sanitizeTerminalText(entry.message)}`).join("\n"); }
 

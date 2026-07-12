@@ -17,7 +17,8 @@ export class PlayerPublicationDeliveryController {
     this._live(); if (!this.enabled) return [];
     return this.listPublications().filter((publication) => publication.publicationSlotOrder >= this.cutoverPublicationSlotOrder && !this.acknowledgements.has(publication.publicationId)).map((publication) => publication.publicationId);
   }
-  historyPublicationIds() { this._live(); if (!this.enabled) return []; return this.listPublications().filter((publication) => publication.publicationSlotOrder >= this.cutoverPublicationSlotOrder).map((publication) => publication.publicationId); }
+  historyPublicationIds() { this._live(); return this.cutoverPublicationSlotOrder === null ? [] : this.listPublications().map((publication) => publication.publicationId); }
+  liveScopePublicationIds() { this._live(); if (this.cutoverPublicationSlotOrder === null) return new Set(); return new Set(this.listPublications().filter((publication) => publication.publicationSlotOrder >= this.cutoverPublicationSlotOrder).map((publication) => publication.publicationId)); }
 
   prepare({ publicationId, consumerId, sinkType }) {
     this._live(); if (!this.enabled) throw deliveryError("publication_not_found"); validateSinkIdentity(consumerId, sinkType);
@@ -37,7 +38,7 @@ export class PlayerPublicationDeliveryController {
 
   complete(capability) {
     const attempt = this.capabilities.get(capability); if (!attempt || attempt.capability !== capability || attempt.state !== "in_flight") throw deliveryError("publication_not_delivered"); this._current(attempt);
-    attempt.state = "sink_succeeded"; const receipt = Object.freeze({ receiptId: `sink-receipt-${this.createId()}`, gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType }); attempt.receipt = receipt; this.receipts.set(receipt, attempt); this._observe("sink_succeeded", attempt); return receipt;
+    attempt.state = "sink_succeeded"; const receipt = Object.freeze({ receiptId: `sink-receipt-${this.createId()}`, gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, consumerId: attempt.consumerId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType }); attempt.receipt = receipt; this.receipts.set(receipt, attempt); this._observe("sink_succeeded", attempt); return receipt;
   }
 
   fail(capability) {
@@ -49,11 +50,16 @@ export class PlayerPublicationDeliveryController {
     const stored = this.acknowledgements.get(attempt.publicationId);
     if (stored) { if (stored.receipt !== receipt) throw deliveryError("publication_ack_conflict"); this._observe("duplicate_ack_suppressed", attempt); return stored.result; }
     if (attempt.state !== "sink_succeeded") throw deliveryError("publication_not_delivered");
-    attempt.state = "acknowledged"; const result = Object.freeze({ status: "acknowledged", gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType, receiptId: receipt.receiptId }); this.acknowledgements.set(attempt.publicationId, { receipt, result }); this.activeByPublication.delete(attempt.publicationId); this._observe("publication_acknowledged", attempt); return result;
+    attempt.state = "acknowledged"; const result = Object.freeze({ status: "acknowledged", gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, consumerId: attempt.consumerId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType, receiptId: receipt.receiptId }); this.acknowledgements.set(attempt.publicationId, { receipt, result }); this.activeByPublication.delete(attempt.publicationId); this._observe("publication_acknowledged", attempt); return result;
   }
 
-  receiptFor({ publicationId, consumerGeneration = this.consumerGeneration }) {
-    this._live(); if (consumerGeneration !== this.consumerGeneration) throw deliveryError("stale_consumer_generation"); const acknowledged = this.acknowledgements.get(publicationId); if (acknowledged) return acknowledged.receipt; const attempt = this.activeByPublication.get(publicationId); if (!attempt || attempt.state !== "sink_succeeded") throw deliveryError("publication_not_delivered"); return attempt.receipt;
+  receiptFor(identity = {}) {
+    this._live(); const { gameSessionId, publicationId, consumerId, consumerGeneration, deliveryAttemptId, sinkType, receiptId } = identity;
+    if (![gameSessionId, publicationId, consumerId, deliveryAttemptId, sinkType, receiptId].every((value) => typeof value === "string" && value) || !Number.isSafeInteger(consumerGeneration)) throw deliveryError("invalid_sink_success_receipt");
+    if (gameSessionId !== this.gameSessionId) throw deliveryError("stale_publication_session");
+    if (consumerGeneration !== this.consumerGeneration) { const stale = this.attempts.get(deliveryAttemptId); if (stale) this._observe("stale_consumer_generation", stale); throw deliveryError("stale_consumer_generation"); }
+    const attempt = this.attempts.get(deliveryAttemptId); if (!attempt || attempt.publicationId !== publicationId || attempt.consumerId !== consumerId || attempt.sinkType !== sinkType || attempt.receipt?.receiptId !== receiptId) throw deliveryError("publication_not_delivered");
+    this._current(attempt); if (!attempt.receipt || !["sink_succeeded", "acknowledged"].includes(attempt.state)) throw deliveryError("publication_not_delivered"); return attempt.receipt;
   }
 
   stateFor(publicationId) { return this.acknowledgements.has(publicationId) ? "acknowledged" : this.activeByPublication.get(publicationId)?.state ?? "unseen"; }
@@ -61,11 +67,11 @@ export class PlayerPublicationDeliveryController {
   invalidate() { this.invalidated = true; for (const attempt of this.attempts.values()) if (attempt.state !== "acknowledged") attempt.state = "stale_session"; this.activeByPublication.clear(); }
 
   _attempt(id) { this._live(); const attempt = this.attempts.get(id); if (!attempt) throw deliveryError("publication_not_prepared"); this._current(attempt); return attempt; }
-  _current(attempt) { if (this.invalidated || attempt.gameSessionId !== this.gameSessionId) throw deliveryError("stale_publication_session"); if (attempt.consumerGeneration !== this.consumerGeneration) throw deliveryError("stale_consumer_generation"); }
+  _current(attempt) { if (this.invalidated || attempt.gameSessionId !== this.gameSessionId) throw deliveryError("stale_publication_session"); if (attempt.consumerGeneration !== this.consumerGeneration) { this._observe("stale_consumer_generation", attempt); throw deliveryError("stale_consumer_generation"); } }
   _live() { if (this.invalidated) throw deliveryError("stale_publication_session"); }
   _observe(outcomeCategory, attempt) { try { this.observer(Object.freeze({ gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType, outcomeCategory })); } catch {} }
 }
 
-function publicAttempt(attempt) { return Object.freeze({ gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType, state: attempt.state, entry: attempt.rendered }); }
+function publicAttempt(attempt) { return Object.freeze({ gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, consumerId: attempt.consumerId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType, state: attempt.state, entry: attempt.rendered }); }
 function validateSinkIdentity(consumerId, sinkType) { if (typeof consumerId !== "string" || !consumerId || !["browser", "cli"].includes(sinkType)) throw deliveryError("invalid_sink_success_receipt"); }
 export function deliveryError(code) { const error = new Error(code); error.name = "PlayerPublicationDeliveryError"; error.code = code; return error; }
