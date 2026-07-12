@@ -129,6 +129,7 @@ function startNewGame() {
     responseProvider,
     interpreterProvider: responseProvider,
     interpreterValidationEnabled: runtimeConfig?.interpreterValidationMode === true,
+    playerConversationCommitEnabled: runtimeConfig?.playerConversationCommitMode === true,
     interpreterObserver: (entry) => { shadowObservations = [...shadowObservations.slice(-99), entry]; }
   });
   snapshot = game.getPublicSnapshot();

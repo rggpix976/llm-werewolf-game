@@ -14,7 +14,7 @@ async function start(options = {}) { const server = createWebServer({ config: { 
 function providerResult(request) { return new PseudoInterpreterProvider().interpretPlayerInput(request); }
 
 test("shadow feature flag defaults disabled and is safely public", async () => {
-  const { parseConfig, getRuntimeConfig } = await import("../src/config.mjs"); assert.equal(parseConfig({}).interpreterShadowMode, false); assert.equal(parseConfig({}).interpreterValidationMode, false); assert.equal(parseConfig({ INTERPRETER_SHADOW_MODE: "true" }).interpreterShadowMode, true); assert.equal(parseConfig({ INTERPRETER_VALIDATION_MODE: "true" }).interpreterValidationMode, true); assert.throws(() => parseConfig({ INTERPRETER_SHADOW_MODE: "yes" })); assert.deepEqual(getRuntimeConfig(parseConfig({})), { provider: "pseudo", interpreterShadowMode: false, interpreterValidationMode: false });
+  const { parseConfig, getRuntimeConfig } = await import("../src/config.mjs"); assert.equal(parseConfig({}).interpreterShadowMode, false); assert.equal(parseConfig({}).interpreterValidationMode, false); assert.equal(parseConfig({ INTERPRETER_SHADOW_MODE: "true" }).interpreterShadowMode, true); assert.equal(parseConfig({ INTERPRETER_VALIDATION_MODE: "true" }).interpreterValidationMode, true); assert.throws(() => parseConfig({ INTERPRETER_SHADOW_MODE: "yes" })); assert.deepEqual(getRuntimeConfig(parseConfig({})), { provider: "pseudo", interpreterShadowMode: false, interpreterValidationMode: false, playerConversationCommitMode: false });
 });
 
 test("Phase 2 and Phase 3 feature flags select exactly one Interpreter owner", () => {

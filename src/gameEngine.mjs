@@ -9,7 +9,8 @@ import { SeededRandom } from "./seededRandom.mjs";
 import { containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
 import { createPhase3Binding, validatePhase3Response } from "./interpreterValidation.mjs";
 import { sha256Fingerprint } from "./conversation/ids.mjs";
-import { ID_PATTERN } from "./conversation/domain.mjs";
+import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
+import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -106,6 +107,10 @@ export class WerewolfGame {
       winner: null,
       playerLog: [],
       developerLog: [],
+      conversation: {
+        inputRecords: [], acceptedSpeechActs: [], claims: [], events: [], displayPlans: [], publications: [], commitResults: [], idempotencyRecords: [],
+        nextCreatedOrder: 0, nextPublicationSlotOrder: 0, nextRecordAppendOrder: 0
+      },
       rng,
       config: {
         seed: options.seed ?? null,
@@ -116,7 +121,7 @@ export class WerewolfGame {
     const game = new WerewolfGame(
       state,
       options.responseProvider ?? new PseudoResponseProvider(),
-      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, interpreterObserver: options.interpreterObserver, now: options.now }
+      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
     );
     game.addPublicInfo({
       type: "setup",
@@ -141,10 +146,13 @@ export class WerewolfGame {
     this.createId = options.createId ?? (() => globalThis.crypto.randomUUID());
     this.interpreterProvider = options.interpreterProvider;
     this.interpreterValidationEnabled = options.interpreterValidationEnabled === true;
+    this.playerConversationCommitEnabled = resolvePlayerConversationCommitPolicy({ playerConversationCommitMode: options.playerConversationCommitEnabled === true, interpreterValidationMode: this.interpreterValidationEnabled }).enabled;
+    this.phase4FaultInjector = options.phase4FaultInjector ?? (() => {});
     this.interpreterObserver = options.interpreterObserver ?? (() => {});
     this.now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
     this.pendingInterpreterRequests = new Map();
     this.interpreterTerminalAudit = new Map();
+    this.activeNpcReaction = null;
     this._commandInProgress = false;
     this._destroyed = false;
   }
@@ -201,6 +209,7 @@ export class WerewolfGame {
   async dispatchPlayerAction(action = {}) {
     const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
     if (action.type === "get_state") return this._actionResult(action.type, null, logCursor);
+    if (action.type === "ask_npc" && action.replayRequestId) return this._replayPlayerConversation(action, logCursor);
     const rejected = this._validateCommand(action); if (rejected) return this._actionResult(action.type, rejected, logCursor);
     if (this._commandInProgress) throw typedError("input_in_progress");
     if (!Number.isSafeInteger(this.state.stateVersion) || this.state.stateVersion < 0 || this.state.stateVersion === Number.MAX_SAFE_INTEGER) throw typedError("state_version_exhausted");
@@ -209,8 +218,12 @@ export class WerewolfGame {
     const preconditionVersion = this.state.stateVersion;
     const continuation = this._clarificationContinuation(action); if (!continuation) { this.state.turnOrder += 1; this.state.turnId = engineId("turn", this.createId); }
     try {
-      if (action.type === "ask_npc" && this.interpreterValidationEnabled) await this._observeInterpreter(action);
+      const interpreted = action.type === "ask_npc" && this.interpreterValidationEnabled ? await this._observeInterpreter(action) : null;
       if (this._destroyed) throw abortError();
+      if (action.type === "ask_npc" && this.playerConversationCommitEnabled && interpreted?.outcome?.category === "validated") {
+        const result = await this._commitStructuredPlayerQuestion(action, interpreted, preconditionVersion);
+        return this._actionResult(action.type, result, logCursor);
+      }
       const working = this._workingCopy(), result = await working._executeCompatibilityAction(action);
       if (this._destroyed || this.state.stateVersion !== preconditionVersion || this.state.turnId !== working.state.turnId || this.state.gameSessionId !== working.state.gameSessionId) throw typedError("stale_state_version");
       working.state.stateVersion = preconditionVersion + 1; commitState(this.state, working.state);
@@ -227,6 +240,52 @@ export class WerewolfGame {
 
   _actionResult(actionType, result, logCursor) { return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries: this.state.playerLog.slice(logCursor), nextLogCursor: this.state.playerLog.length }; }
 
+  _replayPlayerConversation(action, logCursor) {
+    if (typeof action.replayRequestId !== "string" || !ID_PATTERN.test(action.replayRequestId) || typeof action.replayRequestFingerprint !== "string" || !SHA256_PATTERN.test(action.replayRequestFingerprint)) throw typedError("invalid_replay_identity");
+    const record = this.state.conversation?.idempotencyRecords.find((entry) => entry.requestId === action.replayRequestId);
+    if (!record) throw typedError("replay_not_found");
+    if (action.replayRequestFingerprint !== record.requestFingerprint) throw typedError("idempotency_conflict");
+    return this._actionResult(action.type, { responded: false, replayed: true, conversationCommitResult: structuredClone(record.result) }, logCursor);
+  }
+
+  async _commitStructuredPlayerQuestion(action, interpreted, preconditionVersion) {
+    const target = this.getPlayer(action.targetId ?? action.target ?? action.npcId);
+    const claimRegistryFingerprint = sha256Fingerprint(this.state.conversation.claims);
+    const prepared = preparePlayerConversationCommit({ state: this.state, binding: interpreted.binding, alternative: interpreted.outcome.selectedAlternative, targetNpcId: target.id, createId: this.createId, fault: this.phase4FaultInjector });
+    if (prepared.replay) return { responded: false, replayed: true, conversationCommitResult: prepared.result };
+    const working = this._workingCopy(), delta = prepared.delta;
+    this._assertPlayerCommitCas(interpreted, delta, target.id, preconditionVersion, claimRegistryFingerprint);
+    for (const [key, values] of Object.entries(delta.objects)) working.state.conversation[key].push(...structuredClone(values));
+    working.state.conversation.idempotencyRecords.push(structuredClone(delta.idempotencyRecord)); Object.assign(working.state.conversation, delta.counters);
+    working.state.playerLog.push(structuredClone(delta.legacyDelta.playerLogEntry)); working.state.publicInfo.push(structuredClone(delta.legacyDelta.publicInfoEntry));
+    working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
+    this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; commitState(this.state, working.state);
+    const reactionBinding = Object.freeze({ gameSessionId: this.state.gameSessionId, turnId: this.state.turnId, turnOrder: this.state.turnOrder, preconditionPhase: this.state.phase, preconditionStateVersion: this.state.stateVersion, targetNpcId: target.id, requestId: delta.requestId, correlationId: delta.correlationId, inputRecordId: delta.inputRecordId, requestFingerprint: delta.requestFingerprint });
+    const controller = new AbortController(), active = { binding: reactionBinding, controller }; this.activeNpcReaction = active;
+    try {
+      const npcWorking = this._workingCopy(), reaction = await npcWorking.handlePlayerQuestion(target.id, action.input ?? action.question, { skipPlayerSide: true, signal: controller.signal });
+      this._assertNpcReactionCas(active, npcWorking);
+      if (reaction?.reason === "response_provider_error") return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
+      this.phase4FaultInjector("npc_final_state_replacement"); npcWorking.state.stateVersion = preconditionVersion + 2; commitState(this.state, npcWorking.state);
+      return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
+    } finally { if (this.activeNpcReaction === active) this.activeNpcReaction = null; }
+  }
+
+  _assertPlayerCommitCas(interpreted, delta, targetNpcId, version, claimRegistryFingerprint) {
+    const binding = interpreted.binding, terminal = this.interpreterTerminalAudit.get(binding.requestId), target = this.getPlayer(targetNpcId);
+    const identityMatches = binding.requestId === delta.requestId && binding.correlationId === delta.correlationId && binding.inputRecordId === delta.inputRecordId && binding.actorId === "player" && binding.requestFingerprint === delta.requestFingerprint && binding.targetNpcId === targetNpcId && binding.request.requestId === binding.requestId && binding.request.correlationId === binding.correlationId && binding.request.inputRecordId === binding.inputRecordId && sha256Fingerprint(binding.request) === binding.requestFingerprint;
+    const terminalMatches = terminal?.status === "completed" && terminal.responseFingerprint === interpreted.responseFingerprint && terminal.outcome?.category === "validated";
+    const liveMatches = !this._destroyed && this.state.stateVersion === version && this.state.turnId === delta.turnId && this.state.turnOrder === binding.turnOrder && this.state.phase === delta.preconditionPhase && this.state.gameSessionId === delta.gameSessionId && target?.id === targetNpcId && sha256Fingerprint(this.state.conversation.claims) === claimRegistryFingerprint;
+    if (!identityMatches || !terminalMatches || !liveMatches) throw typedError("stale_commit_precondition");
+  }
+
+  _assertNpcReactionCas(active, npcWorking) {
+    const binding = active.binding, target = this.getPlayer(binding.targetNpcId), record = this.state.conversation.idempotencyRecords.find((entry) => entry.requestId === binding.requestId);
+    const identityMatches = this.activeNpcReaction === active && !active.controller.signal.aborted && record?.requestFingerprint === binding.requestFingerprint && record.result.correlationId === binding.correlationId && record.result.inputRecordId === binding.inputRecordId;
+    const liveMatches = !this._destroyed && this.state.gameSessionId === binding.gameSessionId && this.state.turnId === binding.turnId && this.state.turnOrder === binding.turnOrder && this.state.phase === binding.preconditionPhase && this.state.stateVersion === binding.preconditionStateVersion && target?.id === binding.targetNpcId && npcWorking.state.gameSessionId === binding.gameSessionId && npcWorking.state.turnId === binding.turnId;
+    if (!identityMatches || !liveMatches) throw typedError("stale_reaction");
+  }
+
   _validateCommand(action) {
     if (!["ask_npc", "advance_vote", "run_night", "get_state"].includes(action.type)) throw new Error(`Unknown player action type: ${action.type}`);
     if (this.state.winner) return action.type === "ask_npc" ? { responded: false, reason: "game_already_finished" } : action.type === "run_night" ? { skipped: true, reason: "game_already_finished" } : null;
@@ -240,8 +299,8 @@ export class WerewolfGame {
   _workingCopy() { const working = Object.create(Object.getPrototypeOf(this)); Object.assign(working, this); working.state = cloneState(this.state); working.interpreterValidationEnabled = false; return working; }
 
   async _observeInterpreter(action) {
-    if (!this.interpreterProvider?.interpretPlayerInput) return;
-    const rawText = String(action.input ?? action.question).trim(), targetNpcId = action.targetId ?? action.target ?? action.npcId;
+    if (!this.interpreterProvider?.interpretPlayerInput) return null;
+    const rawText = String(action.input ?? action.question).trim(), targetNpcId = this.getPlayer(action.targetId ?? action.target ?? action.npcId).id;
     const binding = createPhase3Binding({ state: this.state, rawText, targetNpcId, createId: this.createId }), controller = new AbortController(), started = this.now();
     const pending = { status: "pending", binding, controller, responseFingerprint: null, outcome: null }; this.pendingInterpreterRequests.set(binding.requestId, pending);
     let observation;
@@ -252,9 +311,10 @@ export class WerewolfGame {
       const redacted = Object.freeze({ correlationId: binding.correlationId, inputRecordId: binding.inputRecordId, turnId: binding.turnId, capturedStateVersion: binding.preconditionStateVersion, outcomeCategory: observation?.category ?? "failure", candidateCount: observation?.candidateCount ?? 0, alternativeCount: observation?.alternativeCount ?? 0, reasonCode: observation?.reasonCode ?? "observer_failure", stale: observation?.stale === true, latencyMs: Math.max(0, this.now() - started), retryAttempt: pending.attemptCount ?? 1, terminalStatus: pending.status });
       try { this.interpreterObserver(redacted); } catch {}
     }
+    return { binding, outcome: observation, responseFingerprint: pending.responseFingerprint };
   }
 
-  _rememberTerminal(requestId, pending) { this.interpreterTerminalAudit.set(requestId, Object.freeze({ status: pending.status, turnId: pending.binding.turnId, responseFingerprint: pending.responseFingerprint, outcome: pending.outcome })); while (this.interpreterTerminalAudit.size > 100) this.interpreterTerminalAudit.delete(this.interpreterTerminalAudit.keys().next().value); }
+  _rememberTerminal(requestId, pending) { const { selectedAlternative: _private, ...safeOutcome } = pending.outcome ?? {}; this.interpreterTerminalAudit.set(requestId, Object.freeze({ status: pending.status, turnId: pending.binding.turnId, responseFingerprint: pending.responseFingerprint, outcome: Object.freeze(safeOutcome) })); while (this.interpreterTerminalAudit.size > 100) this.interpreterTerminalAudit.delete(this.interpreterTerminalAudit.keys().next().value); }
 
   acceptInterpreterResponse(requestId, response) {
     const fingerprint = sha256Fingerprint(response), pending = this.pendingInterpreterRequests.get(requestId);
@@ -263,9 +323,9 @@ export class WerewolfGame {
     const outcome = validatePhase3Response(response, pending.binding, this.state); pending.responseFingerprint = fingerprint; return outcome;
   }
 
-  destroy() { this._destroyed = true; for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } }
+  destroy() { this._destroyed = true; for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
 
-  async handlePlayerQuestion(targetIdOrName, playerInput) {
+  async handlePlayerQuestion(targetIdOrName, playerInput, options = {}) {
     if (this.state.winner) {
       return {
         responded: false,
@@ -278,16 +338,13 @@ export class WerewolfGame {
       throw new Error(`Unknown NPC: ${targetIdOrName}`);
     }
 
-    this.setPhase("player_question");
     const questionText = String(playerInput ?? "").trim();
-    this.addPlayerLog(`あなた -> ${npc.name}: ${questionText}`);
-    this.addPublicInfo({
-      type: "player_question",
-      actorId: "player",
-      targetId: npc.id,
-      text: `プレイヤーが${npc.name}に質問: ${questionText}`
-    });
-    this.applyQuestionPressure(questionText);
+    if (!options.skipPlayerSide) {
+      this.setPhase("player_question");
+      this.addPlayerLog(`あなた -> ${npc.name}: ${questionText}`);
+      this.addPublicInfo({ type: "player_question", actorId: "player", targetId: npc.id, text: `プレイヤーが${npc.name}に質問: ${questionText}` });
+      this.applyQuestionPressure(questionText);
+    }
 
     this.setPhase("npc_response");
     if (!npc.alive) {
@@ -311,7 +368,7 @@ export class WerewolfGame {
       if (typeof this.responseProvider?.generateResponse !== "function") {
         throw new TypeError("Response provider must implement generateResponse(request)");
       }
-      const rawProviderResult = await this.responseProvider.generateResponse(prepared.request);
+      const rawProviderResult = await this.responseProvider.generateResponse(prepared.request, { signal: options.signal });
       providerResult = validateProviderResponse(rawProviderResult, providerName);
     } catch (error) {
       this.addPlayerLog(`${npc.name}から回答を得られませんでした。`);

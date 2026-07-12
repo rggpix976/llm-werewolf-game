@@ -8,8 +8,10 @@ export class HttpResponseProvider {
     this.fetch = options.fetch;
   }
 
-  async generateResponse(request) {
-    const controller = new AbortController();
+  async generateResponse(request, options = {}) {
+    const controller = new AbortController(), onExternalAbort = () => controller.abort(options.signal.reason);
+    if (options.signal?.aborted) controller.abort(options.signal.reason);
+    else options.signal?.addEventListener("abort", onExternalAbort, { once: true });
 
     // Register the request for cancellation if a new game starts
     if (this.sessionManager) {
@@ -38,6 +40,7 @@ export class HttpResponseProvider {
 
       return await response.json();
     } finally {
+      options.signal?.removeEventListener("abort", onExternalAbort);
       if (this.sessionManager) {
         this.sessionManager.unregisterRequest(controller);
       }
