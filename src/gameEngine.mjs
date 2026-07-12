@@ -10,6 +10,7 @@ import { containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
 import { createPhase3Binding, validatePhase3Response } from "./interpreterValidation.mjs";
 import { sha256Fingerprint } from "./conversation/ids.mjs";
 import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
+import { validateCommittedConversationGraph, validatePlayerLegacyDisplayCompatibilityReferences } from "./conversation/references.mjs";
 import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
 import { mergeStructuredPlayerEntries, renderUnconsumedPlayerPublications, resolvePlayerStructuredConsumerPolicy } from "./playerStructuredConsumer.mjs";
 
@@ -109,7 +110,7 @@ export class WerewolfGame {
       playerLog: [],
       developerLog: [],
       conversation: {
-        inputRecords: [], acceptedSpeechActs: [], claims: [], events: [], displayPlans: [], publications: [], commitResults: [], idempotencyRecords: [],
+        inputRecords: [], acceptedSpeechActs: [], claims: [], events: [], displayPlans: [], publications: [], playerLegacyDisplayCompatibilityRecords: [], commitResults: [], idempotencyRecords: [],
         nextCreatedOrder: 0, nextPublicationSlotOrder: 0, nextRecordAppendOrder: 0
       },
       rng,
@@ -266,19 +267,21 @@ export class WerewolfGame {
     const record = this.state.conversation?.idempotencyRecords.find((entry) => entry.requestId === action.replayRequestId);
     if (!record) throw typedError("replay_not_found");
     if (action.replayRequestFingerprint !== record.requestFingerprint) throw typedError("idempotency_conflict");
+    this._assertReplayCompatibilityMapping(record.result.playerPublicationId);
     return this._actionResult(action.type, { responded: false, replayed: true, conversationCommitResult: structuredClone(record.result) }, logCursor);
   }
 
   async _commitStructuredPlayerQuestion(action, interpreted, preconditionVersion) {
     const target = this.getPlayer(action.targetId ?? action.target ?? action.npcId);
-    const claimRegistryFingerprint = sha256Fingerprint(this.state.conversation.claims);
+    const playerCommitRegistryFingerprint = sha256Fingerprint({ claims: this.state.conversation.claims, mappings: this.state.conversation.playerLegacyDisplayCompatibilityRecords, nextCreatedOrder: this.state.conversation.nextCreatedOrder, playerLogLength: this.state.playerLog.length });
     const prepared = preparePlayerConversationCommit({ state: this.state, binding: interpreted.binding, alternative: interpreted.outcome.selectedAlternative, targetNpcId: target.id, createId: this.createId, fault: this.phase4FaultInjector });
     if (prepared.replay) return { responded: false, replayed: true, conversationCommitResult: prepared.result };
     const working = this._workingCopy(), delta = prepared.delta;
-    this._assertPlayerCommitCas(interpreted, delta, target.id, preconditionVersion, claimRegistryFingerprint);
+    this._assertPlayerCommitCas(interpreted, delta, target.id, preconditionVersion, playerCommitRegistryFingerprint);
     for (const [key, values] of Object.entries(delta.objects)) working.state.conversation[key].push(...structuredClone(values));
-    working.state.conversation.idempotencyRecords.push(structuredClone(delta.idempotencyRecord)); Object.assign(working.state.conversation, delta.counters);
-    working.state.playerLog.push(structuredClone(delta.legacyDelta.playerLogEntry)); working.state.publicInfo.push(structuredClone(delta.legacyDelta.publicInfoEntry));
+    this.phase4FaultInjector("mapping_registry_staged"); working.state.conversation.idempotencyRecords.push(structuredClone(delta.idempotencyRecord)); this.phase4FaultInjector("commit_result_insertion"); Object.assign(working.state.conversation, delta.counters);
+    working.state.playerLog.push(structuredClone(delta.legacyDelta.playerLogEntry)); this.phase4FaultInjector("legacy_log_staged"); working.state.publicInfo.push(structuredClone(delta.legacyDelta.publicInfoEntry));
+    validateCommittedConversationGraph(this._conversationGraph(working.state)); this.phase4FaultInjector("mapping_graph_validation");
     working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
     this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; commitState(this.state, working.state);
     const reactionBinding = Object.freeze({ gameSessionId: this.state.gameSessionId, turnId: this.state.turnId, turnOrder: this.state.turnOrder, preconditionPhase: this.state.phase, preconditionStateVersion: this.state.stateVersion, targetNpcId: target.id, requestId: delta.requestId, correlationId: delta.correlationId, inputRecordId: delta.inputRecordId, requestFingerprint: delta.requestFingerprint });
@@ -292,12 +295,34 @@ export class WerewolfGame {
     } finally { if (this.activeNpcReaction === active) this.activeNpcReaction = null; }
   }
 
-  _assertPlayerCommitCas(interpreted, delta, targetNpcId, version, claimRegistryFingerprint) {
+  _assertPlayerCommitCas(interpreted, delta, targetNpcId, version, playerCommitRegistryFingerprint) {
     const binding = interpreted.binding, terminal = this.interpreterTerminalAudit.get(binding.requestId), target = this.getPlayer(targetNpcId);
     const identityMatches = binding.requestId === delta.requestId && binding.correlationId === delta.correlationId && binding.inputRecordId === delta.inputRecordId && binding.actorId === "player" && binding.requestFingerprint === delta.requestFingerprint && binding.targetNpcId === targetNpcId && binding.request.requestId === binding.requestId && binding.request.correlationId === binding.correlationId && binding.request.inputRecordId === binding.inputRecordId && sha256Fingerprint(binding.request) === binding.requestFingerprint;
     const terminalMatches = terminal?.status === "completed" && terminal.responseFingerprint === interpreted.responseFingerprint && terminal.outcome?.category === "validated";
-    const liveMatches = !this._destroyed && this.state.stateVersion === version && this.state.turnId === delta.turnId && this.state.turnOrder === binding.turnOrder && this.state.phase === delta.preconditionPhase && this.state.gameSessionId === delta.gameSessionId && target?.id === targetNpcId && sha256Fingerprint(this.state.conversation.claims) === claimRegistryFingerprint;
+    const mapping = delta.objects.playerLegacyDisplayCompatibilityRecords[0];
+    const liveRegistryFingerprint = sha256Fingerprint({ claims: this.state.conversation.claims, mappings: this.state.conversation.playerLegacyDisplayCompatibilityRecords, nextCreatedOrder: this.state.conversation.nextCreatedOrder, playerLogLength: this.state.playerLog.length });
+    const liveMatches = !this._destroyed && this.state.stateVersion === version && this.state.turnId === delta.turnId && this.state.turnOrder === binding.turnOrder && this.state.phase === delta.preconditionPhase && this.state.gameSessionId === delta.gameSessionId && target?.id === targetNpcId && liveRegistryFingerprint === playerCommitRegistryFingerprint && mapping?.legacyLogAppendOrder === this.state.playerLog.length;
     if (!identityMatches || !terminalMatches || !liveMatches) throw typedError("stale_commit_precondition");
+  }
+
+  _conversationGraph(state = this.state) { return { ...state.conversation, gameSessionId: state.gameSessionId, legacyPlayerLog: state.playerLog }; }
+
+  _assertReplayCompatibilityMapping(publicationId) {
+    const matches = this.state.conversation.playerLegacyDisplayCompatibilityRecords.filter((record) => record.publicationId === publicationId);
+    if (matches.length === 0) throw typedError("replay_mapping_missing");
+    if (matches.length !== 1) throw typedError("replay_mapping_conflict");
+    try { validatePlayerLegacyDisplayCompatibilityReferences(this.state.conversation.playerLegacyDisplayCompatibilityRecords, this._conversationGraph()); }
+    catch { throw typedError("replay_mapping_conflict"); }
+  }
+
+  getPlayerLegacyDisplayCompatibilityRecord({ publicationId, compatibilityMappingId, gameSessionId = this.state.gameSessionId } = {}) {
+    if (gameSessionId !== this.state.gameSessionId) throw typedError("stale_session");
+    if ((publicationId === undefined) === (compatibilityMappingId === undefined)) throw typedError("invalid_mapping_lookup");
+    const key = publicationId ?? compatibilityMappingId; if (typeof key !== "string" || !ID_PATTERN.test(key)) throw typedError("invalid_mapping_lookup");
+    validatePlayerLegacyDisplayCompatibilityReferences(this.state.conversation.playerLegacyDisplayCompatibilityRecords, this._conversationGraph());
+    const matches = this.state.conversation.playerLegacyDisplayCompatibilityRecords.filter((record) => publicationId ? record.publicationId === publicationId : record.compatibilityMappingId === compatibilityMappingId);
+    if (matches.length === 0) throw typedError("mapping_not_found"); if (matches.length !== 1) throw typedError("mapping_conflict");
+    return deepFreeze(structuredClone(matches[0]));
   }
 
   _assertNpcReactionCas(active, npcWorking) {
@@ -1056,6 +1081,7 @@ function commitState(target, source) {
   Object.assign(target, preparedState); target.players = publishedPlayers.map(({ current }) => current); rng.state = source.rng.state; target.rng = rng;
 }
 function typedError(code) { const error = new Error(code); error.code = code; return error; }
+function deepFreeze(value) { Object.freeze(value); for (const child of Object.values(value)) if (child && typeof child === "object" && !Object.isFrozen(child)) deepFreeze(child); return value; }
 function abortError() { const error = new Error("Aborted"); error.name = "AbortError"; return error; }
 
 function initializeSuspicion(players, rng, scenario) {

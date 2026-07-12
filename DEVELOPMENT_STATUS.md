@@ -1,12 +1,15 @@
 # Development Status
 
-Last updated: 2026-07-12
+Last updated: 2026-07-13
 
 ## Current State
 
-- Conversation pipeline migration Phase 1 domain contracts and renderers through Phase 5 player structured consumer migration are implemented.
-- Migration Phase 2 shadow transport, Phase 3 authoritative candidate validation, Phase 4 atomic player conversation commit, and Phase 5 player read/display migration are protected by separate default-off flags with strict dependencies.
-- With Phase 5 enabled, `PlayerUtterancePublishedRecord` is the sole active player display trigger in browser and CLI. Legacy player entries remain stored for rollback but are not displayed; NPC display remains on the provisional legacy path.
+- Conversation pipeline migration Phases 1-4 are implemented from `master`: pure domain contracts/renderers, shadow transport, authoritative candidate validation, and atomic player conversation commit. Their feature flags remain default-off with strict dependencies.
+- Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. The session-scoped mapping registry, immutable strict lookup, and fail-closed replay validation are available on this branch.
+- Migration Phase 5 implementation exists only on this Draft branch and is not complete or merged. Its current consumer still performs position-based legacy replacement and must be changed to exact compatibility-mapping resolution.
+- Sink-success receipts, explicit acknowledgement, retry/stale-ack handling, and browser/CLI behavioral tests are not implemented. The mapping-writer prerequisite has been incorporated from master. Phase 5 remains Draft pending exact mapping consumption, sink-success receipts, explicit acknowledgement, retry/stale-ack handling, and browser/CLI behavioral tests.
+- `PlayerUtterancePublishedRecord` becoming the sole active browser/CLI player display trigger is target behavior only when the Phase 5 flag is enabled after the remaining work is completed and reviewed. Until then, the Phase 4 legacy player display remains authoritative; the NPC display remains on the provisional legacy path.
+- Exact replay performs no redisplay or provider call, and all migration feature flags remain default-off.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
 - 5-player werewolf prototype is implemented.
 - Current roles are 1 werewolf, 1 seer, and 3 citizens.
@@ -26,18 +29,18 @@ Last updated: 2026-07-12
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2-5 migration boundaries, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 242 automated tests.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 253 automated tests on this Draft branch.
 
 ## Last Verified
 
-- Date: 2026-07-12
+- Date: 2026-07-13
 - Commands:
   - `npm test`
   - `npm run sample`
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 242/242 tests passed. `npm run sample`, changed-module syntax checks, and `git diff --check` passed.
+- Result: 246/253 tests passed; 7 existing Phase 5 consumer tests currently fail with `history_projection_failure` after incorporating the Phase 4 mapping writer. `git diff --check` and the conflict-marker scan passed; later validation commands were not run because the required test gate failed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -75,7 +78,7 @@ Last updated: 2026-07-12
 - GitHub private repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- Local `master` contains local implementation commits that have not been pushed yet.
+- The Phase 5 branch is pushed to `origin` and tracked by an open Draft pull request; it is not merged or ready for review completion.
 - Game state is intentionally kept in memory only; save/load is not planned.
 
 ## Working Rule
