@@ -66,6 +66,7 @@
 - Generates `NpcReactionPlan` (discriminating between `canonical_only` and `controlled_commentary`).
 - Manages idempotency and stale response detection using `requestId` and `turnId`.
 - Owns all displayable text variants (`ControlledCommentaryVariant`) and templates.
+- During Phase 2 only, owns a separate runtime-only `ShadowInterpreterBinding`. Its shadow turn and snapshot version are transport-observation identities, never authoritative game metadata, and are replaced by engine-owned turn/state versions before Phase 3 begins.
 
 ### Server (Proxy)
 - Proxies requests to AI providers.
@@ -380,6 +381,8 @@ Claim idempotency uses deterministic canonical JSON with sorted object keys and 
 
 The record is created as an immutable staged value when input is received, before provider work, and is persisted authoritatively only by the atomic commit. Pending state may reference the staged ID. It is separate from prompts and model output. AI never rewrites `rawText` or binds `actorId`. Request, correlation, turn, and captured version must match the pending request; replay reuses the committed record. The raw-text bound exactly matches `InterpreterRequest`.
 
+Phase 2 calls this runtime-only precursor `ShadowPlayerInputRecord`. It belongs to `ShadowInterpreterBinding`, is available to the pending request, retains the same identity across transport retries, and may be discarded after completion or abort. It is not appended to a committed conversation graph and creates no `CommitResult` or publication. Its `rawText` is never written to developer observations. Phase 2 does not change the authoritative `PlayerInputRecord` schema.
+
 ### PlayerUtteranceDisplayPlan
 - **schemaVersion**: 1 (Integer, Required)
 - **displayPlanId**: ID (Required)
@@ -684,6 +687,14 @@ The Interpreter member forbids `resultingStateVersion`, `reactionPlanId`, `origi
 
 Interpreter pending stores the player precondition version. Renderer pending is created only after `NpcReactionCommit`, stores that committed resulting version, and starts only when it equals current authoritative version. Its originating input, locale, and correlation ID exactly equal the reaction plan and RendererRequest. Renderer response validation never compares against the old player precondition. Interpreter and Renderer request IDs are different/session-unique. Renderer `causationId` resolves to the NPC reaction commit result or reaction plan.
 
+In Phase 2, `InterpreterRequest.inputRecordId == PendingInterpreterRequest.inputRecordId == ShadowPlayerInputRecord.inputRecordId`. A transport `requestId` is never reused as an input-record ID.
+
+### ShadowInterpreterBinding (Phase 2 runtime only)
+
+`ShadowInterpreterBinding` requires exactly `schemaVersion: 1`, `sessionId: ID`, `inputRecordId: ID`, `shadowTurnId: ID`, and `shadowSnapshotVersion: integer >= 0`, with `additionalProperties: false`. The browser session runtime is its sole owner; it is neither authoritative game state nor a persisted-domain object.
+
+Each new game receives a new session ID. Each logical shadow input receives one stable input-record ID and shadow turn ID. `shadowSnapshotVersion` increases monotonically within that session. Retries reuse the complete binding; edited or resubmitted input creates a new binding. Stale-session responses are rejected. Phase 2 maps `inputRecordId`, `shadowTurnId`, and `shadowSnapshotVersion` respectively to `InterpreterRequest.inputRecordId`, `turnId`, and `preconditionStateVersion`, without changing game phase or game state. Before Phase 3, these shadow fields are replaced by engine-owned authoritative turn/state metadata rather than being reinterpreted as authoritative values.
+
 The runtime map is keyed by request ID. Active records reject duplicate submission. Interpreter terminal records may be removed after their result/failure is durably handled in session. A controlled Renderer record remains active through reservation validation, finalization append, and finalization-result persistence; only then is it marked terminal, its controller released, and it moved to a bounded developer-only audit ring. Aborted requests use `aborting`, then terminal status after fallback finalization. The audit ring is not an authoritative finalization reference and is discarded on reload/session destruction.
 
 No provider operation changes authoritative phase. Timeout, abort, disconnect, schema/provider failure, or stale discard leaves phase/turn/version unchanged. Responses match the member-specific correlation, turn, operation, status, and version field. Pending-map state, not phase, blocks duplicate input. `player_question` and `npc_response` remain compatibility-only legacy phases and are not accepted-input phases in the structured pipeline; Phase 9 removes their premature-mutation call sites and legacy pending control.
@@ -717,9 +728,17 @@ interpretPlayerInput(request, { signal })
 
 ### InterpreterRequest
 
-Required fields are `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `locale: SupportedLocale`, `rawText: string[1..2000 code points]`, `playerContext: InterpreterPlayerContext`, `publicRoster: PublicRosterEntry[1..16]`, `allowedCandidateTypes: CandidateType[1..8]`, `publicContext: InterpreterPublicContext`, and `limits: InterpreterLimits`. There are no optional or nullable fields and `additionalProperties: false`.
+Required fields are `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `inputRecordId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `locale: SupportedLocale`, `rawText: string[1..2000 code points]`, `playerContext: InterpreterPlayerContext`, `publicRoster: PublicRosterEntry[1..16]`, `allowedCandidateTypes: CandidateType[1..8]`, `publicContext: InterpreterPublicContext`, and `limits: InterpreterLimits`. There are no optional or nullable fields and `additionalProperties: false`.
 
-`InterpreterPlayerContext` requires only `playerId: ID` and `publicStatus: PublicStatus`. `PublicRosterEntry` requires `playerId: ID`, `displayName: string[1..80]`, and `publicStatus: PublicStatus`. `InterpreterPublicContext` requires `publicEvents: PublicEventProjection[0..64]` and `publicClaims: ClaimProjection[0..64]`. `InterpreterLimits` requires `maxAlternatives: integer 1..3`, `maxActsPerAlternative: integer 1..4`, and `maxNestingDepth: integer 1..8`. Each nested type has no optional fields, rejects null, and has `additionalProperties: false`; IDs are unique and references resolve within the request.
+`InterpreterPlayerContext` requires only `playerId: ID` and `publicStatus: PublicStatus`. `PublicRosterEntry` requires `playerId: ID`, `displayName: string[1..80]`, and `publicStatus: PublicStatus`. `InterpreterPublicContext` requires `publicEvents: PublicEventProjection[0..64]`, `publicClaims: ClaimProjection[0..64]`, `publicVotes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, and `attackDeaths: AttackDeathProjection[0..16]`. `InterpreterLimits` requires `maxAlternatives: integer 1..3`, `maxActsPerAlternative: integer 1..4`, and `maxNestingDepth: integer 1..8`. Each nested type has no optional fields, rejects null, and has `additionalProperties: false`; IDs are unique and references resolve within the request.
+
+Phase 2 always includes the allowlisted public roster. The five structured projection arrays contain records only when the browser engine already owns their authoritative structured IDs. Until those records exist, an empty array means `authoritative structured-ID projection is not yet available`. Implementations must not synthesize IDs from legacy `publicInfo`, legacy claims, vote/execution/attack history, array indexes, display text, or any other unstable source. Legacy free-form public information is not added to `InterpreterRequest.rawText` or another model-facing field.
+
+Schema-valid Phase 2 request excerpt:
+
+```json
+{"schemaVersion":1,"requestId":"interpreter-1","correlationId":"correlation-1","inputRecordId":"shadow-input-1","turnId":"shadow-turn-1","preconditionStateVersion":0,"preconditionPhase":"day_discussion","locale":"ja-JP","rawText":"Aoiはどう思う？","playerContext":{"playerId":"player","publicStatus":"alive"},"publicRoster":[{"playerId":"player","displayName":"Player","publicStatus":"alive"},{"playerId":"npc-aoi","displayName":"Aoi","publicStatus":"alive"}],"allowedCandidateTypes":["question","uninterpretable"],"publicContext":{"publicEvents":[],"publicClaims":[],"publicVotes":[],"executions":[],"attackDeaths":[]},"limits":{"maxAlternatives":3,"maxActsPerAlternative":4,"maxNestingDepth":8}}
+```
 
 `CandidateType` is the closed enum matching the eight candidate discriminators. `allowedCandidateTypes` is derived from the phase permission table. The request never includes private roles, hidden teams, private results, NPC private memory, internal suspicion scores, API credentials, or provider diagnostics.
 
@@ -735,9 +754,13 @@ The model output is exactly the schema in section 7: structured semantic alterna
 
 This strict provider-layer schema requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ID`, `modelOutput: InterpreterModelOutput`, and `diagnostics: ProviderDiagnostics`; it has no optional or nullable fields and `additionalProperties: false`. `ProviderDiagnostics` is developer-only and requires `providerName: string[1..64]`, `model: string[1..128]`, `attemptCount: integer 1..3`, and `elapsedMs: integer >= 0`, with `additionalProperties: false`. Diagnostics never enter public projections.
 
+The provider receives the validated `InterpreterRequest`, including `inputRecordId`, unchanged across attempts. The result does not duplicate the input ID; the browser correlates it through the still-active pending request and complete shadow binding.
+
 ### InterpreterHttpResponse
 
 The HTTP success envelope requires `schemaVersion: 1`, `requestId: ID`, `correlationId: ClientCorrelationId`, `serverCorrelationId: ServerCorrelationId`, and `result: InterpreterProviderResult`, with no optional fields, no nulls, and `additionalProperties: false`. Client IDs must equal the validated request and nested provider result; server correlation is transport-owned.
+
+The endpoint strictly validates `InterpreterRequest.inputRecordId`. The browser accepts a success response only while the matching pending request still carries that same input-record ID, shadow turn, shadow snapshot version, and session binding.
 
 ## 21. Renderer contract
 
@@ -815,6 +838,7 @@ Targets must exist before the source or be created in the same atomic commit. Da
 
 | Source object | Reference field | Target object | Cardinality | Creation ordering | Replay rule | Deletion rule |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `InterpreterRequest` (Phase 2) | `inputRecordId` | runtime-only staged `ShadowPlayerInputRecord` | exactly 1 equal to pending input ID | before provider call | retry reuses complete shadow binding | removable after terminal handling |
 | `PlayerInputRecord` | `requestId` | `ConversationRequestIdentity` / idempotency record | exactly 1 | identity staged before provider; committed together | reuse same request/fingerprint | append-only |
 | `AcceptedSpeechAct` | `inputRecordId` | `PlayerInputRecord` | exactly 1 | same player commit | preserve ID | append-only |
 | `CanonicalClaim.source` (player) | `acceptedSpeechActIds` | `AcceptedSpeechAct[]` | 1-4 unique | same player commit; same actor/input | preserve ordered IDs; exact duplicate reuses claim | append-only |
@@ -853,7 +877,7 @@ The first implementation PR is Phase 1 only. It changes no production flow, prov
 | Phase | Objective | Exact likely existing files | New files | Behavior unchanged | Tests | Rollback / risks / deployment boundary | Removal condition |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1. Pure schemas, validators, canonical renderers | Add side-effect-free schemas, validators, ID helpers, canonical claim/event renderers | `src/validator.mjs`, `src/utteranceGuard.mjs`, `tests/validator.test.mjs`, `tests/utteranceGuard.test.mjs` | likely `src/conversationSchemas.mjs`, `src/canonicalRenderer.mjs`, matching tests | all production paths | schema, Unicode, renderer, idempotency units | independently deployable unused modules behind no call site; revert files; risk is schema drift | none; no old path removed |
-| 2. Interpreter transport in shadow mode | Call interpreter without consuming result; add pending runtime request tracking without phase mutation | `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/httpResponseProvider.mjs`, tests | interpreter transport tests | authoritative regex path and mutations | HTTP, timeout, abort, privacy, duplicate pending submission | `INTERPRETER_SHADOW_MODE`; disable flag; risk cost/latency | shadow parity and privacy gates pass |
+| 2. Interpreter transport in shadow mode | Call interpreter without consuming result; add runtime-only shadow binding, staged shadow input, and pending tracking without phase mutation | `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/httpResponseProvider.mjs`, tests | interpreter transport tests | authoritative regex path, turn/state metadata, and mutations | HTTP, timeout, abort, privacy, stable shadow identity, duplicate pending submission, empty unavailable structured projections | `INTERPRETER_SHADOW_MODE`; disable flag; risk cost/latency | shadow parity and privacy gates pass; binding is replaced before Phase 3 |
 | 3. Candidate validation without authoritative mutation | Validate/log candidates only | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current response and mutation behavior | candidate, phase, alternative tests | validation-only flag; disable; risk diagnostic divergence | stable shadow metrics |
 | 4. AcceptedSpeechAct and PublicEvent | Add `PlayerConversationCommit`, `ClaimSource`/`SemanticEventSource` strict unions, player provenance validation, rollback, CommitResult, and exact player display ownership | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-result helper if needed | NPC response provider path | provenance, conversion, rollback, duplicate/fingerprint, phase/version tests | dual-write flag; discard/rollback; provenance compatibility risk | all player claims/events validate one player source and replay atomically |
 | 5. Player Claim migration | Move player claims to canonical claim model/rendering | `src/gameEngine.mjs`, `public/browserApp.mjs`, tests | claim registry helper if needed | NPC claims and response generation | relation, display, replay tests | player-claim flag; rollback old rendering; compatibility risk in history | old/new claim parity and replay migration pass |
@@ -861,6 +885,8 @@ The first implementation PR is Phase 1 only. It changes no production flow, prov
 | 7. Controlled Renderer integration | Add locale propagation, slot/append ordering, baseline Renderer FinalizationSource, pending completion order, fallback finalization, CAS/late rejection, and same-session guarantee | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | display log, variant registry, finalization result tests | canonical-only bypasses Renderer; game state independent; reload recovery deferred | locale triple, ordering, success/failure, races, pending cleanup tests | renderer flag; fallback; risk unresolved reservation on reload | same-session reservations finalize exactly once without game-state mutation |
 | 8. Suspicion and memory migration | Move updates behind accepted events | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, tests | none expected | voting/night/win logic | atomic update, rollback, regression tests | per-effect flag; revert to old effect path; risk scoring changes | parity criteria and audit logs pass |
 | 9. Obsolete-path removal | Remove old single `displayOrder`, implicit-locale resolution, source-act-only claim key, durable references to runtime pending/audit records, mutable reservation, legacy provenance/phase/direct-text/duplicate-display paths | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `src/validator.mjs`, `src/utteranceGuard.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/browserApp.mjs`, `public/httpResponseProvider.mjs`, `tests/` | none | game rules/public behavior | full suite plus locale/order/idempotency migration fixtures | deploy after flags stable; rollback release; high history risk | split orders and stored locale fully migrated; no runtime-pending persistent reference remains |
+
+Phase 2 Interpreter output is observation-only. It creates no `AcceptedSpeechAct`, claim, event, commit result, publication, display change, phase mutation, authoritative state-version increment, suspicion/memory mutation, or replacement of the legacy classifier. Shadow transport identity and empty unavailable structured projections must not be carried forward as authoritative data in Phase 3.
 
 The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProvider.mjs` or `src/pseudoResponseProvider.mjs` today. Pseudo behavior currently lives in `src/responseProvider.mjs`, so migration plans use actual file names and may split files only in a separately reviewed phase.
 
@@ -878,6 +904,8 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Controlled-variant tests cover ID/version/locale/intent match, disabled/retired replay, and unknown references.
 - HTTP contract tests cover status mappings, 64 KiB, content type, malformed JSON, strict envelopes, and logging redaction.
 - Provider timeout/abort tests cover each attempt, backoff, deadline exhaustion, disconnect, and non-retryable failures.
+- Phase 2 shadow-binding tests prove request, pending, and staged-input IDs agree; retries reuse the binding; resubmission creates a new binding; session/version values are runtime-only and monotonic; and stale sessions are rejected.
+- Phase 2 projection tests require the public roster, include only records with authoritative structured IDs, permit empty unavailable structured arrays, and reject every synthesized legacy ID or raw legacy text.
 - Migration compatibility tests cover feature flags, dual-read/write boundaries, rollback fixtures, and old history.
 - Existing game-progression regression tests continue covering discussion, question, response, vote, execution, night, seer, attack, and win check.
 - Atomic tests cover successful commit, prepare failure with unchanged state, exception rollback, multi-act all-or-nothing, renderer failure after commit, and clarification with no commit.
@@ -916,7 +944,7 @@ Root object depth is 1; each nested object or array adds 1; primitives add none.
 
 ### Correlation and replay
 
-The engine validates Interpreter responses against `preconditionStateVersion` and Renderer responses against the committed `resultingStateVersion`; both also match request, client correlation, turn, schema, operation, and pending member. Renderer additionally matches `reactionPlanId`. Duplicate committed requests return stored CommitResult; replay uses stored events, display plans, publications, and exact variants without reinterpreting or redisplaying.
+In Phase 2, the browser runtime validates Interpreter responses against the complete `ShadowInterpreterBinding`; its request, input, client correlation, shadow turn, shadow snapshot version, session, schema, operation, and pending member must match. This does not validate or mutate authoritative game metadata. From Phase 3 onward, the engine validates Interpreter responses against authoritative `preconditionStateVersion` and turn. Renderer responses use the committed `resultingStateVersion` and additionally match `reactionPlanId`. Duplicate committed requests return stored CommitResult; replay uses stored events, display plans, publications, and exact variants without reinterpreting or redisplaying.
 
 | Invariant | Status |
 | :--- | :--- |
@@ -942,7 +970,10 @@ The engine validates Interpreter responses against `preconditionStateVersion` an
 | **Every intended reaction descriptor** | REPRESENTED EXACTLY ONCE in display output |
 | **Renderer failure rolls back committed state** | PROHIBITED |
 | **Clarification creates authoritative objects** | PROHIBITED |
-| **Interpreter pending version** | PRECONDITION state version |
+| **Interpreter pending version** | PHASE 2 SHADOW SNAPSHOT VERSION; PHASE 3+ AUTHORITATIVE PRECONDITION VERSION |
+| **Phase 2 shadow identity** | RUNTIME-ONLY, SESSION-SCOPED, NEVER AUTHORITATIVE |
+| **Phase 2 synthesized structured IDs** | PROHIBITED |
+| **Phase 2 Interpreter output consumption** | OBSERVATION ONLY |
 | **Renderer pending version** | COMMITTED RESULTING state version |
 | **Player and NPC commits** | SEPARATE ATOMIC COMMITS |
 | **Canonical NPC segment references uncommitted object** | PROHIBITED |
