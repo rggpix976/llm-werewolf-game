@@ -482,6 +482,114 @@ Semantic events never initiate display. The publication event resolves its `inpu
 
 Examples: `Beni is werewolf` followed by `Beni is not_werewolf` is a contradiction when the same actor made both result claims about Beni. `Beni is werewolf` followed by `Aoi is not_werewolf` is not a contradiction because the subjects differ.
 
+## 11A. Player Result-Claim Authorization Baseline
+
+This section is normative for player-origin `ResultClaimCandidate`, `AcceptedResultClaim`, `ResultCanonicalClaim`, and `ResultClaimRecordedEvent`. It separates whether an assertion may enter the conversation ledger from whether its payload matches hidden game truth.
+
+### Terms and authority
+
+- **Claim legality** means that a schema-valid player assertion is permitted by the current phase, actor class, target constraints, and authoritative request binding. Legality is decided by the browser engine from public identity and lifecycle state.
+- **Claim truthfulness** means whether `result` matches the target's hidden authoritative role at that moment. Truthfulness is not an acceptance condition and is not recorded in the claim schema.
+- **Known information** is a fact available to an actor from an authoritative source. It is relevant only when a rule explicitly requires knowledge; this baseline does not require it for a player result claim.
+- **Private known information** is actor-scoped authoritative information that is not public. The current game has NPC-owned private seer results but no player-owned private-result registry.
+- **Public known information** is a structured public event or claim visible to all participants. Its existence does not make a new player assertion more or less legal.
+- **Hearsay or attributed information** is content presented as originating from another speaker or source. The current candidate and claim schemas have no attribution field, so a `ResultClaimCandidate` is recorded only as the player's own assertion; attribution is not preserved or inferred.
+- **Fabricated claim** and **bluff** mean an assertion made without matching knowledge, or intentionally differing from believed or actual truth. Both are legal under this baseline.
+- **Unsupported claim** is an utterance whose intended form cannot be represented by the current strict candidate union, such as a request to persist attribution as provenance. It is not silently upgraded with invented fields.
+- **Unauthorized claim** is schema-valid but fails a phase, actor, target, binding, or current-state precondition.
+- **Repeated claim** and **contradictory claim** are relations to prior committed `CanonicalClaim` records. They are not truth verdicts.
+
+`CanonicalClaim` records what the player authoritatively claimed, not what is true. The Interpreter classifies the utterance structure; it does not inspect hidden truth. The engine authorizes the structure without exposing hidden role, team, NPC memory, private seer results, or suspicion values to the provider.
+
+### Baseline policy
+
+A player-origin result claim is legal when all of the following are true:
+
+1. The candidate and enclosing alternative satisfy the strict schemas and source-span rules.
+2. The captured and current session, turn, phase, version, actor, input, request, correlation, and fingerprint preconditions match.
+3. `result` is exactly `werewolf` or `not_werewolf`.
+4. The phase is `day_discussion`, the only baseline phase that permits `result_claim`.
+5. The target is a public NPC participant in the captured roster and still belongs to the same active game session at final authorization.
+6. The target ID is neither the player actor ID nor another player-class ID.
+
+Alive and dead public NPCs are both valid targets. Execution or attack does not erase prior conversational identity. A participant removed by reset, session replacement, or roster replacement is not a valid target. Hidden role or team never affects target authorization.
+
+The player has no game role and no private investigation-result store in the current game model. Consequently, player role, seer status, evidence ownership, public-result existence, actual truth, and possession of private information are deliberately not legality conditions. A non-seer player, an uninformed player, and a player making a bluff use the same legal assertion contract. The engine never derives authority from a same-input role claim, a prior role claim, raw-text phrases such as "I heard", or the target's hidden state.
+
+This policy requires no provenance field. Direct private knowledge, public knowledge, hearsay, and fabrication cannot be distinguished by the current candidate. They are intentionally normalized to one player-owned assertion. A future feature that must preserve attribution or prove evidence ownership requires a separately reviewed schema version; it must not infer provenance from text.
+
+### Normative decision table
+
+| Condition | Schema | Legality / truth relevance | Phase 3 outcome | Phase 4 artifacts | Structured state/version effect |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Valid claim about a public NPC | valid | legal; truth irrelevant | valid diagnostic | accepted act, canonical claim, claim event, display plan and one player publication | one atomic `N -> N+1` |
+| Bluff, fabrication, or false result | valid | legal; truth irrelevant | valid diagnostic | same as any legal claim; no truth metadata | one atomic `N -> N+1` |
+| Private, public, or hearsay basis | valid | legal; basis is not persisted | valid diagnostic | recorded as the player's own assertion | one atomic `N -> N+1` |
+| True but wrong phase or target class | valid | unauthorized despite truth | whole alternative rejected with the applicable reason | none | no structured commit |
+| Unknown or old-session target | valid | unauthorized | whole alternative rejected as `invalid_reference` or stale session | none | no structured commit |
+| Player/self target | valid | unauthorized target class | whole alternative rejected as `invalid_target_class` | none | no structured commit |
+| Invalid result enum or extra provenance field | invalid | legality not evaluated | invalid provider response | none | none |
+| Phase other than `day_discussion` | valid | unauthorized phase | whole alternative rejected as `candidate_not_allowed` | none | no structured commit |
+| Missing evidence or provenance | valid | evidence is not required | valid diagnostic | normal player assertion | one atomic `N -> N+1` |
+| Prior identical claim | valid | legal repeat; truth irrelevant | valid diagnostic | new claim with `repeatsClaimId` | one atomic `N -> N+1` |
+| Prior same-target different result | valid | legal contradiction; truth irrelevant | valid diagnostic | new claim with `contradictsClaimIds` | one atomic `N -> N+1` |
+| Unsupported attributed-provenance form | not representable as attributed provenance | unsupported, not fabricated metadata | `uninterpretable`/clarification when no faithful candidate exists | none | no structured commit |
+| Stale authorization context | valid | authorization must be current | stale diagnostic | none | no structured commit |
+
+An unauthorized candidate rejects its entire alternative. It never produces a partial accepted act, claim, event, display plan, publication, idempotency result, or structured version transition. Phase 3 records only a bounded diagnostic. Phase 4 repeats every authorization and CAS check immediately before publication. Neither layer emits a free-form reason that could reveal hidden truth. These failures are non-retryable unless the stale lifecycle rules explicitly require a new player input.
+
+The logical turn was already allocated when the engine accepted the top-level command. Rejection creates no Phase 4 structured transaction. The independent legacy compatibility action may still perform its existing transaction and version transition; that is not a result-claim commit and must not create structured claim objects.
+
+### Repeat and contradiction
+
+Relations use only prior committed player-origin `CanonicalClaim` records:
+
+- same actor, same target, same result: repeat the earliest matching claim;
+- same actor, same target, different result: contradict all prior conflicting result claims, in authoritative claim order;
+- same actor, different target: neither repeat nor contradiction;
+- different actor, same target: neither repeat nor contradiction;
+- attributed language and own assertion: the current schema stores both as the player's own assertion, so the same actor/target/result rules apply;
+- a legal bluff participates in repeat and contradiction exactly like any other legal claim;
+- an unauthorized claim never enters the claim ledger and cannot become a relation target.
+
+Repeat and contradiction metadata does not block acceptance and does not amend an earlier claim. `claimRevision` remains `1`; amendment remains unsupported. Relation calculation is repeated against current authoritative claim state during the Phase 4 final authorization and pure preparation step.
+
+### Phase responsibility and legacy coexistence
+
+| Artifact or behavior | Phase 3 | Phase 4 | Phase 5 | Authoritative owner / coexistence |
+| :--- | :--- | :--- | :--- | :--- |
+| `ResultClaimCandidate` | strict validation and diagnostic authorization | final revalidation only | unchanged | Interpreter output bound and checked by browser engine |
+| `AcceptedResultClaim` | forbidden | created and committed | read only | Phase 4 player commit is sole writer |
+| `ResultCanonicalClaim` and relation metadata | forbidden | created and committed | read only | Phase 4 canonical claim registry is sole writer |
+| `ResultClaimRecordedEvent` | forbidden | created and committed | read only | Phase 4 semantic event registry is sole writer |
+| Display plan canonical-claim segment | forbidden | created with the claim | consumed for rendering/history | Phase 4 plan writer; Phase 5 consumer migration |
+| Player publication record | forbidden | exactly one created per committed input | consumed without redisplay | Phase 4 display-log writer |
+| Legacy `publicClaims` | NPC-only behavior unchanged | no player-origin dual-write | unchanged until its NPC migration | no player-origin legacy claim registry exists today |
+| Legacy player question log/UI | diagnostic behavior unchanged | remains the active player-facing read/display path | consumer switches to structured publication/plan | Phase 4 creates structured records but does not double-render them |
+| Claim rendering and player history | unchanged | no consumer migration | moves to canonical claims and committed display plans | Phase 5 reads Phase 4 records; it never creates a second claim |
+| Idempotency result | forbidden | created atomically with all objects | reused | Phase 4 is sole writer; replay is read-only |
+
+Phase 4 is the sole writer of all player-origin structured claim artifacts, including `CanonicalClaim`, repeat/contradiction metadata, display plan, player publication, and commit result. There is no player-origin legacy claim registry to dual-write. The existing legacy player-question log and UI remain active as compatibility consumers, but they do not register player claims. Structured publications are stored but not additionally rendered during Phase 4, preventing double display.
+
+Phase 5 migrates player-facing claim rendering, player conversation history projection, and display-plan/publication consumers to the records already committed by Phase 4. It does not generate, re-register, or re-version a claim. After parity and replay tests pass, Phase 5 disables the legacy player-input display consumer; physical deletion of obsolete compatibility paths remains Phase 9. Phase 5 read/render migration causes no game-rule version increment.
+
+Changing the Phase 4 feature flag during a session does not backfill old inputs. When off, only the legacy path runs. When on with Phase 3 validation enabled, new valid inputs receive one structured player commit plus the existing compatibility transaction; each is a separately classified transaction. Turning the flag off stops new structured writes and leaves committed records readable. Replay never dual-writes or redisplays either path.
+
+### Privacy and implementation invariants
+
+- Private seer results remain NPC-owned and are never projected merely to authorize a player assertion.
+- The provider never receives hidden actual role/team, private result, private memory, or a truth label.
+- Diagnostics and public errors identify only structural authorization failures and cannot reveal whether a result is true.
+- `CanonicalClaim` stores only the player's canonical assertion and provenance already defined by `PlayerAcceptedActClaimSource`; it is not a hidden-truth record.
+- Semantic claim events announce that a claim was recorded, not that its payload is true, and never trigger display.
+- Exact replay returns the stored result without new claim relations, IDs, ordering, display, provider call, or version increment.
+- A successful multi-act Phase 4 player commit increments exactly once regardless of claim count. Prepare, authorization, CAS, or publication failure leaves no structured object or counter gap.
+- Phase 3 diagnostics cause no version transition. Phase 4 rejection causes no structured version transition. Phase 5 read/render migration causes no game-rule version transition.
+
+### Required implementation tests
+
+Phase 3 and Phase 4 tests must cover legal direct, public, private-language, hearsay-language, fabricated, false, and true assertions without inspecting hidden truth; non-seer behavior; public alive/dead NPC targets; rejected self/player/unknown/old-session targets; invalid enum and phase; stale authorization; whole-alternative rejection; privacy-safe errors; repeat and contradiction relations; exact replay; rollback; one version increment; and the Phase 3/4/5 feature/read/write matrix. Tests must prove that Phase 4 and Phase 5 never double-create or double-display a claim.
+
 ## 12. `PlayerInputRecord` and `PlayerUtteranceDisplayPlan`
 
 ### PlayerInputRecord
@@ -1009,9 +1117,9 @@ The first implementation PR is Phase 1 only. It changes no production flow, prov
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1. Pure schemas, validators, canonical renderers | Add side-effect-free schemas, validators, ID helpers, canonical claim/event renderers | `src/validator.mjs`, `src/utteranceGuard.mjs`, `tests/validator.test.mjs`, `tests/utteranceGuard.test.mjs` | likely `src/conversationSchemas.mjs`, `src/canonicalRenderer.mjs`, matching tests | all production paths | schema, Unicode, renderer, idempotency units | independently deployable unused modules behind no call site; revert files; risk is schema drift | none; no old path removed |
 | 2. Interpreter transport in shadow mode | Call interpreter without consuming result; add runtime-only shadow binding, staged shadow input, and pending tracking without phase mutation | `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/httpResponseProvider.mjs`, tests | interpreter transport tests | authoritative regex path, turn/state metadata, and mutations | HTTP, timeout, abort, privacy, stable shadow identity, duplicate pending submission, empty unavailable structured projections | `INTERPRETER_SHADOW_MODE`; disable flag; risk cost/latency | shadow parity/privacy gates pass; discard—not promote—the binding before Phase 3 |
-| 3. Candidate validation without authoritative mutation | Implement section 6A engine-owned session/turn/version lifecycle; bind it to Interpreter request/pending; compare every stale dimension; validate/log candidates only; never commit, advance turn, or increment version from an Interpreter outcome | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current player/NPC response behavior and all AI-independent game rules | candidate, phase, alternative, lifecycle, stale/late/reset, no-mutation tests | independent validation-only flag; disable without data migration; risk diagnostic divergence | authoritative lifecycle and exact binding/stale rules are implemented/tested; stable validation metrics; no shadow authority remains |
-| 4. AcceptedSpeechAct and PublicEvent | Add atomic `PlayerConversationCommit` using section 6A CAS: one `N -> N+1` transition per multi-object/multi-act commit, stored CommitResult replay without increment, exact rollback without gaps; add strict player provenance and display ownership | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-result helper if needed | NPC response provider path | provenance, conversion, rollback, duplicate/fingerprint, phase/version tests | dual-write flag; discard/rollback; provenance compatibility risk | all player objects share the defined pre/result versions, validate one player source, replay atomically, and failed commits leave version unchanged |
-| 5. Player Claim migration | Move player claims to canonical claim model/rendering | `src/gameEngine.mjs`, `public/browserApp.mjs`, tests | claim registry helper if needed | NPC claims and response generation | relation, display, replay tests | player-claim flag; rollback old rendering; compatibility risk in history | old/new claim parity and replay migration pass |
+| 3. Candidate validation without authoritative mutation | Implement section 6A engine-owned session/turn/version lifecycle; bind it to Interpreter request/pending; compare every stale dimension; validate/log candidates only, including section 11A result-claim structural authorization without hidden-truth adjudication; never commit, advance turn, or increment version from an Interpreter outcome | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current player/NPC response behavior and all AI-independent game rules | candidate, result-claim policy, phase, alternative, lifecycle, stale/late/reset, privacy, no-mutation tests | independent validation-only flag; disable without data migration; risk diagnostic divergence | authoritative lifecycle, exact binding/stale rules, and section 11A authorization are implemented/tested; stable validation metrics; no shadow authority remains |
+| 4. AcceptedSpeechAct, PublicEvent, and player structured claim write | Add atomic `PlayerConversationCommit` using section 6A CAS: one `N -> N+1` transition per multi-object/multi-act commit, stored CommitResult replay without increment, exact rollback without gaps; create player-origin accepted acts, events, canonical claims and relations, display plans, and player publications under section 11A; do not render the structured publication yet | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-result helper if needed | NPC response provider and legacy player-question display path | provenance, conversion, result-claim authorization, rollback, duplicate/fingerprint, phase/version, no-double-display tests | structured-write flag; disable new writes without deleting committed records; no player-origin legacy claim dual-write | all player objects share the defined pre/result versions, one Phase 4 writer owns every player claim artifact, replay is atomic, and failed commits leave version unchanged |
+| 5. Player claim consumer and history migration | Read Phase 4 canonical claims and committed display plans/publications for player-facing rendering and history; switch consumers without creating claims, relations, events, plans, publications, or game-rule version transitions | `src/gameEngine.mjs`, `public/browserApp.mjs`, tests | none expected | NPC claims and response generation | rendering parity, history projection, replay/no-redisplay, consumer-switch tests | read-path flag; rollback to legacy player-question display; committed Phase 4 records remain authoritative | canonical rendering/history parity passes, structured publication is the only active player display consumer, and no duplicate claim/display remains |
 | 6. NpcReactionPlan | Add originating input, stored locale, empty causation support for information-only reactions, descriptor provenance, past-only causation, atomic commit, and provenance-specific idempotency | `src/responseGenerator.mjs`, `src/gameEngine.mjs`, `src/responseProvider.mjs`, tests | reaction-plan/commit validator if not Phase 1 | existing provider remains selected | origin/locale consistency, empty causation, information-only, cycle, rollback tests | reaction-commit flag; discard/rollback; provenance compatibility risk | every plan traces to one input and works with zero or more prior semantic events |
 | 7. Controlled Renderer integration | Add locale propagation, slot/append ordering, baseline Renderer FinalizationSource, pending completion order, fallback finalization, CAS/late rejection, and same-session guarantee | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | display log, variant registry, finalization result tests | canonical-only bypasses Renderer; game state independent; reload recovery deferred | locale triple, ordering, success/failure, races, pending cleanup tests | renderer flag; fallback; risk unresolved reservation on reload | same-session reservations finalize exactly once without game-state mutation |
 | 8. Suspicion and memory migration | Move updates behind accepted events | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, tests | none expected | voting/night/win logic | atomic update, rollback, regression tests | per-effect flag; revert to old effect path; risk scoring changes | parity criteria and audit logs pass |
@@ -1103,6 +1211,11 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Controlled commentary source** | engine-owned variant registry |
 | **Unknown fields** | REJECTED |
 | **Private facts in provider projection** | PROHIBITED |
+| **Player result-claim legality depends on hidden truth or actor knowledge** | PROHIBITED |
+| **Legal player bluff/fabricated result claim** | RECORDED AS PLAYER ASSERTION, NEVER AS TRUTH |
+| **Player structured claim artifact writer** | PHASE 4 ONLY |
+| **Player claim render/history consumer migration** | PHASE 5; NO CLAIM RE-CREATION OR VERSION TRANSITION |
+| **Player-origin canonical/legacy claim dual-write** | PROHIBITED; NO PLAYER LEGACY CLAIM REGISTRY EXISTS |
 | **Duplicate event replay** | NO-OP |
 | **State-changing content in commentary variant** | PROHIBITED |
 | **Canonical descriptor coverage** | EXACTLY ONCE |
