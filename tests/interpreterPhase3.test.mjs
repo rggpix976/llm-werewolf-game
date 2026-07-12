@@ -21,7 +21,7 @@ test("authoritative lifecycle allocates opaque turns and one version per compati
 
 test("vote and night remain one transaction each and authoritative lifecycle is flag-independent", async () => {
   const instance = game(); await instance.dispatchPlayerAction({ type: "advance_vote" }); assert.deepEqual([instance.state.turnOrder, instance.state.stateVersion], [1, 1]); await instance.dispatchPlayerAction({ type: "run_night" }); assert.deepEqual([instance.state.turnOrder, instance.state.stateVersion], [2, 2]);
-  assert.deepEqual(getRuntimeConfig(parseConfig({ INTERPRETER_SHADOW_MODE: "true", INTERPRETER_VALIDATION_MODE: "true" })), { provider: "pseudo", interpreterShadowMode: true, interpreterValidationMode: true });
+  assert.deepEqual(getRuntimeConfig(parseConfig({ INTERPRETER_SHADOW_MODE: "true", INTERPRETER_VALIDATION_MODE: "true" })), { provider: "pseudo", interpreterShadowMode: true, interpreterValidationMode: true, playerConversationCommitMode: false });
 });
 
 test("clarification continuation reuses the logical turn without reusing request identity", async () => {
@@ -50,7 +50,7 @@ test("alternative semantics never select by confidence and reject the whole cand
   const act = { type: "question", targetId: "npc1", topic: "opinion", sourceSpan: { start: 0, end: 4 } }, alternative = (id, confidence, speechActs = [act]) => ({ alternativeId: id, confidence, speechActs });
   assert.equal(validatePhase3Response(envelope([alternative("a", 0.1), alternative("b", 0.9)]), binding, instance.state).reasonCode, "multiple_alternatives");
   const rejected = validatePhase3Response(envelope([alternative("a", 1, [act, { type: "question", targetId: "missing", topic: "opinion", sourceSpan: { start: 4, end: 5 } }])]), binding, instance.state); assert.equal(rejected.category, "rejected"); assert.equal(rejected.candidateCount, 2);
-  const claimRejected = validatePhase3Response(envelope([alternative("r", 1, [{ type: "result_claim", targetId: "npc1", result: "werewolf", sourceSpan: { start: 0, end: 5 } }])]), binding, instance.state); assert.equal(claimRejected.reasonCode, "unauthorized_known_information");
+  const claimAccepted = validatePhase3Response(envelope([alternative("r", 1, [{ type: "result_claim", targetId: "npc1", result: "werewolf", sourceSpan: { start: 0, end: 5 } }])]), binding, instance.state); assert.equal(claimAccepted.reasonCode, "candidate_valid");
   const uninterpretable = { type: "uninterpretable", reason: "gibberish", sourceSpan: { start: 0, end: 5 } }; assert.equal(validatePhase3Response(envelope([alternative("u", 1, [uninterpretable])]), binding, instance.state).reasonCode, "uninterpretable");
 });
 

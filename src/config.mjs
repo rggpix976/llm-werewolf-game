@@ -14,8 +14,10 @@ export function parseConfig(env = process.env) {
     provider,
     interpreterShadowMode: parseBoolean(env.INTERPRETER_SHADOW_MODE, false, "INTERPRETER_SHADOW_MODE"),
     interpreterValidationMode: parseBoolean(env.INTERPRETER_VALIDATION_MODE, false, "INTERPRETER_VALIDATION_MODE"),
+    playerConversationCommitMode: parseBoolean(env.PLAYER_CONVERSATION_COMMIT_MODE, false, "PLAYER_CONVERSATION_COMMIT_MODE"),
     openai: null
   };
+  if (config.playerConversationCommitMode && !config.interpreterValidationMode) throw new Error("PLAYER_CONVERSATION_COMMIT_MODE requires INTERPRETER_VALIDATION_MODE=true.");
 
   if (provider === "openai") {
     const apiKey = (env.OPENAI_API_KEY || "").trim();
@@ -44,7 +46,8 @@ export function getRuntimeConfig(config) {
   const result = {
     provider: config.provider,
     interpreterShadowMode: config.interpreterShadowMode === true,
-    interpreterValidationMode: config.interpreterValidationMode === true
+    interpreterValidationMode: config.interpreterValidationMode === true,
+    playerConversationCommitMode: config.playerConversationCommitMode === true
   };
 
   if (config.openai) {

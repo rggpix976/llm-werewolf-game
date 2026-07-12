@@ -5,7 +5,8 @@ Last updated: 2026-07-12
 ## Current State
 
 - Conversation pipeline migration Phase 1 pure domain definitions, strict validators, deterministic ID helpers, canonical renderers, and unit tests are implemented but intentionally not integrated into production game flow.
-- Migration Phase 2 shadow transport and Phase 3 authoritative candidate validation are implemented behind separate default-off flags. Phase 3 binds engine-owned metadata and records redacted diagnostics without consuming Interpreter output or creating Phase 4 artifacts.
+- Migration Phase 2 shadow transport, Phase 3 authoritative candidate validation, and Phase 4 atomic player conversation commit are implemented behind separate default-off flags. Phase 4 requires Phase 3 and writes structured player artifacts at `N+1`; the existing NPC response effects publish provisionally at `N+2`.
+- Phase 4 keeps the legacy player-question entry as the only visible browser/CLI trigger. Structured publications are stored but remain unconsumed until Phase 5, and exact replay performs no redisplay or provider call.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
 - 5-player werewolf prototype is implemented.
 - Current roles are 1 werewolf, 1 seer, and 3 citizens.

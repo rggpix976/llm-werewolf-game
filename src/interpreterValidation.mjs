@@ -16,7 +16,7 @@ export function createPhase3Binding({ state, rawText, targetNpcId, createId }) {
   const publicRoster = [{ playerId: "player", displayName: "Player", publicStatus: "alive" }, ...state.players.map((player) => ({ playerId: player.id, displayName: player.name, publicStatus: player.alive ? "alive" : "dead" }))];
   const allowedCandidateTypes = [...phaseCandidates[state.phase]];
   const request = validateInterpreterRequest({ schemaVersion: 1, requestId, correlationId, inputRecordId, turnId: state.turnId, preconditionStateVersion: state.stateVersion, preconditionPhase: state.phase, locale: "ja-JP", rawText, playerContext: { playerId: "player", publicStatus: "alive" }, publicRoster, allowedCandidateTypes, publicContext: { publicEvents: [], publicClaims: [], publicVotes: [], executions: [], attackDeaths: [] }, limits: { maxAlternatives: 3, maxActsPerAlternative: 4, maxNestingDepth: 8 } });
-  const inputRecord = validatePlayerInputRecord({ schemaVersion: 1, inputRecordId, requestId, correlationId, turnId: state.turnId, capturedStateVersion: state.stateVersion, actorId: "player", rawText, locale: "ja-JP", createdOrder: state.turnOrder });
+  const inputRecord = validatePlayerInputRecord({ schemaVersion: 1, inputRecordId, requestId, correlationId, turnId: state.turnId, capturedStateVersion: state.stateVersion, actorId: "player", rawText, locale: "ja-JP", createdOrder: state.conversation?.nextCreatedOrder ?? state.turnOrder });
   const pendingRecord = validatePendingConversationRequest({ schemaVersion: 1, pendingType: "interpreter", requestId, correlationId, turnId: state.turnId, preconditionStateVersion: state.stateVersion, inputRecordId, targetNpcId, operation: "interpret_player_input", status: "pending", startedAt: new Date().toISOString() });
   return deepFreeze({ gameSessionId: state.gameSessionId, turnId: state.turnId, turnOrder: state.turnOrder, preconditionStateVersion: state.stateVersion, preconditionPhase: state.phase, actorId: "player", inputRecordId, requestId, correlationId, targetNpcId, requestFingerprint: sha256Fingerprint(request), request: structuredClone(request), pendingRecord: structuredClone(pendingRecord), stagedInput: { status: "staged", record: structuredClone(inputRecord) } });
 }
@@ -28,7 +28,7 @@ export function validatePhase3Response(response, binding, state) {
   if (alternatives.length > 1) return outcome("clarification", "multiple_alternatives", alternatives);
   const acts = alternatives[0].speechActs;
   if (acts.length === 1 && acts[0].type === "uninterpretable") return outcome("clarification", "uninterpretable", alternatives);
-  try { validateSemanticSet(acts, binding, state); return outcome("validated", "candidate_valid", alternatives); }
+  try { validateSemanticSet(acts, binding, state); return { ...outcome("validated", "candidate_valid", alternatives), selectedAlternative: deepFreeze(structuredClone(alternatives[0])) }; }
   catch (error) { return { ...outcome("rejected", error.code ?? "candidate_rejected", alternatives), rejectionPath: error.path }; }
 }
 
@@ -61,7 +61,6 @@ function validateSemanticSet(acts, binding, state) {
       if (act.targetId === "player") fail(`speechActs[${index}].targetId`, "invalid_target_class");
       if (["question", "suspicion", "vote_declaration"].includes(act.type) && target.publicStatus !== "alive") fail(`speechActs[${index}].targetId`, "target_not_alive");
     }
-    if (act.type === "result_claim") fail(`speechActs[${index}]`, "unauthorized_known_information");
   }
   if (binding.preconditionPhase !== state.phase) fail("preconditionPhase", "stale_phase");
 }

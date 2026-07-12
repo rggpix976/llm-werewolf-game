@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added the default-off Migration Phase 4 atomic `PlayerConversationCommit`, including structured player artifacts, canonical result-claim assertions and relations, stored idempotency results, and the temporary legacy display compatibility delta.
+- Split Phase 4-enabled conversation handling into player `N -> N+1` and provisional NPC reaction `N+1 -> N+2` transactions. Exact replay calls neither provider and provider failure preserves the player commit without publishing `N+2`.
+- Added failure-injection, replay, version-ledger, claim, Unicode display-plan, feature-policy, and Phase 4-off regression coverage.
+
 ## 2026-07-12
 
 - Implemented Migration Phase 3 authoritative Interpreter validation behind the default-off `INTERPRETER_VALIDATION_MODE` flag.
