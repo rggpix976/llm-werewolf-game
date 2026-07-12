@@ -34,7 +34,7 @@ export function createRequestHandler(options = {}) {
   const provider = options.provider || createProvider(config);
   const rateLimiter = options.rateLimiter || createRateLimiter(config);
   const interpreterRateLimiter = options.interpreterRateLimiter || createRateLimiter(config);
-  const interpreterProvider = config.interpreterShadowMode ? (options.interpreterProvider || createInterpreterProvider(config)) : null;
+  const interpreterProvider = config.interpreterShadowMode || config.interpreterValidationMode ? (options.interpreterProvider || createInterpreterProvider(config)) : null;
   const interpreterRequests = new Map();
 
   return async (request, response) => {
@@ -52,7 +52,7 @@ export function createRequestHandler(options = {}) {
       }
 
       if (pathname === "/api/interpret-player-input" && request.method === "POST") {
-        if (!config.interpreterShadowMode) { response.writeHead(404, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify({ error: "Not found" })); return; }
+        if (!config.interpreterShadowMode && !config.interpreterValidationMode) { response.writeHead(404, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify({ error: "Not found" })); return; }
         return await handleInterpreterRequest(request, response, interpreterProvider, interpreterRateLimiter, interpreterRequests);
       }
 

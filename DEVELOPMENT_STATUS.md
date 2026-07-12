@@ -1,10 +1,12 @@
 # Development Status
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 ## Current State
 
 - Conversation pipeline migration Phase 1 pure domain definitions, strict validators, deterministic ID helpers, canonical renderers, and unit tests are implemented but intentionally not integrated into production game flow.
+- Migration Phase 2 shadow transport and Phase 3 authoritative candidate validation are implemented behind separate default-off flags. Phase 3 binds engine-owned metadata and records redacted diagnostics without consuming Interpreter output or creating Phase 4 artifacts.
+- `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
 - 5-player werewolf prototype is implemented.
 - Current roles are 1 werewolf, 1 seer, and 3 citizens.
 - The game can run through player question, NPC response, vote, execution, night, seer action, werewolf attack, and win check.
@@ -23,18 +25,18 @@ Last updated: 2026-07-11
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, response-provider invariants, developer diagnostics, configuration, request validation, and API endpoints are covered by 95 automated tests.
+- Core game, conversation contracts, Phase 2/3 Interpreter boundaries, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 207 automated tests.
 
 ## Last Verified
 
-- Date: 2026-07-01
+- Date: 2026-07-12
 - Commands:
   - `npm test`
   - `npm run sample`
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 95/95 tests passed. All .mjs files pass syntax check.
+- Result: 207/207 tests passed. `npm run sample` and `git diff --check` passed; all changed `.mjs` files pass syntax checks.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01

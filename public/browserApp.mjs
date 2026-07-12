@@ -76,7 +76,7 @@ elements.askForm.addEventListener("submit", async (event) => {
   }
 
   const gameIdAtSubmit = currentGameId;
-  if (runtimeConfig?.interpreterShadowMode && interpreterShadowClient) interpreterShadowClient.observe({ snapshot, rawText: input, gameId: gameIdAtSubmit, targetNpcId: target });
+  if (runtimeConfig?.interpreterShadowMode && !runtimeConfig?.interpreterValidationMode && interpreterShadowClient) interpreterShadowClient.observe({ snapshot, rawText: input, gameId: gameIdAtSubmit, targetNpcId: target });
   const result = await dispatch({
     type: "ask_npc",
     target,
@@ -113,19 +113,23 @@ elements.nightButton.addEventListener("click", async () => {
 });
 
 function startNewGame() {
+  game?.destroy?.();
   currentGameId = sessionManager.startNewGame();
 
   // Always use HttpResponseProvider, delegate selection to server
   const responseProvider = new HttpResponseProvider({
     sessionManager
   });
-  interpreterShadowClient = runtimeConfig?.interpreterShadowMode ? new InterpreterShadowClient({ provider: responseProvider, sessionManager, observer: (entry) => { shadowObservations = [...shadowObservations.slice(-99), Object.freeze({ ...entry })]; } }) : null;
+  interpreterShadowClient = runtimeConfig?.interpreterShadowMode && !runtimeConfig?.interpreterValidationMode ? new InterpreterShadowClient({ provider: responseProvider, sessionManager, observer: (entry) => { shadowObservations = [...shadowObservations.slice(-99), Object.freeze({ ...entry })]; } }) : null;
   shadowObservations = [];
 
   game = WerewolfGame.create({
     seed: Date.now(),
     shuffleRoles: true,
-    responseProvider
+    responseProvider,
+    interpreterProvider: responseProvider,
+    interpreterValidationEnabled: runtimeConfig?.interpreterValidationMode === true,
+    interpreterObserver: (entry) => { shadowObservations = [...shadowObservations.slice(-99), entry]; }
   });
   snapshot = game.getPublicSnapshot();
   logCursor = snapshot.playerLog.length;

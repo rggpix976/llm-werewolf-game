@@ -98,6 +98,10 @@ LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 - `OPENAI_MAX_OUTPUT_TOKENS`: 最大出力トークン数 (デフォルト: `220`)
 - `OPENAI_MAX_REQUESTS_PER_MINUTE`: 1分間あたりの最大リクエスト数 (デフォルト: `10`)
 - `OPENAI_FALLBACK_TO_PSEUDO`: 一時的なエラー時に `pseudo` モードへ切り替えるか (デフォルト: `true`)
+- `INTERPRETER_SHADOW_MODE`: Phase 2 shadow transportを有効化する（デフォルト: `false`）
+- `INTERPRETER_VALIDATION_MODE`: Phase 3 authoritative candidate validationを有効化する（デフォルト: `false`）
+
+Phase 3はvalidationとredacted diagnosticsのみを行い、Interpreter結果をゲームへ適用しません。両方のInterpreter flagが`true`の場合はPhase 3だけが1リクエストを送り、Phase 2 shadow送信は抑止されます。Phase 3をrollbackするには`INTERPRETER_VALIDATION_MODE=false`へ戻します。authoritative session/turn/version lifecycleはengine invariantとしてflagに依存せず維持され、データmigrationは不要です。
 
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは引き続き実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックのみを使用します。
 
