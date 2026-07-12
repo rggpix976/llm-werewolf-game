@@ -33,6 +33,7 @@ let sessionManager = new SessionManager();
 let currentGameId = 0;
 let interpreterShadowClient = null;
 let shadowObservations = [];
+let playerFacingLog = [];
 
 initializeApp();
 
@@ -130,10 +131,12 @@ function startNewGame() {
     interpreterProvider: responseProvider,
     interpreterValidationEnabled: runtimeConfig?.interpreterValidationMode === true,
     playerConversationCommitEnabled: runtimeConfig?.playerConversationCommitMode === true,
+    playerStructuredConsumerEnabled: runtimeConfig?.playerStructuredConsumerMode === true,
     interpreterObserver: (entry) => { shadowObservations = [...shadowObservations.slice(-99), entry]; }
   });
   snapshot = game.getPublicSnapshot();
   logCursor = snapshot.playerLog.length;
+  playerFacingLog = structuredClone(snapshot.playerLog);
   devLogCursor = 0;
   devLogEntries = [];
   devLogFilterKind = "";
@@ -159,6 +162,7 @@ async function dispatch(action) {
     }
 
     logCursor = result.nextLogCursor;
+    playerFacingLog.push(...result.playerFacingEntries);
     render(result.publicSnapshot);
     if (isDevMode) {
       refreshDiagnostics();
@@ -583,13 +587,14 @@ function renderTargetOptions() {
 }
 
 function renderLogs() {
-  if (!snapshot.playerLog.length) {
+  const entries = runtimeConfig?.playerStructuredConsumerMode === true ? playerFacingLog : snapshot.playerLog;
+  if (!entries.length) {
     elements.logList.replaceChildren(createEmptyState("No log entries"));
     return;
   }
 
   elements.logList.replaceChildren(
-    ...snapshot.playerLog.map((entry) => {
+    ...entries.map((entry) => {
       const row = document.createElement("div");
       row.className = "log-entry";
 

@@ -1,14 +1,23 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { WerewolfGame } from "./gameEngine.mjs";
+import { parseConfig } from "./config.mjs";
+import { PseudoInterpreterProvider } from "./interpreterTransport.mjs";
+import { sanitizeTerminalText } from "./playerStructuredConsumer.mjs";
 
 const showDev = process.argv.includes("--show-dev");
+const runtimeConfig = parseConfig(process.env);
 const game = WerewolfGame.create({
   seed: Date.now(),
-  shuffleRoles: true
+  shuffleRoles: true,
+  interpreterProvider: new PseudoInterpreterProvider(),
+  interpreterValidationEnabled: runtimeConfig.interpreterValidationMode,
+  playerConversationCommitEnabled: runtimeConfig.playerConversationCommitMode,
+  playerStructuredConsumerEnabled: runtimeConfig.playerStructuredConsumerMode
 });
 
 let printedLogIndex = 0;
+const playerFacingHistory = [];
 
 const rl = readline.createInterface({ input, output });
 
@@ -39,7 +48,7 @@ while (true) {
     }
 
     if (command === "log") {
-      console.log(game.formatPlayerLog());
+      console.log(formatEntries(playerFacingHistory));
       continue;
     }
 
@@ -57,31 +66,31 @@ while (true) {
         continue;
       }
 
-      await game.dispatchPlayerAction({
+      const action = await game.dispatchPlayerAction({
         type: "ask_npc",
         target,
         input: question,
         logCursor: printedLogIndex
       });
-      printNewPlayerLog();
+      printNewPlayerLog(action.playerFacingEntries);
       maybePrintDevTail();
       continue;
     }
 
     if (command === "vote") {
-      await game.dispatchPlayerAction({
+      const voteAction = await game.dispatchPlayerAction({
         type: "advance_vote",
         logCursor: printedLogIndex
       });
-      printNewPlayerLog();
+      printNewPlayerLog(voteAction.playerFacingEntries);
       maybePrintDevTail();
 
       if (!game.state.winner) {
-        await game.dispatchPlayerAction({
+        const nightAction = await game.dispatchPlayerAction({
           type: "run_night",
           logCursor: printedLogIndex
         });
-        printNewPlayerLog();
+        printNewPlayerLog(nightAction.playerFacingEntries);
         maybePrintDevTail();
       }
 
@@ -135,13 +144,16 @@ function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
   console.log(`Alive NPCs: ${alive.join(", ")}`);
 }
 
-function printNewPlayerLog() {
-  const text = game.formatPlayerLog(printedLogIndex);
+function printNewPlayerLog(entries = game.state.playerLog.slice(printedLogIndex)) {
+  playerFacingHistory.push(...structuredClone(entries));
+  const text = formatEntries(entries);
   if (text) {
     console.log(`\n${text}`);
   }
   printedLogIndex = game.state.playerLog.length;
 }
+
+function formatEntries(entries) { return entries.map((entry) => `[Day ${entry.day} / ${entry.phase}] ${sanitizeTerminalText(entry.message)}`).join("\n"); }
 
 function maybePrintDevTail() {
   if (!showDev) {

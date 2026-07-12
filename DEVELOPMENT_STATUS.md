@@ -4,9 +4,9 @@ Last updated: 2026-07-12
 
 ## Current State
 
-- Conversation pipeline migration Phase 1 pure domain definitions, strict validators, deterministic ID helpers, canonical renderers, and unit tests are implemented but intentionally not integrated into production game flow.
-- Migration Phase 2 shadow transport, Phase 3 authoritative candidate validation, and Phase 4 atomic player conversation commit are implemented behind separate default-off flags. Phase 4 requires Phase 3 and writes structured player artifacts at `N+1`; the existing NPC response effects publish provisionally at `N+2`.
-- Phase 4 keeps the legacy player-question entry as the only visible browser/CLI trigger. Structured publications are stored but remain unconsumed until Phase 5, and exact replay performs no redisplay or provider call.
+- Conversation pipeline migration Phase 1 domain contracts and renderers through Phase 5 player structured consumer migration are implemented.
+- Migration Phase 2 shadow transport, Phase 3 authoritative candidate validation, Phase 4 atomic player conversation commit, and Phase 5 player read/display migration are protected by separate default-off flags with strict dependencies.
+- With Phase 5 enabled, `PlayerUtterancePublishedRecord` is the sole active player display trigger in browser and CLI. Legacy player entries remain stored for rollback but are not displayed; NPC display remains on the provisional legacy path.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
 - 5-player werewolf prototype is implemented.
 - Current roles are 1 werewolf, 1 seer, and 3 citizens.
@@ -26,7 +26,7 @@ Last updated: 2026-07-12
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2/3 Interpreter boundaries, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 219 automated tests.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 242 automated tests.
 
 ## Last Verified
 
@@ -37,7 +37,7 @@ Last updated: 2026-07-12
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 219/219 tests passed. `npm run sample` and `git diff --check` passed; all changed `.mjs` files pass syntax checks.
+- Result: 242/242 tests passed. `npm run sample`, changed-module syntax checks, and `git diff --check` passed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01

@@ -11,6 +11,7 @@ import { createPhase3Binding, validatePhase3Response } from "./interpreterValida
 import { sha256Fingerprint } from "./conversation/ids.mjs";
 import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
 import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
+import { mergeStructuredPlayerEntries, renderUnconsumedPlayerPublications, resolvePlayerStructuredConsumerPolicy } from "./playerStructuredConsumer.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -121,7 +122,7 @@ export class WerewolfGame {
     const game = new WerewolfGame(
       state,
       options.responseProvider ?? new PseudoResponseProvider(),
-      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
+      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, playerStructuredConsumerEnabled: options.playerStructuredConsumerEnabled === true, playerStructuredConsumerObserver: options.playerStructuredConsumerObserver, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
     );
     game.addPublicInfo({
       type: "setup",
@@ -147,6 +148,10 @@ export class WerewolfGame {
     this.interpreterProvider = options.interpreterProvider;
     this.interpreterValidationEnabled = options.interpreterValidationEnabled === true;
     this.playerConversationCommitEnabled = resolvePlayerConversationCommitPolicy({ playerConversationCommitMode: options.playerConversationCommitEnabled === true, interpreterValidationMode: this.interpreterValidationEnabled }).enabled;
+    this.playerStructuredConsumerEnabled = resolvePlayerStructuredConsumerPolicy({ playerStructuredConsumerMode: options.playerStructuredConsumerEnabled === true, playerConversationCommitMode: this.playerConversationCommitEnabled }).enabled;
+    this._consumerModeObserved = this.playerStructuredConsumerEnabled;
+    this._consumedPlayerPublicationIds = new Set();
+    this.playerStructuredConsumerObserver = options.playerStructuredConsumerObserver ?? (() => {});
     this.phase4FaultInjector = options.phase4FaultInjector ?? (() => {});
     this.interpreterObserver = options.interpreterObserver ?? (() => {});
     this.now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
@@ -207,6 +212,7 @@ export class WerewolfGame {
   }
 
   async dispatchPlayerAction(action = {}) {
+    this._syncStructuredConsumerMode();
     const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
     if (action.type === "get_state") return this._actionResult(action.type, null, logCursor);
     if (action.type === "ask_npc" && action.replayRequestId) return this._replayPlayerConversation(action, logCursor);
@@ -238,7 +244,22 @@ export class WerewolfGame {
     throw new Error(`Unknown player action type: ${action.type}`);
   }
 
-  _actionResult(actionType, result, logCursor) { return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries: this.state.playerLog.slice(logCursor), nextLogCursor: this.state.playerLog.length }; }
+  _actionResult(actionType, result, logCursor) {
+    const playerLogEntries = this.state.playerLog.slice(logCursor), structuredPlayerEntries = this.playerStructuredConsumerEnabled ? renderUnconsumedPlayerPublications({ gameSessionId: this.state.gameSessionId, activeGameSessionId: this.state.gameSessionId, conversation: this.state.conversation, publicParticipantsById: this._publicParticipantsById(), consumedPublicationIds: this._consumedPlayerPublicationIds }) : [];
+    for (const entry of structuredPlayerEntries) this._consumedPlayerPublicationIds.add(entry.publicationId);
+    for (const entry of structuredPlayerEntries) { try { this.playerStructuredConsumerObserver(Object.freeze({ gameSessionId: entry.gameSessionId, correlationId: entry.correlationId, publicationId: entry.publicationId, displayPlanId: entry.displayPlanId, outcomeCategory: "displayed", reasonCode: "publication_consumed", consumerMode: "structured", duplicateSuppressed: false })); } catch {} }
+    if (this.playerStructuredConsumerEnabled && result?.replayed === true) { const stored = result.conversationCommitResult; try { this.playerStructuredConsumerObserver(Object.freeze({ gameSessionId: this.state.gameSessionId, correlationId: stored.correlationId, publicationId: stored.playerPublicationId, displayPlanId: stored.displayPlanId, outcomeCategory: "suppressed", reasonCode: "publication_already_consumed", consumerMode: "structured", duplicateSuppressed: true })); } catch {} }
+    const playerFacingEntries = this.playerStructuredConsumerEnabled ? mergeStructuredPlayerEntries(playerLogEntries, structuredPlayerEntries) : structuredClone(playerLogEntries);
+    return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries, structuredPlayerEntries, playerFacingEntries, nextLogCursor: this.state.playerLog.length };
+  }
+
+  _syncStructuredConsumerMode() {
+    if (this._consumerModeObserved === this.playerStructuredConsumerEnabled) return;
+    this._consumerModeObserved = this.playerStructuredConsumerEnabled;
+    if (this.playerStructuredConsumerEnabled) for (const record of this.state.conversation.publications) if (record.recordType === "player_utterance_published") this._consumedPlayerPublicationIds.add(record.publicationId);
+  }
+
+  _publicParticipantsById() { return Object.fromEntries([["player", { participantId: "player", displayName: "Player" }], ...this.state.players.map((player) => [player.id, { participantId: player.id, displayName: player.name }])]); }
 
   _replayPlayerConversation(action, logCursor) {
     if (typeof action.replayRequestId !== "string" || !ID_PATTERN.test(action.replayRequestId) || typeof action.replayRequestFingerprint !== "string" || !SHA256_PATTERN.test(action.replayRequestFingerprint)) throw typedError("invalid_replay_identity");
