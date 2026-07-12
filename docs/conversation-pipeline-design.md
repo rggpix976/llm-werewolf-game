@@ -132,6 +132,9 @@ Every successful authoritative transaction compares its recorded precondition wi
 | Timeout, abort, provider error, or stale discard | no | no | no | terminalizes pending; late responses are discarded |
 | Player conversation commit | yes | no | exactly one | CAS `N -> N+1`; all player-commit objects publish together |
 | Duplicate player commit replay | no new mutation | no | no | returns stored result; changed fingerprint is conflict |
+| Phase 4 OFF legacy player/NPC compatibility command | yes | no | exactly one | existing combined compatibility transaction `N -> N+1`; no structured player objects |
+| Phase 4 ON player-side compatibility effects | yes | no additional turn | with player conversation commit | legacy player-input log/history delta is included in the same atomic `N -> N+1`, never a second transaction |
+| Phase 4 ON legacy NPC compatibility effects | yes | no additional turn | exactly one after player commit | provisional reaction transaction `N+1 -> N+2`; includes response and existing NPC-side effects until their owning migration phase |
 | NPC reaction preparation | staged only | no | no | captures player-resulting version as precondition |
 | NPC reaction commit | yes | no | exactly one | independent CAS `N+1 -> N+2` in the same turn |
 | Renderer request/retry | no | no | no | bound to committed reaction version |
@@ -172,7 +175,7 @@ Every object produced by one atomic commit uses the ledger value above. Saved va
 
 For Phase 3, `WerewolfGame` accepts a player command, allocates its logical turn, and stages an immutable `PlayerInputRecord` before any provider call or legacy compatibility mutation for that command. In one synchronous capture step it copies `gameSessionId`, `turnId`, `stateVersion` as `preconditionStateVersion`/`capturedStateVersion`, phase as `preconditionPhase`, actor `player`, input ID, request ID, correlation ID, roster, permissions, and public projections into an immutable validation binding. It then creates `PendingInterpreterRequest` from exactly that binding. SessionManager may store the pending record/controller but cannot choose or alter authoritative fields.
 
-Phase 3 allows only one active player command, so no second input or same-turn mutation is accepted while Interpreter validation is pending. Reset is always allowed and destroys the binding. If another authoritative mutation nevertheless completes through an independent engine entry point, its version transition makes the response stale. After Phase 3 observation terminalizes, the existing compatibility action may run unchanged under its own classified authoritative transaction; Interpreter output never controls that action.
+Phase 3 allows only one active player command, so no second input or same-turn mutation is accepted while Interpreter validation is pending. Reset is always allowed and destroys the binding. If another authoritative mutation nevertheless completes through an independent engine entry point, its version transition makes the response stale. After Phase 3 observation terminalizes, the existing combined compatibility action runs unchanged as one classified transaction while Phase 4 is off. When Phase 4 is on, section 6A splits that work without adding a ledger position: player-side compatibility effects join `PlayerConversationCommit` at `N -> N+1`, and later NPC-side compatibility effects occupy the provisional reaction `N+1 -> N+2`. Interpreter output never controls the compatibility effect content.
 
 On response arrival the engine first validates the strict HTTP/provider schema, then looks up the pending record by request ID and compares the saved binding against the same game instance. The comparisons are exact: active `gameSessionId`; pending status `pending`; request, correlation, input, turn, precondition version, phase, and actor; and engine `turnId`, `stateVersion`, phase, and player identity. Only then does it validate all alternatives/candidates as one transaction-sized set against the captured allowlists and current matching engine context. Phase 3 records a bounded redacted diagnostic outcome and commits nothing. Success, rejection, clarification, failure, and terminalization leave turn and version unchanged.
 
@@ -193,13 +196,17 @@ Diagnostics may contain correlation ID, input ID, turn ID, captured version, cat
 
 1. **Phase 3 valid:** allocate/capture authoritative binding; stage input and pending; call Interpreter; correlate strict response; compare session/turn/version/phase/actor; validate the complete alternative; append redacted diagnostic; terminalize pending; perform no commit; retain captured turn/version.
 2. **Phase 3 stale:** capture `N`; an independent authoritative transaction commits `N+1`; response arrives; exact comparison fails; record `stale_state_version`; discard candidates; do not add another increment.
-3. **Phase 4 player commit:** reuse staged binding at `N`; validate; prepare all objects/deltas without mutation; immediately CAS session/turn/phase/version and idempotency; atomically publish objects and stored result while setting version `N+1`; replay returns that result without provider call or increment.
-4. **Player then NPC:** player commit produces `N+1`; reaction preparation captures `N+1` and the same turn; reaction commit rechecks and atomically produces `N+2`; canonical publication or Renderer pending records `N+2`; Renderer/finalization adds no transition.
+3. **Phase 4 player commit:** reuse staged binding at `N`; validate; prepare all structured objects and the legacy player-input log/history delta without mutation; immediately CAS session/turn/phase/version and idempotency; atomically publish both representations and the stored result while setting version `N+1`; replay returns that result without provider call, legacy log append, display, or increment.
+4. **Player then NPC:** player commit produces `N+1`; only then may the NPC provider run. Before Phase 6, the legacy NPC compatibility transaction captures/rechecks `N+1` and atomically publishes the response and existing NPC-side effects as `N+2`. Phase 6 replaces that provisional transaction with `NpcReactionCommit` at the same `N+1 -> N+2` ledger position; it does not add a third transition. Canonical publication or Renderer pending records `N+2`; Renderer/finalization adds no transition.
 5. **Timeout/abort/late:** pending captures `N`; timeout or abort terminalizes and releases runtime resources without mutation; later response finds terminal pending/audit identity, records stale-late reason, and cannot validate, display, commit, advance turn, or advance version.
 
 ### Phase 4 commit rules
 
 `PlayerConversationCommit` and `NpcReactionCommit` are separate authoritative transactions in one logical turn. Preparation is pure. Immediately before application each performs compare-and-set on session, turn, phase, precondition version, request identity/fingerprint, and referenced authority. Multi-act input and any number of claims/events still cause one player transition only. The commit result is inserted in the same atomic publication as its objects and version transition; there is no interval in which version advanced but the result is absent. An exception restores the exact pre-transaction snapshot including counters and idempotency index. A duplicate matching fingerprint returns the stored result; a changed fingerprint conflicts; neither executes providers or advances counters.
+
+During Phase 4, player-side compatibility mutation is not a second authoritative transaction. The existing player-input log/history entry needed by the legacy browser and CLI is an explicit effect delta inside `PlayerConversationCommit` and publishes atomically with the structured input, acts, claims/events, display plan, publication, idempotency record, result, and `N+1`. Provider wait and NPC response content are excluded from that transaction. After it succeeds, the current NPC provider path runs; its response, NPC memory, suspicion, NPC claim registration, and compatibility phase/log effects form one provisional reaction transaction from `N+1` to `N+2`. Phase 8 later changes how suspicion and memory are derived inside the reaction transaction but never moves them into the player transaction or adds a version transition.
+
+If the Phase 4 player commit succeeds and the later provider or compatibility reaction fails, the committed player input remains at `N+1`. The failed reaction publishes no partial NPC effects and no `N+2`; it cannot roll back the earlier player commit. Exact replay of the player request returns the stored player result and executes neither the player compatibility delta nor the NPC provider/reaction path. A new NPC attempt, if supported by a later phase, requires its own reaction identity and the existing `N+1` precondition; Phase 4 does not invent recovery semantics.
 
 Reaction preparation begins only after the player result `N+1` exists. If another authoritative transaction changes turn, phase, relevant references, or version before reaction commit, preparation is discarded as stale and no reaction object is published. A successful reaction advances once to `N+2`. Renderer failure cannot roll back either commit. Reservation and finalization carry `N+2` as provenance and never advance it.
 
@@ -435,7 +442,9 @@ Both have no optional/null fields and `additionalProperties: false`; the fields 
 
 This existing schema is retained as the compatibility alias of `PlayerUtterancePublishedRecord` during migration. It requires `schemaVersion: 1`, `publicationId: ID`, discriminator `recordType: "player_utterance_published"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `gameStateVersion: integer >= 0`, `occurredPhase: GamePhase`, `actorId: ID`, `inputRecordId: ID`, `displayPlanId: ID`, `idempotencyKey: ID`, `publicationSlotOrder: integer >= 0`, and `recordAppendOrder: integer >= 0`. It has no optional/null fields and `additionalProperties: false`.
 
-Exactly one is created per committed displayable player input, including claim-only, multi-act, question-only, non-game statement, and accepted information-request input. All accepted player inputs in this baseline are displayable; `UninterpretableCandidate` uses clarification. The record is the sole display trigger. It lives in the display log, not `PublicEvent`, and never changes game-rule state/version. Its references resolve to the same player commit. A display plan belongs to exactly one publication. Duplicate replay returns stored results and never displays again.
+Exactly one is created per committed displayable player input, including claim-only, multi-act, question-only, non-game statement, and accepted information-request input. All accepted player inputs in this baseline are displayable; `UninterpretableCandidate` uses clarification. The record is the sole structured display trigger and the steady-state sole display trigger. It lives in the display log, not `PublicEvent`, and never changes game-rule state/version. Its references resolve to the same player commit. A display plan belongs to exactly one publication. Duplicate replay returns stored results and never displays again.
+
+Phase 4 has one explicit, temporary compatibility exception: the legacy player-question log entry committed in the same player transaction remains the active browser/CLI visible-display trigger, while the matching `PlayerUtterancePublishedRecord` is stored but not consumed. Each successful new input therefore has exactly one structured publication and exactly one visible legacy display, both produced from one atomic player commit; it never has two visible displays. The publication ID and stored commit result are the durable replay guard. Exact replay returns no new legacy log entry and no display delta. Phase 5 ends this exception only after every browser/CLI player-input consumer reads the committed publication and display plan, parity and replay/no-redisplay tests pass, and the legacy player-question entry is no longer an active display trigger. From that cutover onward, `PlayerUtterancePublishedRecord` is the sole actual trigger as well as the sole structured trigger.
 
 | Candidate | Accepted act | Semantic event/domain object | Display-owner event |
 | :--- | :--- | :--- | :--- |
@@ -481,6 +490,114 @@ Semantic events never initiate display. The publication event resolves its `inpu
 - **Rules**: `repeatsClaimId` and non-empty `contradictsClaimIds` are mutually exclusive. Every referenced claim exists and precedes the new claim. A normal role or result claim that conflicts with a prior same-actor, same-type, same-subject claim is a contradiction, never an amendment.
 
 Examples: `Beni is werewolf` followed by `Beni is not_werewolf` is a contradiction when the same actor made both result claims about Beni. `Beni is werewolf` followed by `Aoi is not_werewolf` is not a contradiction because the subjects differ.
+
+## 11A. Player Result-Claim Authorization Baseline
+
+This section is normative for player-origin `ResultClaimCandidate`, `AcceptedResultClaim`, `ResultCanonicalClaim`, and `ResultClaimRecordedEvent`. It separates whether an assertion may enter the conversation ledger from whether its payload matches hidden game truth.
+
+### Terms and authority
+
+- **Claim legality** means that a schema-valid player assertion is permitted by the current phase, actor class, target constraints, and authoritative request binding. Legality is decided by the browser engine from public identity and lifecycle state.
+- **Claim truthfulness** means whether `result` matches the target's hidden authoritative role at that moment. Truthfulness is not an acceptance condition and is not recorded in the claim schema.
+- **Known information** is a fact available to an actor from an authoritative source. It is relevant only when a rule explicitly requires knowledge; this baseline does not require it for a player result claim.
+- **Private known information** is actor-scoped authoritative information that is not public. The current game has NPC-owned private seer results but no player-owned private-result registry.
+- **Public known information** is a structured public event or claim visible to all participants. Its existence does not make a new player assertion more or less legal.
+- **Hearsay or attributed information** is content presented as originating from another speaker or source. The current candidate and claim schemas have no attribution field, so a `ResultClaimCandidate` is recorded only as the player's own assertion; attribution is not preserved or inferred.
+- **Fabricated claim** and **bluff** mean an assertion made without matching knowledge, or intentionally differing from believed or actual truth. Both are legal under this baseline.
+- **Unsupported claim** is an utterance whose intended form cannot be represented by the current strict candidate union, such as a request to persist attribution as provenance. It is not silently upgraded with invented fields.
+- **Unauthorized claim** is schema-valid but fails a phase, actor, target, binding, or current-state precondition.
+- **Repeated claim** and **contradictory claim** are relations to prior committed `CanonicalClaim` records. They are not truth verdicts.
+
+`CanonicalClaim` records what the player authoritatively claimed, not what is true. The Interpreter classifies the utterance structure; it does not inspect hidden truth. The engine authorizes the structure without exposing hidden role, team, NPC memory, private seer results, or suspicion values to the provider.
+
+### Baseline policy
+
+A player-origin result claim is legal when all of the following are true:
+
+1. The candidate and enclosing alternative satisfy the strict schemas and source-span rules.
+2. The captured and current session, turn, phase, version, actor, input, request, correlation, and fingerprint preconditions match.
+3. `result` is exactly `werewolf` or `not_werewolf`.
+4. The phase is `day_discussion`, the only baseline phase that permits `result_claim`.
+5. The target is a public NPC participant in the captured roster and still belongs to the same active game session at final authorization.
+6. The target ID is neither the player actor ID nor another player-class ID.
+
+Alive and dead public NPCs are both valid targets. Execution or attack does not erase prior conversational identity. A participant removed by reset, session replacement, or roster replacement is not a valid target. Hidden role or team never affects target authorization.
+
+The player has no game role and no private investigation-result store in the current game model. Consequently, player role, seer status, evidence ownership, public-result existence, actual truth, and possession of private information are deliberately not legality conditions. A non-seer player, an uninformed player, and a player making a bluff use the same legal assertion contract. The engine never derives authority from a same-input role claim, a prior role claim, raw-text phrases such as "I heard", or the target's hidden state.
+
+This policy requires no provenance field. Direct private knowledge, public knowledge, hearsay, and fabrication cannot be distinguished by the current candidate. They are intentionally normalized to one player-owned assertion. A future feature that must preserve attribution or prove evidence ownership requires a separately reviewed schema version; it must not infer provenance from text.
+
+### Normative decision table
+
+| Condition | Schema | Legality / truth relevance | Phase 3 outcome | Phase 4 artifacts | Structured state/version effect |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Valid claim about a public NPC | valid | legal; truth irrelevant | valid diagnostic | accepted act, canonical claim, claim event, display plan and one player publication | one atomic `N -> N+1` |
+| Bluff, fabrication, or false result | valid | legal; truth irrelevant | valid diagnostic | same as any legal claim; no truth metadata | one atomic `N -> N+1` |
+| Private, public, or hearsay basis | valid | legal; basis is not persisted | valid diagnostic | recorded as the player's own assertion | one atomic `N -> N+1` |
+| True but wrong phase or target class | valid | unauthorized despite truth | whole alternative rejected with the applicable reason | none | no structured commit |
+| Unknown or old-session target | valid | unauthorized | whole alternative rejected as `invalid_reference` or stale session | none | no structured commit |
+| Player/self target | valid | unauthorized target class | whole alternative rejected as `invalid_target_class` | none | no structured commit |
+| Invalid result enum or extra provenance field | invalid | legality not evaluated | invalid provider response | none | none |
+| Phase other than `day_discussion` | valid | unauthorized phase | whole alternative rejected as `candidate_not_allowed` | none | no structured commit |
+| Missing evidence or provenance | valid | evidence is not required | valid diagnostic | normal player assertion | one atomic `N -> N+1` |
+| Prior identical claim | valid | legal repeat; truth irrelevant | valid diagnostic | new claim with `repeatsClaimId` | one atomic `N -> N+1` |
+| Prior same-target different result | valid | legal contradiction; truth irrelevant | valid diagnostic | new claim with `contradictsClaimIds` | one atomic `N -> N+1` |
+| Unsupported attributed-provenance form | not representable as attributed provenance | unsupported, not fabricated metadata | `uninterpretable`/clarification when no faithful candidate exists | none | no structured commit |
+| Stale authorization context | valid | authorization must be current | stale diagnostic | none | no structured commit |
+
+An unauthorized candidate rejects its entire alternative. It never produces a partial accepted act, claim, event, display plan, publication, idempotency result, or structured version transition. Phase 3 records only a bounded diagnostic. Phase 4 repeats every authorization and CAS check immediately before publication. Neither layer emits a free-form reason that could reveal hidden truth. These failures are non-retryable unless the stale lifecycle rules explicitly require a new player input.
+
+The logical turn was already allocated when the engine accepted the top-level command. Rejection creates no Phase 4 structured transaction. The independent legacy compatibility action may still perform its existing transaction and version transition; that is not a result-claim commit and must not create structured claim objects.
+
+### Repeat and contradiction
+
+Relations use only prior committed player-origin `CanonicalClaim` records:
+
+- same actor, same target, same result: repeat the earliest matching claim;
+- same actor, same target, different result: contradict all prior conflicting result claims, in authoritative claim order;
+- same actor, different target: neither repeat nor contradiction;
+- different actor, same target: neither repeat nor contradiction;
+- attributed language and own assertion: the current schema stores both as the player's own assertion, so the same actor/target/result rules apply;
+- a legal bluff participates in repeat and contradiction exactly like any other legal claim;
+- an unauthorized claim never enters the claim ledger and cannot become a relation target.
+
+Repeat and contradiction metadata does not block acceptance and does not amend an earlier claim. `claimRevision` remains `1`; amendment remains unsupported. Relation calculation is repeated against current authoritative claim state during the Phase 4 final authorization and pure preparation step.
+
+### Phase responsibility and legacy coexistence
+
+| Artifact or behavior | Phase 3 | Phase 4 | Phase 5 | Authoritative owner / coexistence |
+| :--- | :--- | :--- | :--- | :--- |
+| `ResultClaimCandidate` | strict validation and diagnostic authorization | final revalidation only | unchanged | Interpreter output bound and checked by browser engine |
+| `AcceptedResultClaim` | forbidden | created and committed | read only | Phase 4 player commit is sole writer |
+| `ResultCanonicalClaim` and relation metadata | forbidden | created and committed | read only | Phase 4 canonical claim registry is sole writer |
+| `ResultClaimRecordedEvent` | forbidden | created and committed | read only | Phase 4 semantic event registry is sole writer |
+| Display plan canonical-claim segment | forbidden | created with the claim | consumed for rendering/history | Phase 4 plan writer; Phase 5 consumer migration |
+| Player publication record | forbidden | exactly one created per committed input | consumed without redisplay | Phase 4 display-log writer |
+| Legacy `publicClaims` | NPC-only behavior unchanged | no player-origin dual-write | unchanged until its NPC migration | no player-origin legacy claim registry exists today |
+| Legacy player question log/UI | diagnostic behavior unchanged | player-input entry is an effect delta inside the same player commit and remains the one active visible-display trigger under the explicit Phase 4 exception | consumer switches to structured publication/plan and exception ends | exact replay appends no entry and produces no display delta |
+| Claim rendering and player history | unchanged | no consumer migration | moves to canonical claims and committed display plans | Phase 5 reads Phase 4 records; it never creates a second claim |
+| Idempotency result | forbidden | created atomically with all objects | reused | Phase 4 is sole writer; replay is read-only |
+
+Phase 4 is the sole writer of all player-origin structured claim artifacts, including `CanonicalClaim`, repeat/contradiction metadata, display plan, player publication, and commit result. There is no player-origin legacy claim registry to dual-write. The existing legacy player-question entry is included as an effect delta in that same atomic player commit and remains the only visible player-input display under the section 10 compatibility exception. It does not register player claims. Structured publications are stored but not additionally rendered during Phase 4, preventing double display.
+
+Phase 5 migrates player-facing claim rendering, player conversation history projection, and display-plan/publication consumers to the records already committed by Phase 4. It does not generate, re-register, or re-version a claim. After parity and replay tests pass, Phase 5 disables the legacy player-input display consumer; physical deletion of obsolete compatibility paths remains Phase 9. Phase 5 read/render migration causes no game-rule version increment.
+
+Changing the Phase 4 feature flag during a session does not backfill old inputs. When off, one combined legacy compatibility transaction advances `N -> N+1`. When on with Phase 3 validation enabled, the structured player objects and player-side legacy display/history delta share one atomic `N -> N+1`; the later legacy NPC compatibility reaction, when successful, advances `N+1 -> N+2`. There is no extra compatibility transition between those ledger positions. Turning the flag off stops new structured writes and leaves committed records readable. Replay executes neither compatibility delta, provider path, nor display. Phase 6 replaces the provisional NPC transaction at the same ledger position, and Phase 8 replaces suspicion/memory derivation inside it; neither migration adds `N+2 -> N+3`.
+
+### Privacy and implementation invariants
+
+- Private seer results remain NPC-owned and are never projected merely to authorize a player assertion.
+- The provider never receives hidden actual role/team, private result, private memory, or a truth label.
+- Diagnostics and public errors identify only structural authorization failures and cannot reveal whether a result is true.
+- `CanonicalClaim` stores only the player's canonical assertion and provenance already defined by `PlayerAcceptedActClaimSource`; it is not a hidden-truth record.
+- Semantic claim events announce that a claim was recorded, not that its payload is true, and never trigger display.
+- Exact replay returns the stored result without new claim relations, IDs, ordering, display, provider call, or version increment.
+- A successful multi-act Phase 4 player commit increments exactly once regardless of claim count. Prepare, authorization, CAS, or publication failure leaves no structured object or counter gap.
+- Phase 3 diagnostics cause no version transition. Phase 4 rejection causes no structured version transition. Phase 5 read/render migration causes no game-rule version transition.
+
+### Required implementation tests
+
+Phase 3 and Phase 4 tests must cover legal direct, public, private-language, hearsay-language, fabricated, false, and true assertions without inspecting hidden truth; non-seer behavior; public alive/dead NPC targets; rejected self/player/unknown/old-session targets; invalid enum and phase; stale authorization; whole-alternative rejection; privacy-safe errors; repeat and contradiction relations; exact replay; rollback; one version increment; and the Phase 3/4/5 feature/read/write matrix. Tests must prove that Phase 4 and Phase 5 never double-create or double-display a claim.
 
 ## 12. `PlayerInputRecord` and `PlayerUtteranceDisplayPlan`
 
@@ -1009,9 +1126,9 @@ The first implementation PR is Phase 1 only. It changes no production flow, prov
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1. Pure schemas, validators, canonical renderers | Add side-effect-free schemas, validators, ID helpers, canonical claim/event renderers | `src/validator.mjs`, `src/utteranceGuard.mjs`, `tests/validator.test.mjs`, `tests/utteranceGuard.test.mjs` | likely `src/conversationSchemas.mjs`, `src/canonicalRenderer.mjs`, matching tests | all production paths | schema, Unicode, renderer, idempotency units | independently deployable unused modules behind no call site; revert files; risk is schema drift | none; no old path removed |
 | 2. Interpreter transport in shadow mode | Call interpreter without consuming result; add runtime-only shadow binding, staged shadow input, and pending tracking without phase mutation | `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/httpResponseProvider.mjs`, tests | interpreter transport tests | authoritative regex path, turn/state metadata, and mutations | HTTP, timeout, abort, privacy, stable shadow identity, duplicate pending submission, empty unavailable structured projections | `INTERPRETER_SHADOW_MODE`; disable flag; risk cost/latency | shadow parity/privacy gates pass; discard—not promote—the binding before Phase 3 |
-| 3. Candidate validation without authoritative mutation | Implement section 6A engine-owned session/turn/version lifecycle; bind it to Interpreter request/pending; compare every stale dimension; validate/log candidates only; never commit, advance turn, or increment version from an Interpreter outcome | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current player/NPC response behavior and all AI-independent game rules | candidate, phase, alternative, lifecycle, stale/late/reset, no-mutation tests | independent validation-only flag; disable without data migration; risk diagnostic divergence | authoritative lifecycle and exact binding/stale rules are implemented/tested; stable validation metrics; no shadow authority remains |
-| 4. AcceptedSpeechAct and PublicEvent | Add atomic `PlayerConversationCommit` using section 6A CAS: one `N -> N+1` transition per multi-object/multi-act commit, stored CommitResult replay without increment, exact rollback without gaps; add strict player provenance and display ownership | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-result helper if needed | NPC response provider path | provenance, conversion, rollback, duplicate/fingerprint, phase/version tests | dual-write flag; discard/rollback; provenance compatibility risk | all player objects share the defined pre/result versions, validate one player source, replay atomically, and failed commits leave version unchanged |
-| 5. Player Claim migration | Move player claims to canonical claim model/rendering | `src/gameEngine.mjs`, `public/browserApp.mjs`, tests | claim registry helper if needed | NPC claims and response generation | relation, display, replay tests | player-claim flag; rollback old rendering; compatibility risk in history | old/new claim parity and replay migration pass |
+| 3. Candidate validation without authoritative mutation | Implement section 6A engine-owned session/turn/version lifecycle; bind it to Interpreter request/pending; compare every stale dimension; validate/log candidates only, including section 11A result-claim structural authorization without hidden-truth adjudication; never commit, advance turn, or increment version from an Interpreter outcome | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current player/NPC response behavior and all AI-independent game rules | candidate, result-claim policy, phase, alternative, lifecycle, stale/late/reset, privacy, no-mutation tests | independent validation-only flag; disable without data migration; risk diagnostic divergence | authoritative lifecycle, exact binding/stale rules, and section 11A authorization are implemented/tested; stable validation metrics; no shadow authority remains |
+| 4. AcceptedSpeechAct, PublicEvent, and player structured claim write | Add atomic `PlayerConversationCommit` using section 6A CAS: one `N -> N+1` transition per multi-object/multi-act commit; include the legacy player-input display/history delta in that same transaction; create player-origin accepted acts, events, canonical claims and relations, display plans, publications, and stored result; then run the legacy NPC compatibility reaction as `N+1 -> N+2`; do not consume the structured publication yet | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | event-store/commit-result helper if needed | NPC response provider and the explicit Phase 4 legacy visible-display exception | provenance, conversion, result-claim authorization, rollback, duplicate/fingerprint, fixed-ledger, provider-failure-after-player-commit, replay/no-provider, no-double-display tests | structured-write flag; disable new writes without deleting committed records; no extra compatibility transition or player-origin legacy claim dual-write | player commit owns one `N -> N+1`, provisional NPC reaction owns `N+1 -> N+2`, one publication maps to one visible legacy display, replay is atomic, and failures leave no partial transaction |
+| 5. Player claim consumer and history migration | Read Phase 4 canonical claims and committed display plans/publications for player-facing rendering and history; switch consumers without creating claims, relations, events, plans, publications, or game-rule version transitions | `src/gameEngine.mjs`, `public/browserApp.mjs`, tests | none expected | NPC claims and response generation | rendering parity, history projection, replay/no-redisplay, consumer-switch tests | read-path flag; rollback to legacy player-question display; committed Phase 4 records remain authoritative | canonical rendering/history parity passes, structured publication is the only active player display consumer, and no duplicate claim/display remains |
 | 6. NpcReactionPlan | Add originating input, stored locale, empty causation support for information-only reactions, descriptor provenance, past-only causation, atomic commit, and provenance-specific idempotency | `src/responseGenerator.mjs`, `src/gameEngine.mjs`, `src/responseProvider.mjs`, tests | reaction-plan/commit validator if not Phase 1 | existing provider remains selected | origin/locale consistency, empty causation, information-only, cycle, rollback tests | reaction-commit flag; discard/rollback; provenance compatibility risk | every plan traces to one input and works with zero or more prior semantic events |
 | 7. Controlled Renderer integration | Add locale propagation, slot/append ordering, baseline Renderer FinalizationSource, pending completion order, fallback finalization, CAS/late rejection, and same-session guarantee | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | display log, variant registry, finalization result tests | canonical-only bypasses Renderer; game state independent; reload recovery deferred | locale triple, ordering, success/failure, races, pending cleanup tests | renderer flag; fallback; risk unresolved reservation on reload | same-session reservations finalize exactly once without game-state mutation |
 | 8. Suspicion and memory migration | Move updates behind accepted events | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, tests | none expected | voting/night/win logic | atomic update, rollback, regression tests | per-effect flag; revert to old effect path; risk scoring changes | parity criteria and audit logs pass |
@@ -1045,6 +1162,8 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Existing game-progression regression tests continue covering discussion, question, response, vote, execution, night, seer, attack, and win check.
 - Atomic tests cover successful commit, prepare failure with unchanged state, exception rollback, multi-act all-or-nothing, renderer failure after commit, and clarification with no commit.
 - Phase 4 version tests prove final CAS immediately precedes publication, player `N -> N+1`, reaction `N+1 -> N+2`, one increment regardless of object count, pre/post field-ledger equality, result/idempotency publication in the same transaction, no rollback gap, and stored-result replay without increment.
+- Phase 4 compatibility-ledger tests prove flag OFF performs one combined `N -> N+1`, flag ON includes player-side legacy effects in the player `N -> N+1`, the provisional NPC reaction alone owns `N+1 -> N+2`, Phase 6 replaces rather than follows that transition, and Phase 8 changes effects without adding a transition.
+- Phase 4 display tests prove one committed publication maps to one visible legacy entry under the explicit exception, exact replay emits neither, structured publication is not consumed before Phase 5, and the exception ends only when all browser/CLI consumers switch with no double display.
 - Display ownership tests cover one publication record for claim-only input, one for multi-act input, and no duplicate display on replay.
 - Pending-state tests cover duplicate submission blocking, timeout/abort with unchanged authoritative phase, and stale response with unchanged state.
 - Version tests prove Interpreter pending uses precondition version, Renderer pending uses committed resulting version, Renderer is not compared with the old player version, and player/NPC commits increment separately.
@@ -1103,6 +1222,11 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Controlled commentary source** | engine-owned variant registry |
 | **Unknown fields** | REJECTED |
 | **Private facts in provider projection** | PROHIBITED |
+| **Player result-claim legality depends on hidden truth or actor knowledge** | PROHIBITED |
+| **Legal player bluff/fabricated result claim** | RECORDED AS PLAYER ASSERTION, NEVER AS TRUTH |
+| **Player structured claim artifact writer** | PHASE 4 ONLY |
+| **Player claim render/history consumer migration** | PHASE 5; NO CLAIM RE-CREATION OR VERSION TRANSITION |
+| **Player-origin canonical/legacy claim dual-write** | PROHIBITED; NO PLAYER LEGACY CLAIM REGISTRY EXISTS |
 | **Duplicate event replay** | NO-OP |
 | **State-changing content in commentary variant** | PROHIBITED |
 | **Canonical descriptor coverage** | EXACTLY ONCE |
@@ -1112,7 +1236,10 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Nesting depth limits** | ENFORCED (8/5/10) |
 | **Unapproved hidden/default-ignorable Unicode** | PROHIBITED and future-CI rejected |
 | **Player utterance publication count** | EXACTLY ONE per committed displayable input |
-| **Player utterance display trigger** | ONLY `PlayerUtterancePublishedRecord` (`PlayerUtterancePublishedEvent` compatibility alias) |
+| **Player utterance display trigger** | STEADY STATE: ONLY `PlayerUtterancePublishedRecord`; PHASE 4 EXCEPTION: matching same-transaction legacy player-question entry is the one visible trigger while the structured record is not consumed |
+| **Phase 4 publication/display cardinality** | EXACTLY ONE STORED PUBLICATION + EXACTLY ONE VISIBLE LEGACY DISPLAY; NEVER TWO VISIBLE DISPLAYS |
+| **Phase 4 player compatibility version transition** | INCLUDED IN PLAYER `N -> N+1`; NO SEPARATE TRANSITION |
+| **Pre-Phase 6 NPC compatibility reaction transition** | EXACTLY `N+1 -> N+2`; PHASE 6 REPLACES, NEVER ADDS TO IT |
 | **Accepted-alternative domain mutations** | ATOMIC |
 | **Provider wait changes authoritative phase** | PROHIBITED |
 | **Candidate spans within an alternative** | PAIRWISE NON-OVERLAPPING |
