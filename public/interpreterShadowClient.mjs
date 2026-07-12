@@ -2,6 +2,10 @@ import { validateInterpreterRequest } from "../src/conversation/contracts.mjs";
 
 const candidateTypes = Object.freeze(["non_game_statement", "question", "suspicion", "vote_declaration", "role_claim", "result_claim", "information_request", "uninterpretable"]);
 
+export function shouldObserveInterpreterShadow(runtimeConfig = {}) {
+  return runtimeConfig.interpreterShadowMode === true && runtimeConfig.interpreterValidationMode !== true;
+}
+
 export function buildShadowInterpreterRequest({ snapshot, rawText, binding, requestId, correlationId }) {
   const roster = [{ playerId: "player", displayName: "Player", publicStatus: "alive" }, ...snapshot.players.map((player) => ({ playerId: player.id, displayName: player.name, publicStatus: player.alive ? "alive" : "dead" }))];
   const request = { schemaVersion: 1, requestId, correlationId, inputRecordId: binding.inputRecordId, turnId: binding.shadowTurnId, preconditionStateVersion: binding.shadowSnapshotVersion, preconditionPhase: snapshot.phase, locale: "ja-JP", rawText, playerContext: { playerId: "player", publicStatus: "alive" }, publicRoster: roster, allowedCandidateTypes: [...candidateTypes], publicContext: { publicEvents: [], publicClaims: [], publicVotes: [], executions: [], attackDeaths: [] }, limits: { maxAlternatives: 3, maxActsPerAlternative: 4, maxNestingDepth: 8 } };

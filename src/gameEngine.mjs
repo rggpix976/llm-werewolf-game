@@ -7,6 +7,9 @@ import {
 import { PHASES, ROLES, TEAMS, publicRoleName, publicTeamName, teamForRole } from "./constants.mjs";
 import { SeededRandom } from "./seededRandom.mjs";
 import { containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
+import { createPhase3Binding, validatePhase3Response } from "./interpreterValidation.mjs";
+import { sha256Fingerprint } from "./conversation/ids.mjs";
+import { ID_PATTERN } from "./conversation/domain.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -78,6 +81,7 @@ const ACCUSATORY_QUESTION_KEYWORDS = [
 
 export class WerewolfGame {
   static create(options = {}) {
+    const createId = options.createId ?? (() => globalThis.crypto.randomUUID());
     const rng = new SeededRandom(options.seed ?? Date.now());
     const roles = assignRoles({ rng, shuffleRoles: options.shuffleRoles ?? true, scenario: options.scenario });
     const players = DEFAULT_PLAYERS.map((template) => {
@@ -88,6 +92,10 @@ export class WerewolfGame {
     initializeSuspicion(players, rng, options.scenario);
 
     const state = {
+      gameSessionId: engineId("game", createId),
+      turnId: engineId("turn", createId),
+      turnOrder: 0,
+      stateVersion: 0,
       day: 1,
       phase: "day_discussion",
       players,
@@ -107,7 +115,8 @@ export class WerewolfGame {
 
     const game = new WerewolfGame(
       state,
-      options.responseProvider ?? new PseudoResponseProvider()
+      options.responseProvider ?? new PseudoResponseProvider(),
+      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, interpreterObserver: options.interpreterObserver, now: options.now }
     );
     game.addPublicInfo({
       type: "setup",
@@ -126,9 +135,18 @@ export class WerewolfGame {
     return game;
   }
 
-  constructor(state, responseProvider = new PseudoResponseProvider()) {
+  constructor(state, responseProvider = new PseudoResponseProvider(), options = {}) {
     this.state = state;
     this.responseProvider = responseProvider;
+    this.createId = options.createId ?? (() => globalThis.crypto.randomUUID());
+    this.interpreterProvider = options.interpreterProvider;
+    this.interpreterValidationEnabled = options.interpreterValidationEnabled === true;
+    this.interpreterObserver = options.interpreterObserver ?? (() => {});
+    this.now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
+    this.pendingInterpreterRequests = new Map();
+    this.interpreterTerminalAudit = new Map();
+    this._commandInProgress = false;
+    this._destroyed = false;
   }
 
   getPlayer(idOrName) {
@@ -182,37 +200,70 @@ export class WerewolfGame {
 
   async dispatchPlayerAction(action = {}) {
     const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
-    let result;
-
-    switch (action.type) {
-      case "ask_npc":
-        result = await this.handlePlayerQuestion(
-          action.targetId ?? action.target ?? action.npcId,
-          action.input ?? action.question
-        );
-        break;
-      case "advance_vote":
-        result = this.runVote();
-        break;
-      case "run_night":
-        result = this.runNight();
-        break;
-      case "get_state":
-        result = null;
-        break;
-      default:
-        throw new Error(`Unknown player action type: ${action.type}`);
-    }
-
-    return {
-      ok: true,
-      actionType: action.type,
-      result,
-      publicSnapshot: this.getPublicSnapshot(),
-      playerLogEntries: this.state.playerLog.slice(logCursor),
-      nextLogCursor: this.state.playerLog.length
-    };
+    if (action.type === "get_state") return this._actionResult(action.type, null, logCursor);
+    const rejected = this._validateCommand(action); if (rejected) return this._actionResult(action.type, rejected, logCursor);
+    if (this._commandInProgress) throw typedError("input_in_progress");
+    if (!Number.isSafeInteger(this.state.stateVersion) || this.state.stateVersion < 0 || this.state.stateVersion === Number.MAX_SAFE_INTEGER) throw typedError("state_version_exhausted");
+    if (!Number.isSafeInteger(this.state.turnOrder) || this.state.turnOrder < 0 || this.state.turnOrder === Number.MAX_SAFE_INTEGER) throw typedError("turn_order_exhausted");
+    this._commandInProgress = true;
+    const preconditionVersion = this.state.stateVersion;
+    const continuation = this._clarificationContinuation(action); if (!continuation) { this.state.turnOrder += 1; this.state.turnId = engineId("turn", this.createId); }
+    try {
+      if (action.type === "ask_npc" && this.interpreterValidationEnabled) await this._observeInterpreter(action);
+      if (this._destroyed) throw abortError();
+      const working = this._workingCopy(), result = await working._executeCompatibilityAction(action);
+      if (this._destroyed || this.state.stateVersion !== preconditionVersion || this.state.turnId !== working.state.turnId || this.state.gameSessionId !== working.state.gameSessionId) throw typedError("stale_state_version");
+      working.state.stateVersion = preconditionVersion + 1; commitState(this.state, working.state);
+      return this._actionResult(action.type, result, logCursor);
+    } finally { this._commandInProgress = false; }
   }
+
+  async _executeCompatibilityAction(action) {
+    if (action.type === "ask_npc") return await this.handlePlayerQuestion(action.targetId ?? action.target ?? action.npcId, action.input ?? action.question);
+    if (action.type === "advance_vote") return this.runVote();
+    if (action.type === "run_night") return this.runNight();
+    throw new Error(`Unknown player action type: ${action.type}`);
+  }
+
+  _actionResult(actionType, result, logCursor) { return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries: this.state.playerLog.slice(logCursor), nextLogCursor: this.state.playerLog.length }; }
+
+  _validateCommand(action) {
+    if (!["ask_npc", "advance_vote", "run_night", "get_state"].includes(action.type)) throw new Error(`Unknown player action type: ${action.type}`);
+    if (this.state.winner) return action.type === "ask_npc" ? { responded: false, reason: "game_already_finished" } : action.type === "run_night" ? { skipped: true, reason: "game_already_finished" } : null;
+    if (action.type === "ask_npc") { const target = action.targetId ?? action.target ?? action.npcId; if (!this.getPlayer(target)) throw new Error(`Unknown NPC: ${target}`); if (!String(action.input ?? action.question ?? "").trim()) throw new TypeError("Player input is required"); }
+    if (action.clarificationRequestId && !this._clarificationContinuation(action)) throw typedError("invalid_clarification_continuation");
+    return null;
+  }
+
+  _clarificationContinuation(action) { if (action.type !== "ask_npc" || !action.clarificationRequestId) return false; const prior = this.interpreterTerminalAudit.get(action.clarificationRequestId); return prior?.outcome?.category === "clarification" && prior.turnId === this.state.turnId; }
+
+  _workingCopy() { const working = Object.create(Object.getPrototypeOf(this)); Object.assign(working, this); working.state = cloneState(this.state); working.interpreterValidationEnabled = false; return working; }
+
+  async _observeInterpreter(action) {
+    if (!this.interpreterProvider?.interpretPlayerInput) return;
+    const rawText = String(action.input ?? action.question).trim(), targetNpcId = action.targetId ?? action.target ?? action.npcId;
+    const binding = createPhase3Binding({ state: this.state, rawText, targetNpcId, createId: this.createId }), controller = new AbortController(), started = this.now();
+    const pending = { status: "pending", binding, controller, responseFingerprint: null, outcome: null }; this.pendingInterpreterRequests.set(binding.requestId, pending);
+    let observation;
+    try { const response = await this.interpreterProvider.interpretPlayerInput(binding.request, { targetNpcId, signal: controller.signal }); pending.attemptCount = response?.result?.diagnostics?.attemptCount ?? 1; observation = this.acceptInterpreterResponse(binding.requestId, response); }
+    catch (error) { observation = { category: "failure", reasonCode: error?.name === "AbortError" ? "transport_aborted" : error?.code ?? "provider_failure", stale: this._destroyed, alternativeCount: 0, candidateCount: 0 }; }
+    finally {
+      pending.status = pending.status === "aborting" || observation?.category === "failure" ? "failed" : "completed"; pending.outcome = observation; this.pendingInterpreterRequests.delete(binding.requestId); this._rememberTerminal(binding.requestId, pending);
+      const redacted = Object.freeze({ correlationId: binding.correlationId, inputRecordId: binding.inputRecordId, turnId: binding.turnId, capturedStateVersion: binding.preconditionStateVersion, outcomeCategory: observation?.category ?? "failure", candidateCount: observation?.candidateCount ?? 0, alternativeCount: observation?.alternativeCount ?? 0, reasonCode: observation?.reasonCode ?? "observer_failure", stale: observation?.stale === true, latencyMs: Math.max(0, this.now() - started), retryAttempt: pending.attemptCount ?? 1, terminalStatus: pending.status });
+      try { this.interpreterObserver(redacted); } catch {}
+    }
+  }
+
+  _rememberTerminal(requestId, pending) { this.interpreterTerminalAudit.set(requestId, Object.freeze({ status: pending.status, turnId: pending.binding.turnId, responseFingerprint: pending.responseFingerprint, outcome: pending.outcome })); while (this.interpreterTerminalAudit.size > 100) this.interpreterTerminalAudit.delete(this.interpreterTerminalAudit.keys().next().value); }
+
+  acceptInterpreterResponse(requestId, response) {
+    const fingerprint = sha256Fingerprint(response), pending = this.pendingInterpreterRequests.get(requestId);
+    if (!pending) { const terminal = this.interpreterTerminalAudit.get(requestId); if (!terminal) return { category: "stale", reasonCode: "stale_no_pending", stale: true, alternativeCount: 0, candidateCount: 0 }; if (!terminal.responseFingerprint) return { category: "stale", reasonCode: "stale_late_response", stale: true, alternativeCount: 0, candidateCount: 0 }; if (terminal.responseFingerprint === fingerprint) return { ...terminal.outcome, duplicate: true, reasonCode: "duplicate_response" }; return { category: "conflict", reasonCode: "duplicate_response_conflict", stale: false, alternativeCount: 0, candidateCount: 0 }; }
+    if (pending.status !== "pending") return { category: "stale", reasonCode: "stale_late_response", stale: true, alternativeCount: 0, candidateCount: 0 };
+    const outcome = validatePhase3Response(response, pending.binding, this.state); pending.responseFingerprint = fingerprint; return outcome;
+  }
+
+  destroy() { this._destroyed = true; for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } }
 
   async handlePlayerQuestion(targetIdOrName, playerInput) {
     if (this.state.winner) {
@@ -909,6 +960,25 @@ function createConversationPolicy(role) {
     forbidden: ["invent_hidden_info", "change_game_state"]
   };
 }
+
+function cloneState(state) { const { rng, ...plain } = state, clonedRng = new SeededRandom(0); clonedRng.state = rng.state; return { ...structuredClone(plain), rng: clonedRng }; }
+function engineId(prefix, createId) { const value = `${prefix}-${createId()}`; if (!ID_PATTERN.test(value)) throw typedError("invalid_engine_id"); return value; }
+function commitState(target, source) {
+  const currentPlayers = new Map(target.players.map((player) => [player.id, player]));
+  const preparedPlayers = source.players.map((player) => structuredClone(player));
+  const preparedState = structuredClone(Object.fromEntries(Object.entries(source).filter(([key]) => !new Set(["players", "rng"]).has(key))));
+  const publishedPlayers = preparedPlayers.map((next) => {
+    const current = currentPlayers.get(next.id);
+    if (!current) throw typedError("invalid_player_identity");
+    return { current, next };
+  });
+  const rng = target.rng;
+  for (const { current, next } of publishedPlayers) { for (const key of Object.keys(current)) delete current[key]; Object.assign(current, next); }
+  for (const key of Object.keys(target)) if (!new Set(["players", "rng"]).has(key)) delete target[key];
+  Object.assign(target, preparedState); target.players = publishedPlayers.map(({ current }) => current); rng.state = source.rng.state; target.rng = rng;
+}
+function typedError(code) { const error = new Error(code); error.code = code; return error; }
+function abortError() { const error = new Error("Aborted"); error.name = "AbortError"; return error; }
 
 function initializeSuspicion(players, rng, scenario) {
   for (const player of players) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-12
+
+- Implemented Migration Phase 3 authoritative Interpreter validation behind the default-off `INTERPRETER_VALIDATION_MODE` flag.
+- Added engine-owned game session, logical turn/order, and state-version lifecycle with atomic compatibility transactions and rollback without version gaps.
+- Added immutable authoritative request bindings, staged inputs, strict candidate/alternative/source-span validation, exact stale classification, bounded redacted diagnostics, and reset/late-response isolation.
+- Phase 3 remains observation-only: no AcceptedSpeechAct, semantic event, canonical claim, structured commit, display plan, Renderer request, or player-facing behavior is produced from Interpreter output.
+- When Phase 2 and Phase 3 flags are both enabled, Phase 3 owns the single Interpreter send and shadow sending is suppressed. Disable the Phase 3 flag for immediate rollback without migration.
+
 ## 2026-07-11
 
 - Added unused, side-effect-free conversation pipeline Phase 1 domain definitions and strict runtime validators.
