@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { request as httpRequest } from "node:http";
 import test from "node:test";
 import { createWebServer } from "../src/webServer.mjs";
 import { OpenAIInterpreterProvider, PseudoInterpreterProvider } from "../src/interpreterTransport.mjs";
@@ -7,8 +8,9 @@ import { buildShadowInterpreterRequest, InterpreterShadowClient } from "../publi
 import { HttpResponseProvider, SessionManager } from "../public/httpResponseProvider.mjs";
 
 const snapshot = Object.freeze({ day: 1, phase: "day_discussion", winner: null, players: Object.freeze([{ id: "npc-1", name: "Aoi", alive: true }]) });
-function requestFixture(overrides = {}) { return { ...buildShadowInterpreterRequest({ snapshot, rawText: "hello", gameId: 1, requestId: "interpreter-1", correlationId: "correlation-1" }), ...overrides }; }
-async function start(options = {}) { const server = createWebServer({ config: { provider: "pseudo", interpreterShadowMode: true, openai: null }, ...options }); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)); return { url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => server.close(resolve)) }; }
+const binding = Object.freeze({ schemaVersion: 1, sessionId: "shadow-session-1", inputRecordId: "shadow-input-1", shadowTurnId: "shadow-turn-1", shadowSnapshotVersion: 0 });
+function requestFixture(overrides = {}) { return { ...buildShadowInterpreterRequest({ snapshot, rawText: "hello", binding, requestId: "interpreter-1", correlationId: "correlation-1" }), ...overrides }; }
+async function start(options = {}) { const server = createWebServer({ config: { provider: "pseudo", interpreterShadowMode: true, openai: null }, ...options }); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)); return { url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) }; }
 function providerResult(request) { return new PseudoInterpreterProvider().interpretPlayerInput(request); }
 
 test("shadow feature flag defaults disabled and is safely public", async () => {
@@ -74,8 +76,33 @@ test("browser HTTP provider validates success, errors, and correlation", async (
   const errorProvider = new HttpResponseProvider({ fetch: async () => ({ ok: false, status: 502, json: async () => ({ schemaVersion: 1, requestId: request.requestId, correlationId: "server-1", error: { code: "invalid_provider_response", retryable: false } }) }) }); await assert.rejects(errorProvider.interpretPlayerInput(request), (error) => error.code === "invalid_provider_response");
 });
 
+test("browser HTTP provider preserves input identity and links external abort", async () => {
+  const request = requestFixture(); let fetchSignal, added = 0, removed = 0;
+  const external = new AbortController(), originalAdd = external.signal.addEventListener.bind(external.signal), originalRemove = external.signal.removeEventListener.bind(external.signal);
+  external.signal.addEventListener = (...args) => { added += 1; return originalAdd(...args); };
+  external.signal.removeEventListener = (...args) => { removed += 1; return originalRemove(...args); };
+  const manager = new SessionManager({ createId: () => "session" }); manager.startNewGame();
+  const provider = new HttpResponseProvider({ sessionManager: manager, fetch: async (_url, options) => { fetchSignal = options.signal; return await new Promise((resolve, reject) => options.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true })); } });
+  const pending = provider.interpretPlayerInput(request, { signal: external.signal });
+  assert.equal(manager.pendingRequests.get(request.requestId).pending.inputRecordId, request.inputRecordId);
+  external.abort(); await assert.rejects(pending, (error) => error.name === "AbortError");
+  assert.equal(fetchSignal.aborted, true); assert.equal(added, 1); assert.equal(removed, 1); assert.equal(manager.pendingRequests.size, 0);
+});
+
 test("SessionManager rejects duplicate pending and aborts on new game", () => {
   const manager = new SessionManager(), pending = { schemaVersion: 1, pendingType: "interpreter", requestId: "pending-1" }, first = new AbortController(), second = new AbortController(); manager.registerPendingRequest(pending, first); assert.throws(() => manager.registerPendingRequest(pending, second)); manager.startNewGame(); assert.equal(first.signal.aborted, true); assert.equal(manager.pendingRequests.size, 0);
+});
+
+test("ShadowInterpreterBinding uses real runtime-only identities and monotonic versions", () => {
+  let id = 0; const manager = new SessionManager({ createId: () => String(++id) }); manager.startNewGame();
+  const first = manager.stageShadowInput({ rawText: "first" }), second = manager.stageShadowInput({ rawText: "second" });
+  assert.notEqual(first.inputRecordId, second.inputRecordId); assert.notEqual(first.shadowTurnId, second.shadowTurnId); assert.equal(first.shadowSnapshotVersion, 0); assert.equal(second.shadowSnapshotVersion, 1);
+  assert.equal(manager.shadowInputs.get(first.inputRecordId).rawText, "first");
+  const priorSession = first.sessionId; manager.startNewGame(); const next = manager.stageShadowInput({ rawText: "next" });
+  assert.notEqual(next.sessionId, priorSession); assert.equal(next.shadowSnapshotVersion, 0); assert.equal(manager.shadowInputs.size, 1);
+  const request = buildShadowInterpreterRequest({ snapshot, rawText: "next", binding: next, requestId: "request-next", correlationId: "correlation-next" });
+  assert.equal(request.inputRecordId, next.inputRecordId); assert.equal(request.turnId, next.shadowTurnId); assert.equal(request.preconditionStateVersion, next.shadowSnapshotVersion);
+  assert.deepEqual(request.publicContext, { publicEvents: [], publicClaims: [], publicVotes: [], executions: [], attackDeaths: [] });
 });
 
 test("shadow client is fire-and-forget, redacted, and ignores stale results", async () => {
@@ -84,6 +111,15 @@ test("shadow client is fire-and-forget, redacted, and ignores stale results", as
 
 test("shadow success and failure observations never expose raw input or alter game data", async () => {
   for (const outcome of ["success", "failure"]) { const observed = [], manager = new SessionManager(), gameId = manager.startNewGame(), provider = { interpretPlayerInput: async (request) => { if (outcome === "failure") throw Object.assign(new Error("RAW PROVIDER SECRET"), { code: "provider_unavailable" }); return { serverCorrelationId: "server-1", result: { diagnostics: { attemptCount: 1 }, modelOutput: { alternatives: [{ alternativeId: "alt-1" }] } } }; } }, client = new InterpreterShadowClient({ provider, sessionManager: manager, observer: (entry) => observed.push(entry), createId: () => "id", now: () => 1 }), before = structuredClone(snapshot); const requestId = client.observe({ snapshot, rawText: "RAW PLAYER SECRET", gameId, targetNpcId: "npc-1" }); assert.equal(requestId, "interpreter-id"); await Promise.resolve(); await Promise.resolve(); assert.equal(observed.length, 1); assert.equal(observed[0].status, outcome); const serialized = JSON.stringify(observed); assert.equal(serialized.includes("RAW PLAYER"), false); assert.equal(serialized.includes("RAW PROVIDER"), false); assert.deepEqual(snapshot, before); }
+});
+
+test("Interpreter endpoint aborts the active provider attempt on client disconnect", async () => {
+  let calls = 0, backoffs = 0, providerStarted, providerAborted; const started = new Promise((resolve) => { providerStarted = resolve; }), aborted = new Promise((resolve) => { providerAborted = resolve; });
+  const interpreterProvider = { interpretPlayerInput: (request, { signal }) => runProviderWithRetry(({ signal: attemptSignal }) => { calls += 1; providerStarted(); return new Promise((resolve, reject) => attemptSignal.addEventListener("abort", () => { providerAborted(); reject(Object.assign(new Error("aborted"), { name: "AbortError" })); }, { once: true })); }, { signal, delay: async () => { backoffs += 1; } }).then(({ value }) => value) };
+  const { url, close } = await start({ interpreterProvider }); const target = new URL("/api/interpret-player-input", url);
+  const client = httpRequest({ hostname: target.hostname, port: target.port, path: target.pathname, method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" } }); client.on("error", () => {}); client.end(JSON.stringify(requestFixture()));
+  await started; client.destroy();
+  try { await Promise.race([aborted, new Promise((_, reject) => setTimeout(() => reject(new Error("provider was not aborted")), 1000))]); assert.equal(calls, 1); assert.equal(backoffs, 0); } finally { await close(); }
 });
 
 test("provider retry preserves identity, retries transient failures, and aborts backoff", async () => {
@@ -98,6 +134,7 @@ test("provider retry enforces attempts, budget, timeout, and Retry-After policy"
   const waits = []; calls = 0; await runProviderWithRetry(async () => { calls += 1; if (calls === 1) throw Object.assign(new Error("rate"), { retryable: true, retryAfterMs: 1500 }); return "ok"; }, { now: () => 0, delay: async (ms) => waits.push(ms) }); assert.deepEqual(waits, [1500]);
   waits.length = 0; calls = 0; await runProviderWithRetry(async () => { calls += 1; if (calls === 1) throw Object.assign(new Error("rate"), { retryable: true, retryAfterMs: 3000 }); return "ok"; }, { now: () => 0, delay: async (ms) => waits.push(ms) }); assert.deepEqual(waits, [1000]);
   await assert.rejects(runProviderWithRetry(({ signal }) => new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })), { policy: { perAttemptTimeoutMs: 5, maxAttempts: 1 } }), (error) => error.code === "provider_timeout");
+  let scheduled, cleared; await assert.rejects(runProviderWithRetry(({ signal }) => new Promise((resolve, reject) => { signal.addEventListener("abort", () => reject(signal.reason), { once: true }); scheduled(); }), { policy: { maxAttempts: 1 }, setTimeout: (callback) => (scheduled = callback, 17), clearTimeout: (timer) => { cleared = timer; } }), (error) => error.code === "provider_timeout"); assert.equal(cleared, 17);
 });
 
 test("OpenAI Interpreter returns only strict structured output and redacts private data", async () => {

@@ -46,8 +46,10 @@ export class HttpResponseProvider {
 
   async interpretPlayerInput(request, options = {}) {
     validateInterpreterRequest(request);
-    const controller = new AbortController(), pending = { schemaVersion: 1, pendingType: "interpreter", requestId: request.requestId, correlationId: request.correlationId, turnId: request.turnId, preconditionStateVersion: request.preconditionStateVersion, inputRecordId: request.requestId, targetNpcId: options.targetNpcId ?? request.publicRoster.find((entry) => entry.playerId !== request.playerContext.playerId)?.playerId ?? request.playerContext.playerId, operation: "interpret_player_input", status: "pending", startedAt: new Date().toISOString() };
+    const controller = new AbortController(), onExternalAbort = () => controller.abort(options.signal.reason), pending = { schemaVersion: 1, pendingType: "interpreter", requestId: request.requestId, correlationId: request.correlationId, turnId: request.turnId, preconditionStateVersion: request.preconditionStateVersion, inputRecordId: request.inputRecordId, targetNpcId: options.targetNpcId ?? request.publicRoster.find((entry) => entry.playerId !== request.playerContext.playerId)?.playerId ?? request.playerContext.playerId, operation: "interpret_player_input", status: "pending", startedAt: new Date().toISOString() };
     validatePendingConversationRequest(pending);
+    if (options.signal?.aborted) controller.abort(options.signal.reason);
+    else options.signal?.addEventListener("abort", onExternalAbort, { once: true });
     if (this.sessionManager) this.sessionManager.registerPendingRequest(pending, controller);
     let terminalStatus = "failed";
     try {
@@ -57,6 +59,7 @@ export class HttpResponseProvider {
       if (!body) throw new TypeError("Interpreter HTTP response must be JSON");
       const validated = validateInterpreterHttpResponse(body, request); terminalStatus = "completed"; return validated;
     } finally {
+      options.signal?.removeEventListener("abort", onExternalAbort);
       if (this.sessionManager) this.sessionManager.completePendingRequest(request.requestId, terminalStatus);
     }
   }
@@ -66,10 +69,14 @@ export class HttpResponseProvider {
  * Manages game sessions and request cancellation.
  */
 export class SessionManager {
-  constructor() {
+  constructor(options = {}) {
     this.activeControllers = new Set();
     this.pendingRequests = new Map();
+    this.shadowInputs = new Map();
     this.currentGameId = 0;
+    this.sessionId = null;
+    this.shadowSnapshotVersion = 0;
+    this.createId = options.createId ?? (() => globalThis.crypto.randomUUID());
   }
 
   startNewGame() {
@@ -79,7 +86,18 @@ export class SessionManager {
     }
     this.activeControllers.clear();
     this.pendingRequests.clear();
+    this.shadowInputs.clear();
+    this.sessionId = `shadow-session-${this.createId()}`;
+    this.shadowSnapshotVersion = 0;
     return this.currentGameId;
+  }
+
+  stageShadowInput({ rawText, actorId = "player", locale = "ja-JP" }) {
+    if (!this.sessionId) throw new TypeError("shadow session has not started");
+    const binding = validateShadowInterpreterBinding({ schemaVersion: 1, sessionId: this.sessionId, inputRecordId: `shadow-input-${this.createId()}`, shadowTurnId: `shadow-turn-${this.createId()}`, shadowSnapshotVersion: this.shadowSnapshotVersion++ });
+    const record = validateShadowPlayerInputRecord({ ...binding, actorId, rawText, locale });
+    this.shadowInputs.set(binding.inputRecordId, Object.freeze(record));
+    return Object.freeze(binding);
   }
 
   registerRequest(controller) {
@@ -101,6 +119,7 @@ export class SessionManager {
     if (!active) return false;
     active.pending = Object.freeze({ ...active.pending, status });
     this.pendingRequests.delete(requestId);
+    this.shadowInputs.delete(active.pending.inputRecordId);
     this.unregisterRequest(active.controller);
     return true;
   }
@@ -109,4 +128,4 @@ export class SessionManager {
     return gameId === this.currentGameId;
   }
 }
-import { validateErrorEnvelope, validateInterpreterHttpResponse, validateInterpreterRequest, validatePendingConversationRequest } from "../src/conversation/contracts.mjs";
+import { validateErrorEnvelope, validateInterpreterHttpResponse, validateInterpreterRequest, validatePendingConversationRequest, validateShadowInterpreterBinding, validateShadowPlayerInputRecord } from "../src/conversation/contracts.mjs";
