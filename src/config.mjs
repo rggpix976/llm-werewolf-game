@@ -16,10 +16,12 @@ export function parseConfig(env = process.env) {
     interpreterValidationMode: parseBoolean(env.INTERPRETER_VALIDATION_MODE, false, "INTERPRETER_VALIDATION_MODE"),
     playerConversationCommitMode: parseBoolean(env.PLAYER_CONVERSATION_COMMIT_MODE, false, "PLAYER_CONVERSATION_COMMIT_MODE"),
     playerStructuredConsumerMode: parseBoolean(env.PLAYER_STRUCTURED_CONSUMER_MODE, false, "PLAYER_STRUCTURED_CONSUMER_MODE"),
+    npcStructuredReactionMode: parseBoolean(env.NPC_STRUCTURED_REACTION_MODE, false, "NPC_STRUCTURED_REACTION_MODE"),
     openai: null
   };
   if (config.playerConversationCommitMode && !config.interpreterValidationMode) throw new Error("PLAYER_CONVERSATION_COMMIT_MODE requires INTERPRETER_VALIDATION_MODE=true.");
   if (config.playerStructuredConsumerMode && !config.playerConversationCommitMode) throw new Error("PLAYER_STRUCTURED_CONSUMER_MODE requires PLAYER_CONVERSATION_COMMIT_MODE=true.");
+  if (config.npcStructuredReactionMode && !config.playerConversationCommitMode) throw new Error("NPC_STRUCTURED_REACTION_MODE requires PLAYER_CONVERSATION_COMMIT_MODE=true.");
 
   if (provider === "openai") {
     const apiKey = (env.OPENAI_API_KEY || "").trim();
@@ -50,7 +52,8 @@ export function getRuntimeConfig(config) {
     interpreterShadowMode: config.interpreterShadowMode === true,
     interpreterValidationMode: config.interpreterValidationMode === true,
     playerConversationCommitMode: config.playerConversationCommitMode === true,
-    playerStructuredConsumerMode: config.playerStructuredConsumerMode === true
+    playerStructuredConsumerMode: config.playerStructuredConsumerMode === true,
+    npcStructuredReactionMode: config.npcStructuredReactionMode === true
   };
 
   if (config.openai) {

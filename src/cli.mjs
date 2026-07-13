@@ -14,7 +14,8 @@ const game = WerewolfGame.create({
   interpreterProvider: new PseudoInterpreterProvider(),
   interpreterValidationEnabled: runtimeConfig.interpreterValidationMode,
   playerConversationCommitEnabled: runtimeConfig.playerConversationCommitMode,
-  playerStructuredConsumerEnabled: runtimeConfig.playerStructuredConsumerMode
+  playerStructuredConsumerEnabled: runtimeConfig.playerStructuredConsumerMode,
+  npcStructuredReactionEnabled: runtimeConfig.npcStructuredReactionMode
 });
 
 let printedLogIndex = 0;

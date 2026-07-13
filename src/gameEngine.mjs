@@ -14,6 +14,8 @@ import { validateCommittedConversationGraph, validatePlayerLegacyDisplayCompatib
 import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
 import { projectMappedPlayerEntries, renderUnacknowledgedPlayerPublications, renderPlayerPublication, resolvePlayerStructuredConsumerPolicy } from "./playerStructuredConsumer.mjs";
 import { PlayerPublicationDeliveryController } from "./playerPublicationDelivery.mjs";
+import { buildNpcKnownInformationProjection } from "./npcKnownInformationProjection.mjs";
+import { createLogicalReactionFoundation, createReactionAttemptFoundation, resolveNpcStructuredReactionPolicy } from "./npcReactionFoundation.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -124,7 +126,7 @@ export class WerewolfGame {
     const game = new WerewolfGame(
       state,
       options.responseProvider ?? new PseudoResponseProvider(),
-      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, playerStructuredConsumerEnabled: options.playerStructuredConsumerEnabled === true, playerStructuredConsumerObserver: options.playerStructuredConsumerObserver, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
+      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, playerStructuredConsumerEnabled: options.playerStructuredConsumerEnabled === true, npcStructuredReactionEnabled: options.npcStructuredReactionEnabled === true, playerStructuredConsumerObserver: options.playerStructuredConsumerObserver, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
     );
     game.addPublicInfo({
       type: "setup",
@@ -151,6 +153,7 @@ export class WerewolfGame {
     this.interpreterValidationEnabled = options.interpreterValidationEnabled === true;
     this.playerConversationCommitEnabled = resolvePlayerConversationCommitPolicy({ playerConversationCommitMode: options.playerConversationCommitEnabled === true, interpreterValidationMode: this.interpreterValidationEnabled }).enabled;
     this.playerStructuredConsumerEnabled = resolvePlayerStructuredConsumerPolicy({ playerStructuredConsumerMode: options.playerStructuredConsumerEnabled === true, playerConversationCommitMode: this.playerConversationCommitEnabled }).enabled;
+    this.npcStructuredReactionEnabled = resolveNpcStructuredReactionPolicy({ npcStructuredReactionMode: options.npcStructuredReactionEnabled === true, playerConversationCommitMode: this.playerConversationCommitEnabled }).enabled;
     this.playerStructuredConsumerObserver = options.playerStructuredConsumerObserver ?? (() => {});
     this.playerPublicationDeliveryController = new PlayerPublicationDeliveryController({ gameSessionId: state.gameSessionId, createId: this.createId, observer: this.playerStructuredConsumerObserver, enabled: this.playerStructuredConsumerEnabled, initialWatermark: 0, isQuiescent: () => !this._commandInProgress && !this.activeNpcReaction && ![...this.pendingInterpreterRequests.values()].some((pending) => pending.status === "pending"), listPublications: () => this.state.conversation.publications.filter((record) => record.recordType === "player_utterance_published").sort((a, b) => a.publicationSlotOrder - b.publicationSlotOrder), resolvePublication: (publicationId, deliveryMode) => deliveryMode === "structured" ? this._displayPlayerPublication(this._renderPlayerPublication(publicationId)) : this._legacyPlayerPublication(publicationId), resolvePreCutoverIdentity: (publicationId) => { const mapping = this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId }); return { compatibilityMappingId: mapping.compatibilityMappingId, legacyEntryId: mapping.legacyEntryId, legacyLogAppendOrder: mapping.legacyLogAppendOrder, legacyEntryFingerprint: mapping.legacyEntryFingerprint }; } });
     this.phase4FaultInjector = options.phase4FaultInjector ?? (() => {});
@@ -177,6 +180,30 @@ export class WerewolfGame {
 
   getDeadPlayers() {
     return this.state.deadPlayers.map((id) => this.getPlayer(id));
+  }
+
+  buildNpcKnownInformationProjection(actorId, triggerId) {
+    return buildNpcKnownInformationProjection(actorId, triggerId, this.state);
+  }
+
+  createNpcReactionFoundation(actorId, triggerId) {
+    const projection = this.buildNpcKnownInformationProjection(actorId, triggerId);
+    const logicalReaction = createLogicalReactionFoundation({
+      gameSessionId: this.state.gameSessionId,
+      triggerRequestId: projection.trigger.requestId,
+      inputRecordId: projection.trigger.inputRecordId,
+      turnId: projection.trigger.turnId,
+      turnOrder: this.state.turnOrder,
+      phase: projection.trigger.phase,
+      actorId,
+      baseStateVersion: projection.trigger.stateVersion,
+      createId: this.createId
+    });
+    return deepFreeze({ logicalReaction, projection });
+  }
+
+  createNpcReactionAttemptFoundation(logicalReaction) {
+    return createReactionAttemptFoundation(logicalReaction, this.createId);
   }
 
   setPhase(phase) {
