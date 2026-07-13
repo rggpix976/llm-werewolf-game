@@ -265,7 +265,88 @@ Legacy player suppression happens only when building the live adapter view from 
 
 The common mixed player/NPC history order remains legacy log append order until Phase 6 migrates NPC publications. An exact mapping replaces only its player entry at `legacyLogAppendOrder`; unmapped NPC entries remain at their existing append locations. `publicationSlotOrder` orders player delivery discovery and later unified publications, but is never numerically compared with a legacy log index. `recordAppendOrder`, state version, turn lexical order, text, and phase are not mixed sort keys. Live action envelopes carry the explicitly mapped player candidate and legacy NPC deltas in legacy append order; stale cursors can omit earlier entries without changing identity resolution.
 
-Each adapter has a `consumerGeneration` and cutover `publicationSlotOrder` watermark. OFF -> ON is permitted only with no active sink attempt; it increments generation and marks publications below the watermark as pre-cutover/legacy-delivered for live delivery without manufacturing acknowledgements. They remain available to history queries and are never backfilled to the live sink. ON -> OFF is also quiescent-only; acknowledged publications remain suppressed by identity, while unacknowledged post-cutover publications may be delivered by the legacy sink through the same prepare/begin/complete/ack protocol. Thus rollback does not redisplay acknowledged structured output. A switch requested during `in_flight` or `sink_succeeded` fails with `consumer_mode_switch_in_flight`; it never guesses whether the sink succeeded or discards an ack-only retry.
+Each adapter has a requested consumer mode, an effective consumer mode, a `consumerGeneration`, and a committed cutover `publicationSlotOrder` watermark. Requested mode is configuration intent; effective mode alone owns live delivery. They may differ only during the explicit deferred transition below. ON -> OFF is quiescent-only: acknowledged publications remain suppressed by identity, while unacknowledged post-cutover publications use the legacy sink through the same exact attempt/receipt/acknowledgement protocol. A switch requested during `in_flight` or `sink_succeeded` is rejected as `consumer_mode_switch_in_flight`; it never guesses sink outcome or discards an acknowledgement-only retry.
+
+#### Deferred quiescent OFF -> ON cutover
+
+The selected baseline is **deferred quiescent cutover with an explicit pre-cutover drain**. A mode-transition request is a controller-created, session-local, non-authoritative operation. Its minimum frozen identity is `modeTransitionId`, `gameSessionId`, `consumerId`, `sinkType`, `fromMode`, `requestedMode`, `effectiveMode`, `status`, `proposedCutoverPublicationSlotOrder`, `consumerGenerationBefore`, the required publication identities, completed evidence identities, and a runtime creation order. The caller never creates its ID. At most one transition exists per consumer.
+
+Terms are normative:
+
+- **requested consumer mode** is the latest accepted configuration intent: `legacy | structured`.
+- **effective consumer mode** is the mode currently permitted to own live delivery.
+- A **proposed cutover watermark** is the next publication slot frozen when an OFF -> ON request is accepted. It is not active authority.
+- A **committed cutover watermark** is that same value only after successful completion.
+- A **pre-cutover publication** belongs to the same session and has slot order below the proposed watermark.
+- A **pre-cutover drain** is exact-identity delivery of missing legacy sink evidence without starting a game command.
+- **Pre-cutover delivery evidence** is controller-owned proof that the exact legacy candidate completed the configured real sink.
+- **Transition-stable state** means no transition is draining or applying and requested/effective modes agree.
+- **Live delivery model state** is adapter/controller bookkeeping; **live delivery DOM state** is the actual attached browser node. Model mutation does not prove DOM state.
+- **History projection** is repeatable derived data and never delivery, evidence, acknowledgement, or reconciliation authority.
+- **Delivery reconciliation** reuses exact identity bookkeeping; it never infers identity from rendered text, cursor, phase, day, or array position.
+
+The controller state model is:
+
+```text
+requestedMode: legacy | structured
+effectiveMode: legacy | structured
+transitionStatus:
+  stable | draining_pre_cutover | applying | completed | cancelled | stale_session
+```
+
+On OFF -> ON request, the controller validates the live session and quiescence, freezes the current next publication slot as the proposed watermark, resolves every earlier player publication through its exact compatibility mapping, and compares the required set with successful pre-cutover evidence. Quiescence requires no active player command, Interpreter/NPC provider or reaction, `in_flight` sink, or unresolved `sink_succeeded` receipt; a request before those operations become terminal is rejected by the existing pending-operation policy without creating a transition. If evidence is complete, explicit completion may apply immediately. Otherwise it returns a pending transition result with reason `pre_cutover_delivery_pending`, the opaque transition ID, and a bounded missing count; it does not throw as the sole result. Requested mode becomes `structured`, effective mode remains `legacy`, status becomes `draining_pre_cutover`, and generation and committed watermark remain unchanged. No direct feature-flag rewrite or implicit rollback is a recovery API.
+
+The proposed watermark and required set are immutable for one transition. Retry, partial success, cursors, log length, browser/CLI differences, and newly observed history cannot move or recompute them. Because new authoritative commands are gated while draining, the set cannot grow. Cancellation ends that transition; a later request gets a new ID and newly frozen watermark and cannot reuse the old transition.
+
+Recommended conceptual APIs are:
+
+```text
+requestPlayerPublicationConsumerMode(...)
+getPendingPreCutoverPlayerPublications(...)
+completePlayerPublicationConsumerModeTransition(...)
+cancelPlayerPublicationConsumerModeTransition(...)
+getPlayerPublicationConsumerModeState(...)
+```
+
+Exact names may follow repository conventions, but their authority boundaries may not be combined with `dispatchPlayerAction()` boolean synchronization. Pending retrieval requires exact transition/session/consumer identity, is bounded to 1-32 items, and returns only missing-evidence publications below the frozen watermark in publication-slot order. Duplicate retrieval before success is allowed. It is not a history query, game action, provider call, or structured backfill. A terminal resolution failure remains terminal and prevents completion; legacy fallback cannot bypass it.
+
+During `draining_pre_cutover`, a new authoritative top-level command is rejected before input staging, provider invocation, turn allocation, idempotency insertion, Phase 3 request, Phase 4 commit, NPC work, phase change, or `stateVersion` change. The reason is `consumer_mode_transition_pending`, distinct from `pre_cutover_delivery_pending`: the former means a game command was attempted during a transition; the latter means transition completion lacks sink evidence. Browser/CLI may hold a non-authoritative reference to the original command, but must not allocate a new identity or dispatch it until completion. Reset discards it. After completion the adapter may submit it exactly once through the normal command boundary; the transition API never dispatches it.
+
+Completion requires the exact transition/session/consumer/proposed-watermark identity, evidence for every required publication, no `in_flight` or `sink_succeeded` attempt, and no unresolved terminal failure. It changes effective mode to `structured`, increments consumer generation exactly once, commits the frozen watermark, and marks the transition completed. It changes game version zero times. Exact repeated completion returns the stored result without another generation increment. Cutover performs no structured live backfill: pre-cutover publications remain available to structured history exactly once but never become structured live candidates.
+
+Cancellation is allowed only without an active sink or unresolved sink-success receipt. It retains effective `legacy`, generation, committed watermark, and already recorded evidence, marks the transition cancelled, and never executes a queued command. Cancellation does not undo visible output. Reset/destroy marks transition, attempts, receipts, evidence, output/DOM bookkeeping, and queued references stale; late retrieval, completion, cancellation, or evidence is rejected as `stale_publication_session` and cannot affect a new session.
+
+#### Pre-cutover legacy delivery evidence
+
+Initial Phase 5-OFF legacy player delivery and transition drain use the same strict legacy attempt lifecycle:
+
+```text
+unseen -> prepared -> in_flight -> sink_succeeded -> evidence_recorded
+prepared | in_flight -> failed_retryable
+resolution failure -> failed_terminal
+```
+
+The attempt is bound to session, publication, consumer, generation, attempt, sink type, and `deliveryMode: "legacy_pre_cutover"`. `PreCutoverLegacyDeliveryEvidence` is runtime-only and minimally binds `gameSessionId`, `publicationId`, `consumerId`, `sinkType`, `deliveryAttemptId`, `consumerGeneration`, controller-issued sink-success receipt identity, compatibility mapping ID, legacy entry ID, legacy append order, and evidence runtime order. Only the controller writes it from its retained exact receipt. A caller, observer, local array push, render preparation, rendered text/hash, or history cannot create it. Exact duplicate evidence is idempotent; a different attempt or receipt conflicts. Evidence changes no authoritative record or `stateVersion` and is valid only for that session lifetime. It proves legacy pre-cutover display solely for cutover eligibility; it does not fabricate the standard structured publication acknowledgement.
+
+Sink failure records no evidence and leaves the publication retrievable. Sink success followed by evidence-recording failure retains the controller receipt and uses evidence-only retry; it must not execute the sink again. Partial multi-publication success is retained: successful items are not redisplayed, failed items remain retrievable, and completion waits for all evidence. No partial failure rolls back an already visible output.
+
+For browser, sink success occurs only after all of these mechanical conditions hold:
+
+1. the frozen prepared candidate is used without caller message/day/phase substitution;
+2. safe DOM APIs create the intended node and text content;
+3. exact delivery identity is bound to controller-owned node bookkeeping;
+4. the node is appended to the intended conversation container without exception;
+5. its parent is verified as that container and bookkeeping resolves that same node;
+6. only then is the one-shot sink-completion capability passed to the controller;
+7. only the resulting exact receipt may create pre-cutover evidence.
+
+`playerFacingLog.push()`, view-model mutation, a scheduled or completed `render()`, `requestAnimationFrame`, browser paint, prompt redraw, and observer success are insufficient. Browser paint is not awaited. Raw input never enters `innerHTML`. If node creation, container lookup, append, parent verification, bookkeeping, or sink completion fails before receipt issuance, the adapter removes any staged node/bookkeeping it owns and records no evidence. If append and receipt succeed but later envelope work fails, the exact receipt/evidence remains and retry cannot append a duplicate node. Later rendering must not clear an acknowledged/evidenced node unconditionally: it either runs before live delivery or performs keyed identity reconciliation and reuses the node. History projection is never appended as a live node.
+
+For CLI, sink success means the configured synchronous write returns or the configured asynchronous write fulfills. Prompt redraw is outside the proof. Throw/rejection records no receipt/evidence. Same-process exact output bookkeeping enables evidence-only retry without another write. Terminal-control sanitization happens before the configured write but is not itself success. Browser and CLI therefore share candidate, attempt, receipt, evidence, retry, cancellation, reset, and stale-session rules; only DOM attachment verification versus configured output completion differs.
+
+The browser processing order is: obtain a non-replay runtime result; update non-conversation UI; complete base rendering that cannot consume live delivery; retrieve exact drain/live candidates; append each exact node; complete sink; record evidence or acknowledgement; and perform no later unkeyed full-log replacement. Replay, `get_state`, history, diagnostics, and snapshots never create a drain/live envelope and never change the visible conversation container.
+
+The selected baseline rejects four alternatives. Implicitly rolling requested mode back to legacy loses transition identity and induces direct flag writes. Repeatedly throwing or auto-retrying during ordinary actions can permanently block access to retry delivery and mixes commands with drain. Carrying missing publications into structured mode violates no-live-backfill and can replace legacy content. Continuing new legacy commands while draining makes the frozen required set race with publication creation and mixes ownership in one action.
 
 The Phase 4 compatibility exception ends only after the mapping repair is deployed, browser and CLI implement the common sink/ack protocol, non-display queries are proven non-consuming, and retry, duplicate/late acknowledgement, stale cursor, repeated text, multiple turn, partial acknowledgement, and flag-transition tests pass. Physical legacy entry and mapping deletion remains Phase 9.
 
@@ -296,6 +377,14 @@ Acknowledgement decisions are also closed:
 | Ack identity conflicts with stored ack | `publication_ack_conflict` | no | none | none | rejection only |
 | Non-display retrieval/history/render | no ack operation | n/a | no live display consumption | none | resolve/render outcomes only |
 | Mode switch while `in_flight` or `sink_succeeded` | `consumer_mode_switch_in_flight` | yes after settle/fail/ack | mode unchanged | none | rejection only |
+| OFF -> ON with all required evidence and no active attempt | transition may complete | no | commit frozen watermark; no backfill | none | transition completion only |
+| OFF -> ON with missing evidence | `pre_cutover_delivery_pending` + transition ID | yes through drain API | requested structured; effective legacy; no display implied | none | bounded redacted pending diagnostic |
+| Game command while drain is active | `consumer_mode_transition_pending` | after completion/cancel | no sink, display, or command dispatch | none | bounded redacted rejection |
+| Browser model/log array updated but node not attached | no sink success/evidence | yes | rollback owned staging; publication remains pending | none | sink failure only |
+| Exact browser node attached and controller receipt issued | evidence may be recorded | evidence-only if recording fails | exactly one attached node | none | sink success, then evidence outcome |
+| CLI configured write returns/fulfills and receipt issued | evidence may be recorded | evidence-only if recording fails | exactly one output | none | sink success, then evidence outcome |
+| Cancel draining transition with no active sink | `cancelled` | new request allowed | retain effective legacy and prior evidence | none | transition cancellation only |
+| Reset during transition or late transition callback | `stale_publication_session` | no | invalidate transition/attempt/receipt/evidence | none | redacted stale diagnostic |
 
 Required implementation sequences are:
 
@@ -307,7 +396,14 @@ Required implementation sequences are:
 - **Non-display query:** return state/history/derived render data without beginning a sink or changing acknowledgement.
 - **Stale cursor/multiple turns:** select by publication/mapping identity; verify exact legacy location/fingerprint; replace only that entry; acknowledged or omitted earlier entries do not shift the match.
 - **Reset/late ack:** invalidate old controller; reject the old callback as stale; do not mutate or display in the new session.
-- **Flag transition:** require quiescence; increment generation and set watermark; never infer delivered state from log position or text; never live-backfill or redisplay acknowledged identity.
+- **Initial OFF legacy success:** exact-resolve the mapped legacy candidate; prepare/begin; complete the browser DOM append or CLI configured write; obtain the controller receipt; record pre-cutover evidence; create no structured acknowledgement and no version transition.
+- **OFF -> ON with evidence complete:** request transition; freeze the proposed watermark and required set; verify evidence and quiescence; explicitly complete; increment generation once; commit the watermark; perform no backfill.
+- **OFF -> ON with evidence missing:** request transition; retain effective legacy; pause new commands; retrieve exact missing candidates through the drain API; use the real legacy sink; record evidence; explicitly complete only after the full set succeeds.
+- **Browser drain failure:** prepare/begin; fail node creation/attachment/verification; clean owned staging; create no receipt/evidence; retrieve the same publication later.
+- **Sink-success/evidence-failure retry:** retain the exact receipt and visible node/output; retry evidence only; never execute the sink again.
+- **Partial drain:** retain evidence for successful identities, retry only missing identities, and leave the transition pending until the fixed set is complete.
+- **Completion and queued command:** apply transition; then the adapter resubmits one held command once through normal dispatch; only that dispatch may allocate a turn or commit.
+- **Cancel/reset:** cancellation retains effective legacy and evidence without executing a command; reset makes all transition identities and callbacks stale.
 
 Reaction preparation begins only after the player result `N+1` exists. If another authoritative transaction changes turn, phase, relevant references, or version before reaction commit, preparation is discarded as stale and no reaction object is published. A successful reaction advances once to `N+2`. Renderer failure cannot roll back either commit. Reservation and finalization carry `N+2` as provenance and never advance it.
 
@@ -1235,7 +1331,7 @@ The first implementation PR is Phase 1 only. It changes no production flow, prov
 | 2. Interpreter transport in shadow mode | Call interpreter without consuming result; add runtime-only shadow binding, staged shadow input, and pending tracking without phase mutation | `src/webServer.mjs`, `src/responseProvider.mjs`, `src/openaiProvider.mjs`, `public/httpResponseProvider.mjs`, tests | interpreter transport tests | authoritative regex path, turn/state metadata, and mutations | HTTP, timeout, abort, privacy, stable shadow identity, duplicate pending submission, empty unavailable structured projections | `INTERPRETER_SHADOW_MODE`; disable flag; risk cost/latency | shadow parity/privacy gates pass; discard—not promote—the binding before Phase 3 |
 | 3. Candidate validation without authoritative mutation | Implement section 6A engine-owned session/turn/version lifecycle; bind it to Interpreter request/pending; compare every stale dimension; validate/log candidates only, including section 11A result-claim structural authorization without hidden-truth adjudication; never commit, advance turn, or increment version from an Interpreter outcome | `src/gameEngine.mjs`, `src/validator.mjs`, `public/browserApp.mjs`, tests | candidate conversion tests | current player/NPC response behavior and all AI-independent game rules | candidate, result-claim policy, phase, alternative, lifecycle, stale/late/reset, privacy, no-mutation tests | independent validation-only flag; disable without data migration; risk diagnostic divergence | authoritative lifecycle, exact binding/stale rules, and section 11A authorization are implemented/tested; stable validation metrics; no shadow authority remains |
 | 4. AcceptedSpeechAct, PublicEvent, and player structured claim write | Add atomic `PlayerConversationCommit` using section 6A CAS: one `N -> N+1` transition per multi-object/multi-act commit; include the legacy player-input display/history delta and exactly one strict compatibility mapping in that same transaction; create player-origin accepted acts, events, canonical claims and relations, display plans, publications, and stored result; then run the legacy NPC compatibility reaction as `N+1 -> N+2`; do not acknowledge the structured publication | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, `public/browserApp.mjs`, tests | mapping validator/registry repair | NPC response provider and the explicit Phase 4 legacy visible-display exception | mapping equality/cardinality, provenance, rollback, duplicate/fingerprint, fixed-ledger, provider-failure, replay/no-provider tests | structured-write flag; disable new writes without deleting committed records; no mapping backfill | player commit owns mapping/publication/legacy entry in one `N -> N+1`; replay and failure append none |
-| 5. Player claim consumer and history migration | After the Phase 4 repair is merged, read mapping/canonical claims/display plans/publications; use explicit prepare/begin-sink/complete-sink/receipt-ack APIs for browser and CLI; keep history reads non-consuming; never infer legacy identity | `src/gameEngine.mjs`, `public/browserApp.mjs`, `src/cli.mjs`, tests | session-local delivery controller if needed | NPC claims, provider, and legacy NPC display | exact identity, sink success receipt/failure/ack-only retry, duplicate/late ack, stale cursor, repeated text, feature transitions, no-mutation tests | read-path flag with quiescent generation/watermark transitions; rollback uses mapping-aware legacy sink | structured publication is sole new-player trigger only after successful sink completion and receipt acknowledgement; no loss/double display |
+| 5. Player claim consumer and history migration | Read mapping/canonical claims/display plans/publications; use explicit delivery and acknowledgement APIs; separate requested/effective mode; defer OFF -> ON behind an exact pre-cutover legacy drain; prove browser success only after DOM attachment and CLI success only after configured write completion | `src/gameEngine.mjs`, `public/browserApp.mjs`, `src/cli.mjs`, tests | session-local delivery controller if needed | NPC claims, provider, Phase 4 writer/schema, and legacy NPC display | exact identity, DOM/output sink evidence, drain/retry/partial/cancel/reset, command gating, no-backfill, stale cursor, feature transitions, no-mutation tests | default-off read-path flag; explicit transition; fixed watermark/set; rollback uses mapping-aware legacy sink | structured publication becomes sole new-player trigger only after completed cutover; no loss/double display |
 | 6. NpcReactionPlan | Add originating input, stored locale, empty causation support for information-only reactions, descriptor provenance, past-only causation, atomic commit, and provenance-specific idempotency | `src/responseGenerator.mjs`, `src/gameEngine.mjs`, `src/responseProvider.mjs`, tests | reaction-plan/commit validator if not Phase 1 | existing provider remains selected | origin/locale consistency, empty causation, information-only, cycle, rollback tests | reaction-commit flag; discard/rollback; provenance compatibility risk | every plan traces to one input and works with zero or more prior semantic events |
 | 7. Controlled Renderer integration | Add locale propagation, slot/append ordering, baseline Renderer FinalizationSource, pending completion order, fallback finalization, CAS/late rejection, and same-session guarantee | `src/openaiProvider.mjs`, `src/webServer.mjs`, `src/responseProvider.mjs`, `public/httpResponseProvider.mjs`, `public/browserApp.mjs`, tests | display log, variant registry, finalization result tests | canonical-only bypasses Renderer; game state independent; reload recovery deferred | locale triple, ordering, success/failure, races, pending cleanup tests | renderer flag; fallback; risk unresolved reservation on reload | same-session reservations finalize exactly once without game-state mutation |
 | 8. Suspicion and memory migration | Move updates behind accepted events | `src/gameEngine.mjs`, `src/responseGenerator.mjs`, tests | none expected | voting/night/win logic | atomic update, rollback, regression tests | per-effect flag; revert to old effect path; risk scoring changes | parity criteria and audit logs pass |
@@ -1245,7 +1341,7 @@ Phase 2 Interpreter output is observation-only. It creates no `AcceptedSpeechAct
 
 Phase 3 readiness requires `WerewolfGame` to own and test the complete section 6A lifecycle before any authoritative request is sent. Phase 3 output remains validation-only and cannot advance the captured turn/version. Phase 4 reuses those bindings for atomic player commits; it does not redefine their meanings.
 
-Migration sequencing for the Phase 5 blocker is fixed: merge this docs contract; create a separate Phase 4 repair PR from then-current `master`; atomically add the mapping writer/validator/registry for new inputs; merge that repair; merge or rebase current `master` into blocked Draft PR #18 without force-push; replace its positional consumer and eager consumption with the acknowledgement protocol; then resume Phase 5 review. PR #18 remains open and Draft throughout the prerequisite work. Phase 4 repair is never mixed into the docs PR or authored directly on PR #18. Phase 9 later removes both legacy entries and mappings.
+Migration sequencing for the remaining Phase 5 blocker is fixed: merge this docs-only contract to `master`; incorporate that `master` into blocked Draft PR #18 without force-push; replace implicit boolean mode synchronization with the explicit requested/effective transition API; implement the fixed pre-cutover drain and command gate; move browser evidence issuance to verified DOM attachment; implement CLI parity and evidence-only retry; add behavioral tests for transition, actual sinks, partial success, cancellation/reset, no authoritative mutation, no-backfill, and queued-command exactly-once dispatch; then re-review PR #18 while it remains Draft. The already merged Phase 4 mapping writer and schema are unchanged. Phase 9 later removes both legacy entries and mappings.
 
 The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProvider.mjs` or `src/pseudoResponseProvider.mjs` today. Pseudo behavior currently lives in `src/responseProvider.mjs`, so migration plans use actual file names and may split files only in a separately reviewed phase.
 
@@ -1275,7 +1371,10 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Phase 4 display tests prove one committed publication maps to one visible legacy entry under the explicit exception, exact replay emits neither, structured publication is not consumed before Phase 5, and the exception ends only when all browser/CLI consumers switch with no double display.
 - Phase 4 repair tests prove mapping/publication/input/plan/request/correlation/turn/session/version equality, one mapping per publication and legacy location, canonical legacy fingerprint verification, same-transaction rollback, replay with no mapping append, Phase 4 OFF with no mapping, and one `N -> N+1` increment.
 - Phase 5 delivery tests prove retrieval/render/history/action-result construction do not acknowledge; exact mapping replaces only its legacy entry under stale cursors, repeated text, multiple turns, and partial acknowledgement; wrong/missing/duplicate mappings fail closed; browser and CLI cannot acknowledge from `prepared`/`in_flight` or with a missing/foreign receipt; concrete sink success creates the exact `sink_succeeded` receipt; sink-success/ack-failure retry performs acknowledgement only and never a second DOM/CLI output; sink failure remains retryable and creates no receipt; first acknowledgement invokes `publication_acknowledged` exactly once; every duplicate acknowledgement invocation invokes `duplicate_ack_suppressed` exactly once while changing nothing; observer failure preserves stored receipt/result/state; reset invalidates receipts; generation acknowledgements are stale; and authoritative state is deeply equal before/after delivery bookkeeping.
-- Phase 5 feature tests prove OFF -> ON creates a watermark without live backfill, ON -> OFF preserves acknowledged suppression, mode switch is rejected while a sink is in flight, and mapping-aware legacy rollback never redisplays an acknowledged publication.
+- Phase 5 feature tests prove requested/effective separation; OFF -> ON freezes but does not commit a watermark while evidence is missing; the fixed required set drains by exact identity; generation stays unchanged while pending and increments once on completion; new commands allocate no turn, call no provider, and commit nothing while draining; one held command is dispatched once only after completion; cancellation/reset and stale callbacks are safe; ON -> OFF preserves acknowledged suppression; and no transition backfills or redisplays pre-cutover output.
+- Phase 5 browser sink tests use the actual adapter/DOM path and prove array/view-model mutation alone creates no evidence; exact safe node attachment, parent and identity-bookkeeping verification precede receipt/evidence; missing container, append throw, wrong parent, bookkeeping failure, and completion failure remain retryable; post-receipt evidence retry does not reappend; later rendering does not remove or duplicate the delivered node; and history/replay/non-display queries append nothing.
+- Phase 5 CLI sink tests prove configured synchronous return or awaited fulfillment is the success boundary, throw/rejection creates no evidence, prompt redraw is not proof, exact same-process evidence-only retry does not rewrite output, and terminal controls are sanitized before the write.
+- Phase 5 drain tests cover initial-OFF success/failure, pending transition result, exact candidate retrieval independent of cursor, repeated text and multiple publications, partial evidence, terminal resolution failure, explicit completion, cancel with/without active sink, reset during sink, and deep equality of all authoritative state throughout transition/evidence bookkeeping.
 - Display ownership tests cover one publication record for claim-only input, one for multi-act input, and no duplicate display on replay.
 - Pending-state tests cover duplicate submission blocking, timeout/abort with unchanged authoritative phase, and stale response with unchanged state.
 - Version tests prove Interpreter pending uses precondition version, Renderer pending uses committed resulting version, Renderer is not compared with the old player version, and player/NPC commits increment separately.
@@ -1352,6 +1451,16 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Legacy-to-player-publication matching** | EXACT MAPPING RECORD ONLY; TEXT, PHASE, DAY, CURSOR, FIFO, AND POSITIONAL INFERENCE PROHIBITED |
 | **Render/retrieval/history implies acknowledgement** | PROHIBITED |
 | **Sink-success proof** | CONTROLLER-ISSUED EXACT RECEIPT IN `sink_succeeded`; NEVER OBSERVER EVENT OR RENDERED TEXT |
+| **Requested versus effective consumer mode** | DISTINCT; ONLY EFFECTIVE MODE OWNS LIVE DELIVERY |
+| **Pending OFF -> ON cutover** | REQUESTED STRUCTURED + EFFECTIVE LEGACY + `draining_pre_cutover`; NO IMPLICIT ROLLBACK OR STRUCTURED CARRYOVER |
+| **Pre-cutover command acceptance** | NEW AUTHORITATIVE COMMANDS PROHIBITED UNTIL EXPLICIT COMPLETION OR CANCELLATION |
+| **Proposed cutover watermark** | FROZEN WITH A FIXED REQUIRED SET; COMMITTED ONLY AT SUCCESSFUL COMPLETION |
+| **Pre-cutover delivery evidence** | EXACT CONTROLLER-ISSUED LEGACY SINK PROOF; RUNTIME-ONLY; NO STATE-VERSION EFFECT |
+| **Browser pre-cutover sink success** | EXACT SAFE NODE ATTACHED TO AND VERIFIED IN THE INTENDED CONTAINER; ARRAY PUSH/RENDER SCHEDULING INSUFFICIENT |
+| **CLI pre-cutover sink success** | CONFIGURED WRITE RETURNS OR FULFILLS; PROMPT REDRAW INSUFFICIENT |
+| **Sink success then evidence failure** | EVIDENCE-ONLY RETRY; NEVER REPEAT DOM/CLI OUTPUT |
+| **Cutover completion** | ALL REQUIRED EVIDENCE + NO ACTIVE ATTEMPT + NO TERMINAL BLOCKER; GENERATION +1, GAME VERSION +0 |
+| **Pre-cutover publication after cutover** | HISTORY AVAILABLE; STRUCTURED LIVE BACKFILL AND REDISPLAY PROHIBITED |
 | **Player display acknowledgement** | ONLY FROM EXACT `sink_succeeded` RECEIPT; DIRECT `in_flight -> acknowledged` FORBIDDEN; SESSION-LOCAL; NO STATE-VERSION EFFECT |
 | **Sink failure** | REMAINS UNACKNOWLEDGED AND RETRIEVABLE; NO LEGACY FALLBACK IN SAME ATTEMPT |
 | **Sink-success acknowledgement retry** | ACK-ONLY; NEVER REPEAT DOM/CLI OUTPUT |
