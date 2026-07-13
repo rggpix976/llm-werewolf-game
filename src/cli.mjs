@@ -1,19 +1,30 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { WerewolfGame } from "./gameEngine.mjs";
+import { parseConfig } from "./config.mjs";
+import { PseudoInterpreterProvider } from "./interpreterTransport.mjs";
+import { sanitizeTerminalText } from "./playerStructuredConsumer.mjs";
+import { consumeLiveActionDisplay, dispatchPlayerActionWithConsumerMode, writeCliPublication } from "./playerDisplaySink.mjs";
 
 const showDev = process.argv.includes("--show-dev");
+const runtimeConfig = parseConfig(process.env);
 const game = WerewolfGame.create({
   seed: Date.now(),
-  shuffleRoles: true
+  shuffleRoles: true,
+  interpreterProvider: new PseudoInterpreterProvider(),
+  interpreterValidationEnabled: runtimeConfig.interpreterValidationMode,
+  playerConversationCommitEnabled: runtimeConfig.playerConversationCommitMode,
+  playerStructuredConsumerEnabled: runtimeConfig.playerStructuredConsumerMode
 });
 
 let printedLogIndex = 0;
+const playerFacingHistory = [];
+const cliPublicationBookkeeping = new Map();
 
 const rl = readline.createInterface({ input, output });
 
 printIntro();
-printNewPlayerLog();
+await printNewPlayerLog();
 
 while (true) {
   const line = (await rl.question("\n> ")).trim();
@@ -39,7 +50,7 @@ while (true) {
     }
 
     if (command === "log") {
-      console.log(game.formatPlayerLog());
+      console.log(formatEntries(playerFacingHistory));
       continue;
     }
 
@@ -57,31 +68,31 @@ while (true) {
         continue;
       }
 
-      await game.dispatchPlayerAction({
+      const action = await dispatchCommand({
         type: "ask_npc",
         target,
         input: question,
         logCursor: printedLogIndex
       });
-      printNewPlayerLog();
+      await printNewPlayerLog(action);
       maybePrintDevTail();
       continue;
     }
 
     if (command === "vote") {
-      await game.dispatchPlayerAction({
+      const voteAction = await dispatchCommand({
         type: "advance_vote",
         logCursor: printedLogIndex
       });
-      printNewPlayerLog();
+      await printNewPlayerLog(voteAction);
       maybePrintDevTail();
 
       if (!game.state.winner) {
-        await game.dispatchPlayerAction({
+        const nightAction = await dispatchCommand({
           type: "run_night",
           logCursor: printedLogIndex
         });
-        printNewPlayerLog();
+        await printNewPlayerLog(nightAction);
         maybePrintDevTail();
       }
 
@@ -135,13 +146,19 @@ function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
   console.log(`Alive NPCs: ${alive.join(", ")}`);
 }
 
-function printNewPlayerLog() {
-  const text = game.formatPlayerLog(printedLogIndex);
-  if (text) {
-    console.log(`\n${text}`);
-  }
+async function printNewPlayerLog(action = null) {
+  const write = writeCliEntry;
+  const liveEntries = action?.livePlayerDisplayEntries ?? game.state.playerLog.slice(printedLogIndex).map((entry) => ({ kind: "legacy_display", entry }));
+  if (action) await consumeLiveActionDisplay({ game, action, consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: write, writeLegacy: write });
+  else { for (const envelope of liveEntries) await write(envelope.entry); }
   printedLogIndex = game.state.playerLog.length;
 }
+
+async function dispatchCommand(action) { return dispatchPlayerActionWithConsumerMode({ game, action, requestedMode: runtimeConfig.playerStructuredConsumerMode ? "structured" : "legacy", consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: writeCliEntry, writeLegacy: writeCliEntry }); }
+async function writeCliEntry(entry) { await writeCliPublication({ entry, write: async (text) => { if (text) console.log(`\n${text}`); } }); playerFacingHistory.push(structuredClone(entry)); return entry; }
+
+
+function formatEntries(entries) { return entries.map((entry) => `[Day ${entry.day} / ${entry.phase}] ${sanitizeTerminalText(entry.message)}`).join("\n"); }
 
 function maybePrintDevTail() {
   if (!showDev) {

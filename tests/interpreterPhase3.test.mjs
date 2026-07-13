@@ -21,7 +21,7 @@ test("authoritative lifecycle allocates opaque turns and one version per compati
 
 test("vote and night remain one transaction each and authoritative lifecycle is flag-independent", async () => {
   const instance = game(); await instance.dispatchPlayerAction({ type: "advance_vote" }); assert.deepEqual([instance.state.turnOrder, instance.state.stateVersion], [1, 1]); await instance.dispatchPlayerAction({ type: "run_night" }); assert.deepEqual([instance.state.turnOrder, instance.state.stateVersion], [2, 2]);
-  assert.deepEqual(getRuntimeConfig(parseConfig({ INTERPRETER_SHADOW_MODE: "true", INTERPRETER_VALIDATION_MODE: "true" })), { provider: "pseudo", interpreterShadowMode: true, interpreterValidationMode: true, playerConversationCommitMode: false });
+  assert.deepEqual(getRuntimeConfig(parseConfig({ INTERPRETER_SHADOW_MODE: "true", INTERPRETER_VALIDATION_MODE: "true" })), { provider: "pseudo", interpreterShadowMode: true, interpreterValidationMode: true, playerConversationCommitMode: false, playerStructuredConsumerMode: false });
 });
 
 test("clarification continuation reuses the logical turn without reusing request identity", async () => {

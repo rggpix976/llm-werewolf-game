@@ -12,6 +12,8 @@ import { sha256Fingerprint } from "./conversation/ids.mjs";
 import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
 import { validateCommittedConversationGraph, validatePlayerLegacyDisplayCompatibilityReferences } from "./conversation/references.mjs";
 import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
+import { projectMappedPlayerEntries, renderUnacknowledgedPlayerPublications, renderPlayerPublication, resolvePlayerStructuredConsumerPolicy } from "./playerStructuredConsumer.mjs";
+import { PlayerPublicationDeliveryController } from "./playerPublicationDelivery.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -122,7 +124,7 @@ export class WerewolfGame {
     const game = new WerewolfGame(
       state,
       options.responseProvider ?? new PseudoResponseProvider(),
-      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
+      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, playerStructuredConsumerEnabled: options.playerStructuredConsumerEnabled === true, playerStructuredConsumerObserver: options.playerStructuredConsumerObserver, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
     );
     game.addPublicInfo({
       type: "setup",
@@ -148,6 +150,9 @@ export class WerewolfGame {
     this.interpreterProvider = options.interpreterProvider;
     this.interpreterValidationEnabled = options.interpreterValidationEnabled === true;
     this.playerConversationCommitEnabled = resolvePlayerConversationCommitPolicy({ playerConversationCommitMode: options.playerConversationCommitEnabled === true, interpreterValidationMode: this.interpreterValidationEnabled }).enabled;
+    this.playerStructuredConsumerEnabled = resolvePlayerStructuredConsumerPolicy({ playerStructuredConsumerMode: options.playerStructuredConsumerEnabled === true, playerConversationCommitMode: this.playerConversationCommitEnabled }).enabled;
+    this.playerStructuredConsumerObserver = options.playerStructuredConsumerObserver ?? (() => {});
+    this.playerPublicationDeliveryController = new PlayerPublicationDeliveryController({ gameSessionId: state.gameSessionId, createId: this.createId, observer: this.playerStructuredConsumerObserver, enabled: this.playerStructuredConsumerEnabled, initialWatermark: 0, isQuiescent: () => !this._commandInProgress && !this.activeNpcReaction && ![...this.pendingInterpreterRequests.values()].some((pending) => pending.status === "pending"), listPublications: () => this.state.conversation.publications.filter((record) => record.recordType === "player_utterance_published").sort((a, b) => a.publicationSlotOrder - b.publicationSlotOrder), resolvePublication: (publicationId, deliveryMode) => deliveryMode === "structured" ? this._displayPlayerPublication(this._renderPlayerPublication(publicationId)) : this._legacyPlayerPublication(publicationId), resolvePreCutoverIdentity: (publicationId) => { const mapping = this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId }); return { compatibilityMappingId: mapping.compatibilityMappingId, legacyEntryId: mapping.legacyEntryId, legacyLogAppendOrder: mapping.legacyLogAppendOrder, legacyEntryFingerprint: mapping.legacyEntryFingerprint }; } });
     this.phase4FaultInjector = options.phase4FaultInjector ?? (() => {});
     this.interpreterObserver = options.interpreterObserver ?? (() => {});
     this.now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
@@ -211,6 +216,7 @@ export class WerewolfGame {
     const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
     if (action.type === "get_state") return this._actionResult(action.type, null, logCursor);
     if (action.type === "ask_npc" && action.replayRequestId) return this._replayPlayerConversation(action, logCursor);
+    if (this.playerPublicationDeliveryController.modeState().transitionStatus === "draining_pre_cutover") throw typedError("consumer_mode_transition_pending");
     const rejected = this._validateCommand(action); if (rejected) return this._actionResult(action.type, rejected, logCursor);
     if (this._commandInProgress) throw typedError("input_in_progress");
     if (!Number.isSafeInteger(this.state.stateVersion) || this.state.stateVersion < 0 || this.state.stateVersion === Number.MAX_SAFE_INTEGER) throw typedError("state_version_exhausted");
@@ -239,7 +245,34 @@ export class WerewolfGame {
     throw new Error(`Unknown player action type: ${action.type}`);
   }
 
-  _actionResult(actionType, result, logCursor) { return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries: this.state.playerLog.slice(logCursor), nextLogCursor: this.state.playerLog.length }; }
+  _actionResult(actionType, result, logCursor) {
+    const playerLogEntries = this.state.playerLog.slice(logCursor); let structuredPlayerEntries = [], playerFacingEntries = structuredClone(playerLogEntries), deliveryPublicationIds = [], livePlayerDisplayEntries = [];
+    const historyEntries = this._renderPlayerPublicationIds(this.playerPublicationDeliveryController.historyPublicationIds()); playerFacingEntries = projectMappedPlayerEntries({ legacyEntries: playerLogEntries, legacyLogStartOrder: logCursor, structuredEntries: historyEntries });
+    if (actionType !== "get_state" && result?.replayed !== true) { const candidates = this.playerPublicationDeliveryController.discoverCandidates(); deliveryPublicationIds = candidates.map((candidate) => candidate.publicationId); structuredPlayerEntries = this._renderPlayerPublicationIds(candidates.filter((candidate) => candidate.deliveryMode === "structured" && !candidate.acknowledgementOnly).map((candidate) => candidate.publicationId)).map((entry) => this._displayPlayerPublication(entry)); livePlayerDisplayEntries = this._livePlayerDisplayEntries(playerLogEntries, logCursor, candidates); }
+    return { ok: true, actionType, result, publicSnapshot: this.getPublicSnapshot(), playerLogEntries, structuredPlayerEntries, deliveryPublicationIds, livePlayerDisplayEntries, playerFacingEntries, nextLogCursor: this.state.playerLog.length };
+  }
+
+  _publicParticipantsById() { return Object.fromEntries([["player", { participantId: "player", displayName: "Player" }], ...this.state.players.map((player) => [player.id, { participantId: player.id, displayName: player.name }])]); }
+  _renderPlayerPublication(publicationId) { return renderPlayerPublication({ gameSessionId: this.state.gameSessionId, conversation: this.state.conversation, legacyPlayerLog: this.state.playerLog, publicationId, publicParticipantsById: this._publicParticipantsById(), resolveCompatibilityMapping: (id) => this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId: id }) }); }
+  _renderPlayerPublicationIds(publicationIds) { return renderUnacknowledgedPlayerPublications({ gameSessionId: this.state.gameSessionId, conversation: this.state.conversation, legacyPlayerLog: this.state.playerLog, publicationIds, publicParticipantsById: this._publicParticipantsById(), resolveCompatibilityMapping: (id) => this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId: id }) }); }
+  _displayPlayerPublication(entry) { const legacy = this.state.playerLog[entry.legacyLogAppendOrder]; return Object.freeze({ day: legacy.day, phase: legacy.phase, message: entry.renderedText, actorId: entry.actorId, publicationId: entry.publicationId, structured: true }); }
+  _legacyPlayerPublication(publicationId) { const mapping = this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId }), entry = this.state.playerLog[mapping.legacyLogAppendOrder]; return Object.freeze(structuredClone(entry)); }
+  _livePlayerDisplayEntries(entries, startOrder, candidates) { const mappings = new Map(this.state.conversation.playerLegacyDisplayCompatibilityRecords.map((mapping) => [mapping.legacyLogAppendOrder, mapping.publicationId])), mappingByPublication = new Map(this.state.conversation.playerLegacyDisplayCompatibilityRecords.map((mapping) => [mapping.publicationId, mapping])), ordered = candidates.map((candidate) => ({ order: mappingByPublication.get(candidate.publicationId).legacyLogAppendOrder, envelope: Object.freeze({ kind: "player_publication_delivery", ...candidate }) }));
+    for (let index = 0; index < entries.length; index += 1) { const order = startOrder + index; if (!mappings.has(order)) ordered.push({ order, envelope: Object.freeze({ kind: "legacy_display", entry: structuredClone(entries[index]) }) }); }
+    return ordered.sort((left, right) => left.order - right.order).map(({ envelope }) => envelope); }
+  getPlayerPublicationDeliveryCandidates() { return this.playerPublicationDeliveryController.discover(); }
+  getPlayerPublicationConsumerModeState() { return this.playerPublicationDeliveryController.modeState(); }
+  requestPlayerPublicationConsumerMode({ gameSessionId = this.state.gameSessionId, consumerId, sinkType, requestedMode }) { return this.playerPublicationDeliveryController.requestMode({ gameSessionId, consumerId, sinkType, requestedMode, nextPublicationSlotOrder: this.state.conversation.nextPublicationSlotOrder }); }
+  getPendingPreCutoverPlayerPublications(value) { return this.playerPublicationDeliveryController.pendingPreCutover(value); }
+  completePlayerPublicationConsumerModeTransition(value) { return this.playerPublicationDeliveryController.completeTransition(value); }
+  cancelPlayerPublicationConsumerModeTransition(value) { return this.playerPublicationDeliveryController.cancelTransition(value); }
+  recordPreCutoverPlayerPublicationEvidence(receipt) { return this.playerPublicationDeliveryController.recordPreCutoverEvidence(receipt); }
+  preparePlayerPublicationDelivery(value) { return this.playerPublicationDeliveryController.prepare(value); }
+  beginPlayerPublicationSink(value) { return this.playerPublicationDeliveryController.begin(value); }
+  completePlayerPublicationSink(capability) { return this.playerPublicationDeliveryController.complete(capability); }
+  failPlayerPublicationSink(capability) { return this.playerPublicationDeliveryController.fail(capability); }
+  acknowledgePlayerPublication(receipt) { return this.playerPublicationDeliveryController.acknowledge(receipt); }
+  getPlayerPublicationSinkReceipt(value) { return this.playerPublicationDeliveryController.receiptFor(value); }
 
   _replayPlayerConversation(action, logCursor) {
     if (typeof action.replayRequestId !== "string" || !ID_PATTERN.test(action.replayRequestId) || typeof action.replayRequestFingerprint !== "string" || !SHA256_PATTERN.test(action.replayRequestFingerprint)) throw typedError("invalid_replay_identity");
@@ -348,7 +381,7 @@ export class WerewolfGame {
     const outcome = validatePhase3Response(response, pending.binding, this.state); pending.responseFingerprint = fingerprint; return outcome;
   }
 
-  destroy() { this._destroyed = true; for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
+  destroy() { this._destroyed = true; this.playerPublicationDeliveryController.invalidate(); for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
 
   async handlePlayerQuestion(targetIdOrName, playerInput, options = {}) {
     if (this.state.winner) {
