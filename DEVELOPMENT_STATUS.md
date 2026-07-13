@@ -6,8 +6,9 @@ Last updated: 2026-07-13
 
 - Conversation pipeline migration Phases 1-4 are implemented from `master`: pure domain contracts/renderers, shadow transport, authoritative candidate validation, and atomic player conversation commit. Their feature flags remain default-off with strict dependencies.
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. The session-scoped mapping registry, immutable strict lookup, and fail-closed replay validation are available on this branch.
-- Migration Phase 5 is implemented on this Draft branch and remains unmerged pending review. It resolves the exact Phase 4 compatibility mapping and legacy location; position-, phase-, FIFO-, cursor-, and message-based replacement are prohibited and removed.
-- Session-local sink-success receipts, explicit acknowledgement, retry and acknowledgement-only retry, duplicate/stale acknowledgement handling, and executable browser/CLI sink tests are implemented without changing authoritative game state.
+- Migration Phase 5 is complete on this Draft branch and remains unmerged pending review. It resolves the exact Phase 4 compatibility mapping and legacy location; position-, phase-, FIFO-, cursor-, and message-based replacement are prohibited and removed.
+- Requested and effective consumer modes are separate. The first OFF-to-ON request uses an explicit session-local `draining_pre_cutover` transition with a frozen watermark and required set; authoritative commands are gated until exact legacy evidence is drained and completion is explicitly applied or the transition is cancelled.
+- Session-local sink-success receipts, explicit acknowledgement, retry and acknowledgement-only retry, duplicate/stale acknowledgement handling, and executable browser/CLI sink tests are implemented without changing authoritative game state. Pre-cutover browser evidence requires actual attachment to the intended DOM container, while CLI evidence requires its configured write to fulfill; both support evidence-only retry without duplicate output.
 - With the default-off Phase 5 flag enabled, `PlayerUtterancePublishedRecord` is the sole active browser/CLI player display trigger. Legacy player entries remain stored and the NPC display remains on the provisional legacy path.
 - Exact replay performs no redisplay or provider call, and all migration feature flags remain default-off.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
@@ -29,7 +30,7 @@ Last updated: 2026-07-13
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, Phase 5 cursor-independent pending delivery, session-terminal failures, evidence-gated cutover, rollback delivery, and exact acknowledgement lifecycle, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 281 automated tests on this Draft branch.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, Phase 5 explicit cutover/drain, cursor-independent pending delivery, actual browser/CLI sink evidence, session-terminal failures, rollback delivery, and exact acknowledgement lifecycle, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 287 automated tests on this Draft branch.
 
 ## Last Verified
 
@@ -39,8 +40,7 @@ Last updated: 2026-07-13
   - `npm run sample`
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
-  - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 281/281 tests passed. `npm run sample`, changed-module syntax checks, `git diff --check`, conflict-marker, privacy, and forbidden-Unicode scans passed.
+- Result: 287/287 tests passed. `npm run sample`, changed-module syntax checks, `git diff --check`, conflict-marker, privacy, and forbidden-Unicode scans passed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01

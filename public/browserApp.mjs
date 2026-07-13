@@ -2,7 +2,7 @@ import { WerewolfGame } from "../src/gameEngine.mjs";
 import { HttpResponseProvider, SessionManager } from "./httpResponseProvider.mjs";
 import { PseudoResponseProvider } from "../src/responseProvider.mjs";
 import { InterpreterShadowClient, shouldObserveInterpreterShadow } from "./interpreterShadowClient.mjs";
-import { appendBrowserPublicationNode, consumeLiveActionDisplay } from "../src/playerDisplaySink.mjs";
+import { appendBrowserPublicationNode, consumeLiveActionDisplay, dispatchPlayerActionWithConsumerMode, reconcileBrowserPublicationNodes } from "../src/playerDisplaySink.mjs";
 
 const elements = {
   statusLine: document.querySelector("#statusLine"),
@@ -155,18 +155,17 @@ async function dispatch(action) {
   const gameIdAtStart = currentGameId;
   setBusy(true);
   try {
-    const result = await game.dispatchPlayerAction({
-      ...action,
-      logCursor
-    });
+    const writeStructured = async (entry, attempt) => { const node = appendBrowserLogEntry(entry); bindBrowserDeliveryNode(node, attempt); return stagePlayerFacingEntry(entry, node); };
+    const writeLegacy = async (entry, attempt) => { if (attempt) return appendLegacyPlayerPublication(entry, attempt); const node = appendBrowserLogEntry(entry); playerFacingLog.push(structuredClone(entry)); return node; };
+    const result = await dispatchPlayerActionWithConsumerMode({ game, action: { ...action, logCursor }, requestedMode: runtimeConfig?.playerStructuredConsumerMode === true ? "structured" : "legacy", consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured, writeLegacy });
 
     if (!sessionManager.isCurrentGame(gameIdAtStart)) {
       return null;
     }
 
-    if (result.livePlayerDisplayEntries.length) await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured: async (entry, attempt) => { const node = appendBrowserLogEntry(entry); node.dataset.publicationId = attempt.publicationId; node.dataset.gameSessionId = attempt.gameSessionId; node.dataset.consumerId = attempt.consumerId; node.dataset.consumerGeneration = String(attempt.consumerGeneration); node.dataset.deliveryAttemptId = attempt.deliveryAttemptId; node.dataset.sinkType = attempt.sinkType; node.dataset.deliveryMode = attempt.deliveryMode; playerFacingLog.push(structuredClone(entry)); return node; }, writeLegacy: async (entry, attempt) => { if (attempt) return appendLegacyPlayerPublication(entry, attempt); playerFacingLog.push(structuredClone(entry)); } });
-    logCursor = result.nextLogCursor;
     render(result.publicSnapshot);
+    if (result.livePlayerDisplayEntries.length) await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured, writeLegacy });
+    logCursor = result.nextLogCursor;
     if (isDevMode) {
       refreshDiagnostics();
     }
@@ -590,30 +589,13 @@ function renderTargetOptions() {
 }
 
 function renderLogs() {
-  const entries = runtimeConfig?.playerStructuredConsumerMode === true ? playerFacingLog : snapshot.playerLog;
+  const entries = playerFacingLog;
   if (!entries.length) {
     elements.logList.replaceChildren(createEmptyState("No log entries"));
     return;
   }
 
-  elements.logList.replaceChildren(
-    ...entries.map((entry) => {
-      const row = document.createElement("div");
-      row.className = "log-entry";
-      if (entry.publicationId) row.dataset.publicationId = entry.publicationId;
-
-      const meta = document.createElement("div");
-      meta.className = "log-meta";
-      meta.textContent = `Day ${entry.day} / ${formatPhase(entry.phase)}`;
-
-      const message = document.createElement("div");
-      message.className = "log-message";
-      message.textContent = entry.message;
-
-      row.append(meta, message);
-      return row;
-    })
-  );
+  reconcileBrowserPublicationNodes({ document, container: elements.logList, entries, formatPhase });
   elements.logList.scrollTop = elements.logList.scrollHeight;
   const nodesByPublication = new Map([...elements.logList.querySelectorAll("[data-publication-id]")].map((node) => [node.dataset.publicationId, node]));
   for (const stored of playerPublicationDomBookkeeping.values()) {
@@ -627,7 +609,9 @@ function appendBrowserLogEntry(entry) {
   return appendBrowserPublicationNode({ document, container: elements.logList, entry, formatPhase });
 }
 
-function appendLegacyPlayerPublication(entry, attempt) { const node = appendBrowserLogEntry(entry); node.dataset.publicationId = attempt.publicationId; node.dataset.gameSessionId = attempt.gameSessionId; node.dataset.consumerId = attempt.consumerId; node.dataset.consumerGeneration = String(attempt.consumerGeneration); node.dataset.deliveryAttemptId = attempt.deliveryAttemptId; node.dataset.sinkType = attempt.sinkType; node.dataset.deliveryMode = attempt.deliveryMode; playerFacingLog.push({ ...structuredClone(entry), publicationId: attempt.publicationId }); return node; }
+function bindBrowserDeliveryNode(node, attempt) { node.dataset.publicationId = attempt.publicationId; node.dataset.gameSessionId = attempt.gameSessionId; node.dataset.consumerId = attempt.consumerId; node.dataset.consumerGeneration = String(attempt.consumerGeneration); node.dataset.deliveryAttemptId = attempt.deliveryAttemptId; node.dataset.sinkType = attempt.sinkType; node.dataset.deliveryMode = attempt.deliveryMode; if (attempt.modeTransitionId) node.dataset.modeTransitionId = attempt.modeTransitionId; }
+function appendLegacyPlayerPublication(entry, attempt) { const node = appendBrowserLogEntry(entry); bindBrowserDeliveryNode(node, attempt); return stagePlayerFacingEntry({ ...structuredClone(entry), publicationId: attempt.publicationId }, node); }
+function stagePlayerFacingEntry(entry, node) { const modelEntry = structuredClone(entry); playerFacingLog.push(modelEntry); node.rollbackDeliveryModel = () => { const index = playerFacingLog.indexOf(modelEntry); if (index >= 0) playerFacingLog.splice(index, 1); }; return node; }
 
 function renderVotes() {
   if (!snapshot.voteHistory.length) {

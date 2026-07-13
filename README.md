@@ -101,13 +101,10 @@ LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 - `INTERPRETER_SHADOW_MODE`: Phase 2 shadow transportを有効化する（デフォルト: `false`）
 - `INTERPRETER_VALIDATION_MODE`: Phase 3 authoritative candidate validationを有効化する（デフォルト: `false`）
 - `PLAYER_CONVERSATION_COMMIT_MODE`: Phase 4 atomic player conversation commitを有効化する（デフォルト: `false`、`INTERPRETER_VALIDATION_MODE=true`が必須）
-- `PLAYER_STRUCTURED_CONSUMER_MODE`: Phase 5 structured player display/history consumerを有効化する（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）
 
 Phase 3はvalidationとredacted diagnosticsのみを行い、Interpreter結果をゲームへ適用しません。両方のInterpreter flagが`true`の場合はPhase 3だけが1リクエストを送り、Phase 2 shadow送信は抑止されます。Phase 3をrollbackするには`INTERPRETER_VALIDATION_MODE=false`へ戻します。authoritative session/turn/version lifecycleはengine invariantとしてflagに依存せず維持され、データmigrationは不要です。
 
 Phase 4を有効にすると、検証済みplayer input、AcceptedSpeechAct、semantic event、canonical claim、display plan、publication、legacy player表示entry、idempotency resultを1回の`N -> N+1` transactionで保存します。その後の既存NPC response effectsは成功時だけ別の`N+1 -> N+2` transactionで公開されます。structured publicationはPhase 4では表示consumerに接続されず、legacy entryだけがvisible triggerです。rollbackは`PLAYER_CONVERSATION_COMMIT_MODE=false`へ戻します。既存structured recordは保持され、backfillやdata migrationは不要です。
-
-Phase 5を有効にすると、browserとCLIは`PlayerUtterancePublishedRecord`を唯一のplayer display triggerとして読み、stored display planをUnicode code point単位で解決します。claim、vote、suspicionはengine-owned canonical rendererを使い、legacy player-question entryは保存されたまま表示対象から外れます。NPC側は既存legacy表示を維持します。exact replay、UI再描画、flag切替では同じpublicationを再表示しません。rollbackは`PLAYER_STRUCTURED_CONSUMER_MODE=false`で行い、structured recordの削除やdata migrationは不要です。
 
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは引き続き実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックのみを使用します。
 

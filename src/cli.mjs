@@ -4,7 +4,7 @@ import { WerewolfGame } from "./gameEngine.mjs";
 import { parseConfig } from "./config.mjs";
 import { PseudoInterpreterProvider } from "./interpreterTransport.mjs";
 import { sanitizeTerminalText } from "./playerStructuredConsumer.mjs";
-import { consumeLiveActionDisplay, writeCliPublication } from "./playerDisplaySink.mjs";
+import { consumeLiveActionDisplay, dispatchPlayerActionWithConsumerMode, writeCliPublication } from "./playerDisplaySink.mjs";
 
 const showDev = process.argv.includes("--show-dev");
 const runtimeConfig = parseConfig(process.env);
@@ -68,7 +68,7 @@ while (true) {
         continue;
       }
 
-      const action = await game.dispatchPlayerAction({
+      const action = await dispatchCommand({
         type: "ask_npc",
         target,
         input: question,
@@ -80,7 +80,7 @@ while (true) {
     }
 
     if (command === "vote") {
-      const voteAction = await game.dispatchPlayerAction({
+      const voteAction = await dispatchCommand({
         type: "advance_vote",
         logCursor: printedLogIndex
       });
@@ -88,7 +88,7 @@ while (true) {
       maybePrintDevTail();
 
       if (!game.state.winner) {
-        const nightAction = await game.dispatchPlayerAction({
+        const nightAction = await dispatchCommand({
           type: "run_night",
           logCursor: printedLogIndex
         });
@@ -147,12 +147,15 @@ function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
 }
 
 async function printNewPlayerLog(action = null) {
-  const write = async (entry) => { await writeCliPublication({ entry, write: async (text) => { if (text) console.log(`\n${text}`); } }); playerFacingHistory.push(structuredClone(entry)); };
+  const write = writeCliEntry;
   const liveEntries = action?.livePlayerDisplayEntries ?? game.state.playerLog.slice(printedLogIndex).map((entry) => ({ kind: "legacy_display", entry }));
   if (action) await consumeLiveActionDisplay({ game, action, consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: write, writeLegacy: write });
   else { for (const envelope of liveEntries) await write(envelope.entry); }
   printedLogIndex = game.state.playerLog.length;
 }
+
+async function dispatchCommand(action) { return dispatchPlayerActionWithConsumerMode({ game, action, requestedMode: runtimeConfig.playerStructuredConsumerMode ? "structured" : "legacy", consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: writeCliEntry, writeLegacy: writeCliEntry }); }
+async function writeCliEntry(entry) { await writeCliPublication({ entry, write: async (text) => { if (text) console.log(`\n${text}`); } }); playerFacingHistory.push(structuredClone(entry)); return entry; }
 
 
 function formatEntries(entries) { return entries.map((entry) => `[Day ${entry.day} / ${entry.phase}] ${sanitizeTerminalText(entry.message)}`).join("\n"); }
