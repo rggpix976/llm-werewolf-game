@@ -29,7 +29,7 @@ Last updated: 2026-07-13
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, Phase 5 cursor-independent pending delivery, history/live separation, rollback delivery, and exact acknowledgement lifecycle, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 275 automated tests on this Draft branch.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, Phase 5 cursor-independent pending delivery, atomic mode transitions, fixed cutover bookkeeping, rollback delivery, and exact acknowledgement lifecycle, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 279 automated tests on this Draft branch.
 
 ## Last Verified
 
@@ -40,7 +40,7 @@ Last updated: 2026-07-13
   - `git diff --check`
   - `find . -name "*.mjs" -exec node --check {} \;`
   - `npm run smoke:openai` (Controlled live smoke test)
-- Result: 275/275 tests passed. `npm run sample`, changed-module syntax checks, `git diff --check`, conflict-marker, privacy, and forbidden-Unicode scans passed.
+- Result: 279/279 tests passed. `npm run sample`, changed-module syntax checks, `git diff --check`, conflict-marker, privacy, and forbidden-Unicode scans passed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01

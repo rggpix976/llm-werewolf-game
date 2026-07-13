@@ -13,7 +13,7 @@ export async function deliverLivePlayerEntries({ game, entries, consumerId, sink
   for (const envelope of entries) {
     if (envelope.kind === "player_publication_delivery" && envelope.acknowledgementOnly) await acknowledgeOnly(envelope.deliveryIdentity);
     else if (envelope.kind === "player_publication_delivery") await deliverPlayerPublication({ game, publicationId: envelope.publicationId, consumerId, sinkType, deliveryMode: envelope.deliveryMode, write: envelope.deliveryMode === "legacy" ? writeLegacy : writeStructured, onSinkSucceeded });
-    else if (envelope.kind === "legacy_display") await writeLegacy(envelope.entry);
+    else if (envelope.kind === "legacy_display") { await writeLegacy(envelope.entry); if (envelope.preCutoverPublicationId) game.recordPreCutoverLegacyDelivery(envelope.preCutoverPublicationId); }
     else throw new TypeError("invalid_live_display_envelope");
   }
 }

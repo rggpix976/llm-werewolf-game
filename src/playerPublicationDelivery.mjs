@@ -1,14 +1,14 @@
 export class PlayerPublicationDeliveryController {
   constructor({ gameSessionId, createId, observer = () => {}, resolvePublication, listPublications, enabled = false, initialWatermark = 0 }) {
     this.gameSessionId = gameSessionId; this.createId = createId; this.observer = observer; this.resolvePublication = resolvePublication; this.listPublications = listPublications;
-    this.enabled = enabled; this.consumerGeneration = 0; this.cutoverPublicationSlotOrder = enabled ? initialWatermark : null; this.invalidated = false;
+    this.enabled = enabled; this.consumerGeneration = 0; this.cutoverPublicationSlotOrder = enabled ? initialWatermark : null; this.preCutoverLegacyDelivered = new Set(); this.invalidated = false;
     this.attempts = new Map(); this.activeByPublication = new Map(); this.acknowledgements = new Map(); this.capabilities = new WeakMap(); this.receipts = new WeakMap();
   }
 
   setEnabled(enabled, nextPublicationSlotOrder) {
     if (this.invalidated) throw deliveryError("stale_publication_session"); if (enabled === this.enabled) return;
     if ([...this.attempts.values()].some((attempt) => ["in_flight", "sink_succeeded"].includes(attempt.state))) throw deliveryError("consumer_mode_switch_in_flight");
-    this.consumerGeneration += 1; this.enabled = enabled; if (enabled) this.cutoverPublicationSlotOrder = nextPublicationSlotOrder;
+    this.consumerGeneration += 1; this.enabled = enabled; if (enabled && this.cutoverPublicationSlotOrder === null) this.cutoverPublicationSlotOrder = nextPublicationSlotOrder;
     for (const attempt of this.attempts.values()) if (!["acknowledged", "failed_terminal"].includes(attempt.state)) attempt.state = "stale_session";
     this.activeByPublication.clear();
   }
@@ -20,6 +20,8 @@ export class PlayerPublicationDeliveryController {
   discoverCandidates(deliveryMode) { this._live(); if (this.cutoverPublicationSlotOrder === null) return []; this._validateDeliveryMode(deliveryMode); return this.discover().map((publicationId) => { const attempt = this.activeByPublication.get(publicationId); return Object.freeze({ publicationId, deliveryMode, acknowledgementOnly: attempt?.state === "sink_succeeded", deliveryIdentity: attempt?.state === "sink_succeeded" ? receiptIdentity(attempt.receipt) : null }); }); }
   historyPublicationIds() { this._live(); return this.cutoverPublicationSlotOrder === null ? [] : this.listPublications().map((publication) => publication.publicationId); }
   liveScopePublicationIds() { this._live(); if (this.cutoverPublicationSlotOrder === null) return new Set(); return new Set(this.listPublications().filter((publication) => publication.publicationSlotOrder >= this.cutoverPublicationSlotOrder).map((publication) => publication.publicationId)); }
+  preCutoverLegacyDeliveredPublicationIds() { this._live(); return new Set(this.preCutoverLegacyDelivered); }
+  recordPreCutoverLegacyDelivery(publicationId) { this._live(); if (this.cutoverPublicationSlotOrder !== null) throw deliveryError("publication_not_found"); const publication = this.listPublications().find((entry) => entry.publicationId === publicationId); if (!publication) throw deliveryError("publication_not_found"); this.preCutoverLegacyDelivered.add(publicationId); }
 
   prepare({ publicationId, consumerId, sinkType, deliveryMode = "structured" }) {
     this._live(); this._validateDeliveryMode(deliveryMode); validateSinkIdentity(consumerId, sinkType);
@@ -47,7 +49,7 @@ export class PlayerPublicationDeliveryController {
   }
 
   acknowledge(receipt) {
-    const attempt = this.receipts.get(receipt); if (!attempt || attempt.receipt !== receipt) throw deliveryError("invalid_sink_success_receipt"); this._currentAck(attempt);
+    const attempt = this.receipts.get(receipt); if (!attempt || attempt.receipt !== receipt) { if (validReceiptShape(receipt) && receipt.gameSessionId !== this.gameSessionId) { this._rejectStaleAck("stale_publication_session", receipt); throw deliveryError("stale_publication_session"); } throw deliveryError("invalid_sink_success_receipt"); } this._currentAck(attempt);
     const stored = this.acknowledgements.get(attempt.publicationId);
     if (stored) { if (stored.receipt !== receipt) throw deliveryError("publication_ack_conflict"); this._observe("duplicate_ack_suppressed", attempt); return stored.result; }
     if (attempt.state !== "sink_succeeded") throw deliveryError("publication_not_delivered");
@@ -58,7 +60,7 @@ export class PlayerPublicationDeliveryController {
     const { gameSessionId, publicationId, consumerId, consumerGeneration, deliveryAttemptId, sinkType, deliveryMode, receiptId } = identity;
     if (![gameSessionId, publicationId, consumerId, deliveryAttemptId, sinkType, deliveryMode, receiptId].every((value) => typeof value === "string" && value) || !Number.isSafeInteger(consumerGeneration)) throw deliveryError("invalid_sink_success_receipt");
     const attempt = this.attempts.get(deliveryAttemptId);
-    if (gameSessionId !== this.gameSessionId || this.invalidated) { if (attempt) this._rejectStaleAck("stale_publication_session", attempt); throw deliveryError("stale_publication_session"); }
+    if (gameSessionId !== this.gameSessionId || this.invalidated) { this._rejectStaleAck("stale_publication_session", attempt ?? identity); throw deliveryError("stale_publication_session"); }
     if (consumerGeneration !== this.consumerGeneration) { if (attempt) this._rejectStaleAck("stale_consumer_generation", attempt); throw deliveryError("stale_consumer_generation"); }
     if (!attempt || attempt.publicationId !== publicationId || attempt.consumerId !== consumerId || attempt.sinkType !== sinkType || attempt.deliveryMode !== deliveryMode || attempt.receipt?.receiptId !== receiptId) throw deliveryError("publication_not_delivered");
     if (!attempt.receipt || !["sink_succeeded", "acknowledged"].includes(attempt.state)) throw deliveryError("publication_not_delivered"); return attempt.receipt;
@@ -79,5 +81,6 @@ export class PlayerPublicationDeliveryController {
 
 function publicAttempt(attempt) { return Object.freeze({ gameSessionId: attempt.gameSessionId, publicationId: attempt.publicationId, consumerId: attempt.consumerId, deliveryAttemptId: attempt.deliveryAttemptId, consumerGeneration: attempt.consumerGeneration, sinkType: attempt.sinkType, deliveryMode: attempt.deliveryMode, state: attempt.state, entry: attempt.rendered }); }
 function receiptIdentity(receipt) { return Object.freeze({ gameSessionId: receipt.gameSessionId, publicationId: receipt.publicationId, consumerId: receipt.consumerId, consumerGeneration: receipt.consumerGeneration, deliveryAttemptId: receipt.deliveryAttemptId, sinkType: receipt.sinkType, deliveryMode: receipt.deliveryMode, receiptId: receipt.receiptId }); }
+function validReceiptShape(receipt) { return receipt && [receipt.gameSessionId, receipt.publicationId, receipt.consumerId, receipt.deliveryAttemptId, receipt.sinkType, receipt.deliveryMode, receipt.receiptId].every((value) => typeof value === "string" && value) && Number.isSafeInteger(receipt.consumerGeneration); }
 function validateSinkIdentity(consumerId, sinkType) { if (typeof consumerId !== "string" || !consumerId || !["browser", "cli"].includes(sinkType)) throw deliveryError("invalid_sink_success_receipt"); }
 export function deliveryError(code) { const error = new Error(code); error.name = "PlayerPublicationDeliveryError"; error.code = code; return error; }
