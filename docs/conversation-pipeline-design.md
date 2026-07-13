@@ -2,10 +2,10 @@
 
 ## 1. Executive decision summary
 
-- **Decision:** Replace the current natural-language-centered conversation pipeline with a browser-authoritative structured-event pipeline.
-- **Rationale:** The current system allows divergence between displayed NPC utterances and the underlying game state. Moving the authority for state changes and claim generation into the browser-side game engine ensures that all game actions are explicitly validated and recorded before being rendered as natural language.
+- **Decision:** Replace the current natural-language-centered conversation pipeline with a session-local, single-owner structured-event pipeline.
+- **Rationale:** The current system allows divergence between displayed NPC utterances and the underlying game state. Moving authority for state changes and claim generation into the active session's `WerewolfGame` instance ensures that all game actions are explicitly validated and recorded before being rendered as natural language.
 - **Rejected alternative:** Server-side authoritative state. This was rejected because it would require a complete rewrite of the `WerewolfGame` engine and the HTTP layer, violating the goal of preserving the existing browser-based engine and simple proxy server.
-- **Consequences:** The browser remains the sole owner of the authoritative game state. The server remains a stateless proxy for AI providers. All game rule validations and state updates occur in the browser.
+- **Consequences:** A web session is owned by its active browser-process `WerewolfGame`; a CLI-local session is separately owned by its active CLI-process `WerewolfGame`. They never co-own or replicate one active session. The server remains a stateless proxy for AI providers.
 
 ## 2. Current architecture analysis
 
@@ -43,7 +43,7 @@
 
 ## 4. Scope and non-scope
 
-- **In Scope:** `SpeechActCandidate` schemas, AI Interpreter/Renderer contracts, browser-side validation and atomicity logic.
+- **In Scope:** `SpeechActCandidate` schemas, AI Interpreter/Renderer contracts, and validation/atomicity logic in the session-local game engine shared by browser and CLI execution.
 - **Out of Scope:** Moving the game engine to the server, adding server-side persistence, changing core game rules (roles, phases). Experimental free-form AI commentary (Natural language generation) is currently out of scope to ensure authoritative consistency.
 
 ## 5. Terminology
@@ -58,11 +58,18 @@
 - **Logical turn:** One engine-accepted top-level game command and its directly caused player-conversation and NPC-reaction work. It is not a game phase, provider request, UI interaction count, or werewolf day/night round.
 - **Authoritative transaction:** One browser-engine compare-and-set boundary that either publishes its complete mutation set and one state-version transition or publishes neither.
 - **Pending runtime state:** Abort, retry, timeout, and correlation state that is session-local and non-authoritative.
+- **Logical reaction:** One engine-planned NPC reaction for one exact trigger, identified by `reactionPlanId`; it may own multiple provider attempts but commits at most once.
+- **Reaction attempt:** One provider invocation under a logical reaction, identified by a fresh `reactionAttemptId`; an attempt is never reopened after reaching a terminal status.
+- **Reaction tombstone:** A bounded, session-local, non-authoritative terminal identity summary used only to reject late or reused reaction/attempt identities after active coordinator cleanup.
+- **Route snapshot:** The immutable structured-or-legacy route selected when one logical reaction starts; a later feature-flag value does not rewrite it.
+- **Emergency cancellation:** An explicit operational cancellation of one active logical reaction, distinct from changing the deployment feature flag.
 
 ## 6. Responsibility boundaries
 
-### Browser-side Game Engine (Authority)
-- `WerewolfGame` holds authoritative game state and is the sole runtime owner and writer of authoritative turn IDs, turn order, and state versions.
+### Session-local Game Engine (Authority)
+- Exactly one active `WerewolfGame` instance owns one active game session and is its sole runtime owner and writer of authoritative turn IDs, turn order, and state versions.
+- In web execution, that owner is the active instance in the browser process. In CLI execution, it is the active instance in the CLI process for that separate CLI-local session.
+- Browser and CLI instances never co-own, replicate, or reconcile the same active game session. The server, observers, and history readers never arbitrate or acquire this authority. Cross-process single-session authority is outside this design.
 - Validates `SpeechActCandidate` against game rules, phase, and roster.
 - Generates `AcceptedSpeechAct` and `PublicEvent` only after successful validation.
 - Performs atomic state updates (claims, suspicion, history).
@@ -89,7 +96,7 @@ This section is normative. It defines the baseline used by Phase 3 and every lat
 
 ### Ownership and identity domains
 
-Each `WerewolfGame.create()` call creates one new game session. The `WerewolfGame` instance stores exactly one `gameSessionId: ID`, `turnId: ID`, `turnOrder: non-negative safe integer`, and `stateVersion: non-negative safe integer`. Only engine methods executing a top-level command or an authoritative transaction may replace `turnId`, advance `turnOrder`, or advance `stateVersion`. `public/browserApp.mjs`, `SessionManager`, HTTP providers, the server, provider adapters, and AI output may copy these values but never create, normalize, increment, or infer them. The server and providers treat them as opaque request metadata.
+Each `WerewolfGame.create()` call creates one new game session with exactly one active owner instance. The instance stores exactly one `gameSessionId: ID`, `turnId: ID`, `turnOrder: non-negative safe integer`, and `stateVersion: non-negative safe integer`. Only engine methods executing a top-level command or an authoritative transaction may replace `turnId`, advance `turnOrder`, or advance `stateVersion`. Browser/CLI adapters, `SessionManager`, HTTP providers, the server, provider adapters, AI output, observers, and history readers may copy approved projections but never create, normalize, increment, infer, replicate, or reconcile authoritative values. The server and providers treat them as opaque request metadata.
 
 The three identity domains are disjoint:
 
@@ -1029,6 +1036,8 @@ Closed enum: `werewolf`, `not_werewolf`. Every candidate, accepted act, canonica
 - **RenderMode**: `canonical_only`, `controlled_commentary`
 - **CommitType**: `player_conversation`, `npc_reaction`
 - **PendingStatus**: `pending`, `aborting`, `completed`, `failed`
+- **LogicalReactionStatus**: `planned`, `active`, `committed`, `rejected`, `superseded`, `cancelled`, `exhausted`
+- **ReactionAttemptStatus**: `attempting`, `candidate_received`, `validated`, `accepted`, `failed`, `timed_out`, `rejected`, `aborted`
 - **Sha256Fingerprint**: 64 lowercase ASCII hexadecimal characters matching `^[0-9a-f]{64}$`
 - **RFC3339Utc**: 20-35 ASCII characters, UTC timestamp ending in `Z`
 - **ClientCorrelationId**: ID supplied for browser-domain causality and validated as untrusted input
@@ -1128,7 +1137,7 @@ Both have no optional fields and `additionalProperties: false`. NPC result refer
 Provider waiting is runtime control state, not authoritative phase. From Phase 6, `PendingConversationRequest = PendingInterpreterRequest | PendingNpcReactionAttempt | PendingRendererRequest`, discriminated by `pendingType`; every member has no optional/null fields and `additionalProperties: false`.
 
 - `PendingInterpreterRequest` requires `schemaVersion: 1`, `pendingType: "interpreter"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `inputRecordId: ID`, `targetNpcId: ID`, `operation: "interpret_player_input"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
-- `PendingNpcReactionAttempt` requires `schemaVersion: 1`, `pendingType: "npc_reaction"`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `reactionPlanId: ID`, `reactionAttemptId: ID`, `originatingInputRecordId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `targetNpcId: ID`, `operation: "generate_npc_reaction_candidate"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
+- `PendingNpcReactionAttempt` requires `schemaVersion: 1`, `pendingType: "npc_reaction"`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `reactionPlanId: ID`, `reactionAttemptId: ID`, `originatingInputRecordId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `targetNpcId: ID`, `operation: "generate_npc_reaction_candidate"`, `status: ReactionAttemptStatus`, and `startedAt: RFC3339Utc`.
 - `PendingRendererRequest` requires `schemaVersion: 1`, `pendingType: "renderer"`, a distinct `requestId: ID`, `correlationId: ID`, `causationId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `reactionPlanId: ID`, `originatingInputRecordId: ID`, `locale: SupportedLocale`, `targetNpcId: ID`, `operation: "render_npc_utterance"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
 
 The Interpreter member forbids `resultingStateVersion`, `reactionPlanId`, `reactionAttemptId`, `originatingInputRecordId`, and `causationId`. The NPC-reaction member forbids `resultingStateVersion`, `inputRecordId`, and Renderer selection/finalization fields. The Renderer member forbids `preconditionStateVersion`, `inputRecordId`, and `reactionAttemptId`. This exclusion prevents one version field or attempt identity from acquiring two meanings.
@@ -1331,7 +1340,7 @@ This section is normative for Phase 6. It specifies a future implementation; the
 
 | Boundary | Implemented baseline | Existing documented contract | Phase 6 decision | Deferred |
 | :--- | :--- | :--- | :--- | :--- |
-| Authoritative owner | `WerewolfGame` in `src/gameEngine.mjs` owns the process-local browser/CLI game state, turn, phase, and `stateVersion` | Sections 6 and 6A name `WerewolfGame` as sole owner | unchanged; only it allocates identities, validates, commits, and increments version | persistence, reload, multi-tab, and server authority |
+| Authoritative owner | `WerewolfGame` in `src/gameEngine.mjs` owns state; browser and CLI each create a separate process-local instance/session | sections 6 and 6A require exactly one active owner per active session | unchanged; that session's owner alone allocates identities, validates, commits, and increments version | shared cross-process sessions, persistence, reload, multi-tab, and server authority |
 | Player transaction | `dispatchPlayerAction()` and `_commitStructuredPlayerQuestion()` perform the Phase 4 player `N -> N+1` transaction | sections 6A and 17 define atomic `PlayerConversationCommit` | unchanged and completed before reaction planning | no Phase 4 rewrite |
 | Current NPC transaction | `_commitStructuredPlayerQuestion()` creates a reaction binding, calls `handlePlayerQuestion()` on a copy, applies a final CAS, and publishes the compatibility copy as `N+1 -> N+2`; failure retains `N+1` | the version ledger already reserves `N+1 -> N+2` for the reaction and says Phase 6 replaces, never follows, the compatibility transition | replace that one transition when the Phase 6 route is selected; never add a third transition | legacy physical deletion in Phase 9 |
 | Legacy NPC content | `buildNpcResponseRequest()` in `src/responseGenerator.mjs` derives a request and `generateResponse()` returns text; `validateProviderResponse()` checks a nonempty text envelope; `handlePlayerQuestion()` then writes legacy log, public info, memory, and optional claim to a working copy | provider output is untrusted and AI-generated authoritative/display text is prohibited by the target design | the enabled route accepts only a strict structured candidate and constructs engine-owned plans/effects; raw text cannot commit or display | prompt-quality changes and controlled Renderer integration |
@@ -1345,21 +1354,26 @@ The implemented compatibility provider can return free-form text and the target 
 
 ### Non-negotiable authority and transaction rules
 
-The browser-side `WerewolfGame` is the sole authoritative state owner. Provider output is untrusted even when its JSON is structurally valid. The provider, proxy server, browser DOM, CLI writer, observer, history reader, and legacy fallback own no game state and cannot assign an authoritative ID, authorize an actor, project known information, apply a state patch, increment a version, or prove a commit. Server acknowledgement proves transport completion only; sink success proves delivery only.
+Authority is session-local and single-owner: exactly one active `WerewolfGame` instance owns one active game session. In web execution, the owner is the active instance in the browser process. In CLI execution, the owner is the active instance in the CLI process for a distinct CLI-local session. Browser and CLI never jointly own or act as authoritative replicas of the same active session. Phase 6 adds no cross-process reconciliation; the proxy server, browser/CLI adapters, observers, and history readers cannot arbitrate or acquire authority.
+
+Provider output is untrusted even when its JSON is structurally valid. The provider, proxy server, browser DOM, CLI writer, observer, history reader, and legacy fallback own no game state and cannot assign an authoritative ID, authorize an actor, project known information, apply a state patch, increment a version, or prove a commit. Server acknowledgement proves transport completion only; sink success proves delivery only.
 
 Player and NPC work are two separate transactions. A player commit at version `N` completes as `N -> N+1` before a reaction is planned. A successful NPC reaction commit compares against that committed state and performs exactly `N+1 -> N+2`. Provider failure, timeout, cancellation, structural or semantic rejection, stale or duplicate output, and preparation/commit exception perform zero increments and retain the player commit at `N+1`. A browser or CLI failure after reaction commit retains `N+2`, performs no rollback or compensating version change, and leaves publication retryable. One authoritative commit always equals one version increment.
 
-The enabled route and legacy route are selected once, before reaction execution. A failed enabled-route attempt never invokes the legacy route for the same logical reaction. Disabling the flag affects later route selection; it cannot convert an already planned structured reaction into a legacy authoritative commit.
+The enabled route and legacy route are selected once, before reaction execution, and stored as the logical reaction's immutable route snapshot. A failed enabled-route attempt never invokes the legacy route for the same logical reaction. A normal flag change affects only later logical reactions; it neither cancels nor converts an already planned reaction.
 
 ### Identity model and trigger binding
 
 Phase 6 reuses repository-native identities:
 
-- `reactionPlanId` is the **logical reaction ID**. `WerewolfGame` allocates it once after the player commit and before provider work. It is unique within `gameSessionId`, stable across retries, and commits at most once.
-- `reactionAttemptId` is the only new identity primitive. `WerewolfGame` allocates a new value for every engine-level provider attempt. It is runtime control/provenance until its successful value is copied into the committed plan.
+- `reactionPlanId` is both the **logical reaction ID** and the primary ID of the eventual authoritative `NpcReactionPlan`; there is no second authoritative reaction-record ID. `WerewolfGame` allocates it once after the player commit and before provider work. It is unique within `gameSessionId`, stable across retries, and commits at most once.
+- `reactionAttemptId` is the only new identity primitive. `WerewolfGame` allocates a new value for every engine-level provider attempt. It is runtime control/provenance until the winning value is copied into `NpcReactionPlan.successfulAttemptId`; an attempt ID is never reused.
 - `npcId`/`targetNpcId` is the engine-selected **actor ID**. A provider only echoes it; it cannot substitute another actor.
-- `causationId` is the exact triggering `PlayerConversationCommitResult.requestId`. `originatingInputRecordId` is that result's `inputRecordId`. The result, input, turn, correlation, actor, and player resulting version must form one exact committed graph.
-- `requestId` is the stable reaction commit/idempotency request ID, distinct from `reactionAttemptId`. `correlationId` is stable across logical retries. A transport request also carries both values.
+- `causationId` is the exact **trigger identity**, equal to the triggering `PlayerConversationCommitResult.requestId`. `originatingInputRecordId` is that result's `inputRecordId`. The result, input, turn, correlation, actor, and player resulting version must form one exact committed graph.
+- `requestId` is the stable, session-unique reaction commit/idempotency operation ID. It remains unchanged across attempts so every retry addresses the same intended commit; reuse by another logical reaction is an identity conflict.
+- `correlationId` is the stable trace ID for all attempts, transport observations, commit, and publication of one logical reaction. It remains unchanged across attempts but never acts as an idempotency key or authorizes a commit. Its separate role from `requestId` is observability, not operation identity.
+- `requestFingerprint` is the engine-computed SHA-256 fingerprint of the immutable logical request/binding/projection and remains fixed across attempts.
+- `candidateFingerprint` is the engine-computed SHA-256 fingerprint of the strict normalized candidate response excluding provider diagnostics. It identifies exact repeated output within one attempt and is stored only in runtime idempotency/tombstone control; the provider neither supplies nor authorizes it.
 
 The preparation binding is exactly `(gameSessionId, reactionPlanId, requestId, correlationId, causationId, originatingInputRecordId, turnId, turnOrder, preconditionPhase, preconditionStateVersion, npcId, requestFingerprint)`. `preconditionStateVersion` is the player result's `N+1`. The final commit must re-read every live dimension; an immutable preparation snapshot alone is insufficient.
 
@@ -1371,24 +1385,58 @@ Initial Phase 6 permits exactly one logical NPC reaction for one committed `ask_
 
 This restriction makes ordering deterministic: player commit first, then at most one reaction commit for the same `turnId`. A failed or exhausted reaction has no later actor to block. A future ordered multi-NPC queue may derive multiple logical reactions from one trigger, but it must use deterministic engine ordering, capture each next base version after the prior commit, serialize commits, and increment once per committed NPC. Parallel authoritative commits are prohibited; that future extension is outside Phase 6.
 
-### Lifecycle and legal transitions
+### Logical reaction and attempt state machines
 
-The session-local reaction coordinator owns the following lifecycle. Runtime state and redacted observations are not authoritative game state and never increment `stateVersion`.
+The session-local reaction coordinator owns two separate state machines. A logical reaction owns zero or more attempts; an attempt never owns or substitutes the logical status. Runtime states and redacted observations are non-authoritative and never increment `stateVersion`.
 
-| State | Meaning | Authority/retention | Legal next states |
+#### Logical reaction status
+
+| Status | Meaning | Legal next statuses | Terminal |
 | :--- | :--- | :--- | :--- |
-| `planned` | binding, projection, logical ID, and first attempt policy prepared without mutation | ephemeral, observable in redacted diagnostics | `attempting`, `cancelled`, `superseded` |
-| `attempting` | one exact `reactionAttemptId` is active | ephemeral pending state | `candidate_received`, `timed_out`, `failed`, `cancelled`, `superseded` |
-| `candidate_received` | correlated transport output exists but has no authority | ephemeral; raw body is never logged | `validated`, `rejected`, `superseded`, `cancelled` |
-| `validated` | candidate and prepared delta passed all pre-commit checks | ephemeral | `committed`, `rejected`, `superseded`, `cancelled` |
-| `committed` | atomic plan/effects/result/publication append succeeded | terminal; evidenced by authoritative records | none |
-| `failed` | retryable or terminal transport/provider failure | terminal for the attempt; logical reaction may retry only when classified retryable | new `attempting`, or logical exhaustion |
-| `timed_out` | attempt deadline expired and its signal was aborted | terminal for the attempt; logical reaction may retry | new `attempting`, or logical exhaustion |
-| `rejected` | structural, semantic, authorization, or commit-candidate validation failed | terminal for the logical reaction | none |
-| `superseded` | current session/turn/phase/version/actor/target no longer matches | terminal for the logical reaction | none |
-| `cancelled` | reset, destroy, flag-route cancellation, or explicit engine cancellation aborted work | terminal for the logical reaction | none |
+| `planned` | immutable binding, route snapshot, projection, logical ID, and policy are prepared without provider work | `active`, `cancelled`, `superseded` | no |
+| `active` | one attempt is active or a retry remains eligible | `committed`, `rejected`, `superseded`, `cancelled`, `exhausted` | no |
+| `committed` | one attempt won the atomic NPC commit | none | yes |
+| `rejected` | non-retryable structural, semantic, authorization, identity, or provider-contract failure ended the reaction | none | yes |
+| `superseded` | session/turn/phase/version/actor/target applicability no longer matches | none | yes |
+| `cancelled` | reset/destroy or explicit emergency cancellation ended the reaction before commit | none | yes |
+| `exhausted` | every allowed retryable attempt ended and no attempt/deadline budget remains | none | yes |
 
-Only `committed` corresponds to an authoritative reaction. `failed` and `timed_out` are retryable only for the same logical reaction and only within the policy below. `rejected`, `superseded`, `cancelled`, exhausted failure, and `committed` are logical terminal outcomes. Once committed, every later response or retry for the logical ID is a duplicate and returns the stored commit result or a redacted duplicate outcome without provider execution, publication, mutation, or version increment.
+`exhausted` is required and is distinct from an attempt's `failed` or `timed_out`. A logical reaction never leaves a terminal status. Only `committed` corresponds to an authoritative NPC reaction.
+
+#### Reaction attempt status
+
+| Status | Meaning | Legal next statuses | Terminal for this attempt |
+| :--- | :--- | :--- | :--- |
+| `attempting` | one exact `reactionAttemptId` has an active provider invocation | `candidate_received`, `failed`, `timed_out`, `aborted` | no |
+| `candidate_received` | one correlated candidate exists but has no authority | `validated`, `rejected`, `aborted` | no |
+| `validated` | candidate and prepared delta passed pre-commit checks | `accepted`, `rejected`, `aborted` | no |
+| `accepted` | this attempt supplied the candidate committed by the logical reaction | none | yes |
+| `failed` | transport/provider operation failed | none | yes |
+| `timed_out` | the attempt deadline expired and its signal was aborted | none | yes |
+| `rejected` | candidate/identity/authorization validation failed | none | yes |
+| `aborted` | reset, destroy, emergency cancellation, or stale/superseded final CAS stopped the attempt | none | yes |
+
+An attempt terminal status is immutable; retry never reopens it and always creates a new `reactionAttemptId` under the same logical reaction. A retryable `failed` or `timed_out` attempt returns its logical owner to the retry-eligible portion of `active`; a fresh attempt then starts. A non-retryable provider/auth/schema failure uses attempt `failed` and logical `rejected`. Structural, semantic, authorization, correlation, actor, or identity validation failure uses attempt `rejected` and logical `rejected`; validation failure is never retryable. A stale base/applicability result uses attempt `aborted` with reason `stale_result` and logical `superseded`. Explicit emergency cancellation uses attempt `aborted` and logical `cancelled`.
+
+Exact duplicate responses do not transition either machine. A late result for a timed-out/failed/aborted attempt is duplicate or stale diagnostic input according to the conflict matrix below. After logical `committed`, every non-winning attempt is terminal or forced to `aborted`, and none can commit.
+
+```text
+LogicalReaction:
+planned -> active -> committed
+planned -> active -> exhausted
+planned -> active -> rejected
+planned -> active -> superseded
+planned -> active -> cancelled
+planned -> superseded/cancelled
+
+ReactionAttempt:
+attempting -> candidate_received -> validated -> accepted
+attempting -> failed
+attempting -> timed_out
+candidate_received -> rejected
+validated -> rejected
+attempting/candidate_received/validated -> aborted
+```
 
 ### Structured candidate transport and validation
 
@@ -1423,15 +1471,59 @@ Never exposed are another participant's hidden role/team/result, another actor's
 
 A candidate referencing hidden information must be authorized against the captured actor-private projection and disclosure policy. Unauthorized result claims or targets are rejected. Authorized private information may justify an engine-created structured claim only under the applicable game rule; otherwise it may influence a future prose variant but cannot mutate state or be represented as public fact.
 
+### Identity, idempotency, and terminal retention
+
+The reaction idempotency key is `(gameSessionId, reactionPlanId, requestId)` with exact `requestFingerprint`. `correlationId` is checked for equality but is not part of the key. Attempt response deduplication additionally uses `(reactionAttemptId, candidateFingerprint)`. Classification is ordered: exact committed replay, identity conflict, stale applicability, invalid response, duplicate terminal/repeated delivery, then ordinary validation. None of these read/classification paths commits or increments a version.
+
+| Case | Required classification | State-machine/result behavior |
+| :--- | :--- | :--- |
+| same logical ID, request ID, and request fingerprint | `idempotent replay` when a commit result exists; otherwise `duplicate` while the logical request is already active/terminal without commit | return stored commit only in the first case; no provider, publication, transition, or increment |
+| same logical ID and request ID, different request fingerprint | `identity conflict` (`idempotency_conflict`) | active logical reaction becomes `rejected` if this is its first terminal conflict; otherwise retain terminal status |
+| same logical ID, different request ID | `identity conflict` | reject both attempted aliasing and replay; no new logical reaction |
+| different logical ID, same request ID | `identity conflict` | reject request-ID reuse; no new logical reaction |
+| different logical ID, same trigger identity | `identity conflict` in initial one-reaction-per-trigger Phase 6 | reject the second logical reaction; future multi-NPC design must introduce an explicit actor-order key before changing this rule |
+| multiple responses for one attempt ID, same candidate fingerprint | `duplicate` | first accepted response controls; later copies cause no transition |
+| multiple responses for one attempt ID, different candidate fingerprint | `invalid` response (`attempt_response_conflict`) | attempt becomes `rejected` and logical reaction becomes `rejected` unless already terminal |
+| late response from `timed_out`, `failed`, or `aborted` attempt | `duplicate` with diagnostic-only retention; `stale` takes precedence when live applicability also changed | retain terminal attempt/logical status |
+| late result from a losing attempt after logical `committed` | `duplicate` | return/suppress against stored commit; never publish again |
+| late result for logical `exhausted` | `duplicate` with diagnostic-only retention | retain `exhausted` |
+| late result for logical `superseded` | `stale` with diagnostic-only retention | retain `superseded` |
+| response whose actor ID alone differs | `invalid` | attempt `rejected`, logical `rejected`; no actor substitution |
+| response whose base version alone differs | `stale` | attempt `aborted` with `stale_result`, logical `superseded` |
+
+`rejected` in the table is a logical terminal transition caused by an `identity conflict` or `invalid` classification; those terms are not synonyms. `stale` means the once-valid applicability binding no longer matches. `duplicate` means an already observed/terminal operation is being delivered again. `idempotent replay` is reserved for an exact committed operation and returns its stored result. Every row has commit count `0` and version increment `0` for the repeated/conflicting input.
+
+#### Session-bounded tombstone registry
+
+After an active coordinator entry reaches any logical terminal status, the engine writes a compact `ReactionTombstone` before removing the active entry. It contains only `gameSessionId`, `reactionPlanId`, `requestId`, `requestFingerprint`, `correlationId`, trigger ID, actor ID, base version, terminal logical status, all bounded attempt IDs with terminal attempt status and candidate fingerprint when one exists, terminal order, and either the committed result ID or a normalized non-commit reason. It contains no raw candidate, projection, provider body, private fact, display text, or sink state.
+
+Committed lookups first verify the authoritative `NpcReactionPlan`/`NpcReactionCommitResult`; their IDs and fingerprint must exactly match the tombstone. Tombstones for `rejected`, `cancelled`, `exhausted`, and `superseded` have no authoritative commit target and only suppress late/reused identities. History records remain authoritative/non-consuming read data and are never reconstructed from tombstones; tombstones remain non-authoritative coordinator control data and never become history.
+
+The initial registry bound is `maxTerminalReactionTombstones = 1024`; each entry stores no more attempt summaries than the configured finite `maxAttempts`. Entries are retained until game-session reset/destruction and are not evicted early. If the registry is full, the engine fails closed with `reaction_tombstone_capacity_exhausted` before allocating a new logical reaction or calling a provider; it does not evict an identity that could receive a late result. Reset/destruction clears the entire registry and old-session responses fail the session check. Tombstone lookup, insertion, capacity failure, and destruction change `stateVersion` by `0`. Persistence, reload reconstruction, and cross-tab sharing are explicitly unsupported.
+
 ### Retry, timeout, stale, and duplicate policy
 
-The browser engine initiates logical-reaction attempts. A logical reaction allows at most three engine attempts including the first. Attempt two waits 1 second and attempt three waits 2 seconds, using an injectable clock/delay/timeout abstraction. The overall logical-reaction deadline is 15 seconds; no retry starts unless its backoff, minimum attempt budget, and validation budget fit. To avoid multiplicative retries, the Phase 6 candidate endpoint disables hidden server provider retries; one browser attempt maps to one provider invocation. Existing section 24 retry behavior for Interpreter and Renderer is unchanged.
+#### Design invariants
 
-Only explicitly transient network/unavailable failures and attempt timeout are retryable. Authentication, schema, correlation, actor, authorization, semantic, stale, duplicate, and idempotency-conflict outcomes are never retried. A retry preserves logical reaction ID, request/correlation/trigger/binding/fingerprint/base version/projection and creates a fresh `reactionAttemptId`. If the authoritative base no longer equals the captured `N+1`, the reaction becomes `superseded`; it is never regenerated against a new version under the same logical ID.
+- A retry remains under the same `reactionPlanId`, request/correlation/trigger/binding/fingerprint/base/projection and creates a fresh `reactionAttemptId`.
+- Attempt count and logical deadline are finite; changing their policy values cannot remove either bound.
+- A terminal attempt is never reopened. A committed, rejected, superseded, cancelled, or exhausted logical reaction is never retried.
+- Retry never relaxes transport, structural, semantic, privacy, or final compare-and-commit validation; every retry that reaches `validated` must pass the same final live CAS before commit.
+- Retry never switches to legacy fallback, rolls back the player `N+1`, or adds hidden authoritative information to the provider projection.
+- The Phase 6 candidate server performs no hidden provider retry. One engine attempt maps to one provider invocation so attempt identity and accounting remain complete.
+- Timeout aborts the exact attempt signal and every late result is classified by the matrix above. Backoff, provider work, listeners, and timers share the logical-reaction AbortSignal and are cleaned at terminal completion/cancellation.
 
-Timeout aborts the exact attempt signal, increments no version, and makes every later result for that attempt a late duplicate/stale diagnostic that cannot commit. Backoff, active provider work, and listeners share the reaction AbortSignal and are cleaned on completion, reset, destroy, or cancellation.
+Only explicitly transient network/unavailable failures and timeout are retryable. Authentication failure, malformed or unsupported schema, correlation/identity/actor mismatch, authorization or semantic rejection, stale applicability, duplicate delivery, and idempotency conflict are non-retryable. If the authoritative base no longer equals captured `N+1`, the attempt becomes `aborted`, the logical reaction becomes `superseded`, and it is never regenerated against a new version under the same logical ID.
 
-A duplicate includes repeated transport delivery, multiple responses for one attempt, a result from a losing retry, reprocessing a committed candidate, or replay of a logical outcome. The idempotency registry is keyed by `(gameSessionId, reactionPlanId, requestId)` and stores the fingerprint and terminal result. Exact committed replay returns the stored `NpcReactionCommitResult`; a changed fingerprint is `idempotency_conflict`; an unknown replay is `replay_not_found`. All perform zero provider calls, publications, mutations, and increments.
+#### Initial tunable policy
+
+| Policy | Initial value | Contract status |
+| :--- | :--- | :--- |
+| `maxAttempts` | `3` including the first attempt | tunable finite operational policy, not a protocol invariant |
+| retry backoff | `1 second`, then `2 seconds` | tunable bounded operational policy using injected clock/delay/timeout |
+| logical deadline | `15 seconds` from first attempt start | tunable finite operational policy |
+
+No runtime configuration is added by this docs-only change. A later policy/configuration change may adjust these values within finite implementation bounds without changing authority, identity, validation, no-fallback, transaction, or version invariants. Existing section 24 policy for Interpreter and Renderer remains unchanged and does not authorize Phase 6 server-side hidden retries.
 
 ### Authoritative record and field classification
 
@@ -1502,7 +1594,7 @@ NPC delivery uses session + publication identity for deduplication and a separat
 
 Browser DOM attachment and CLI configured-write completion are sink boundaries. A sink failure leaves the committed reaction at `N+2` and the publication retryable. Acknowledgement records delivery only. History, replay, diagnostics, snapshot, and observer reads never acknowledge, consume, or trigger live delivery. Late observers can read committed records without republication. Observer failure and observer count change no state/version; observers see committed records or redacted lifecycle outcomes, never raw candidates or private projections.
 
-Redacted observer outcomes are exactly `reaction_planned`, `reaction_attempt_started`, `reaction_attempt_failed`, `reaction_attempt_timed_out`, `reaction_candidate_rejected`, `reaction_superseded`, `reaction_cancelled`, `reaction_committed`, `reaction_duplicate_suppressed`, `npc_publication_delivered`, and `npc_publication_delivery_failed`. They may include session-scoped IDs, attempt number, normalized reason code, version numbers, actor ID, duration, and sink type. They exclude raw player/provider text, hidden facts, projection contents, prompts, credentials, private memory, and stack traces. Observer exceptions are isolated after the owning state transition/result is stored.
+Redacted observer outcomes are exactly `reaction_planned`, `reaction_activated`, `reaction_attempt_started`, `reaction_attempt_failed`, `reaction_attempt_timed_out`, `reaction_attempt_aborted`, `reaction_candidate_rejected`, `reaction_exhausted`, `reaction_superseded`, `reaction_cancelled`, `reaction_committed`, `reaction_duplicate_suppressed`, `reaction_identity_conflict`, `npc_publication_delivered`, and `npc_publication_delivery_failed`. They may include session-scoped IDs, attempt number, normalized reason code, version numbers, actor ID, duration, and sink type. They exclude raw player/provider text, hidden facts, projection contents, prompts, credentials, private memory, and stack traces. Observer exceptions are isolated after the owning state transition/result is stored.
 
 ### Browser and CLI responsibilities
 
@@ -1512,11 +1604,23 @@ The CLI uses the same `WerewolfGame` module and process-local authoritative inst
 
 ### Feature flag, coexistence, and rollback
 
-The proposed deployment flag is `NPC_STRUCTURED_REACTION_MODE`, owned and evaluated by the browser-engine runtime at reaction-route selection. Its default is `false`. CLI configuration maps the same flag into the same engine option; adapters do not evaluate an independent policy.
+The proposed deployment flag is `NPC_STRUCTURED_REACTION_MODE`, owned and evaluated by the active session's `WerewolfGame` at reaction-route selection. Its default is `false`. Browser and CLI configuration map the same flag into their separate engine instances; adapters do not evaluate an independent policy.
 
 `PLAYER_CONVERSATION_COMMIT_MODE=true` is a hard prerequisite because Phase 6 requires the committed input/result/turn/version graph. `PLAYER_STRUCTURED_CONSUMER_MODE` is not an authority prerequisite and its requested/effective value is neither read nor changed by Phase 6; Phase 5 player delivery remains independent. Enabling Phase 6 changes only the NPC route after a successful Phase 4 player commit.
 
-When disabled, browser and CLI use the pre-Phase 6 compatibility NPC route and its single `N+1 -> N+2` transition. When enabled, they use only the structured route; no shadow dual commit and no fallback after failure is allowed. A flag change while work is active cancels/aborts that structured logical reaction, leaves the player at `N+1`, and applies the new route only to a later trigger. Already committed plans, publications, legacy structures, and player records remain readable. Rollback sets the flag to `false`; it requires no deletion or data rewrite. Physical removal of legacy NPC/player paths remains Phase 9.
+#### Normal flag evaluation
+
+When a logical reaction starts, the engine snapshots exactly one route: flag `true` selects structured and flag `false` selects compatibility legacy. That route remains immutable until the logical reaction terminates. A normal configuration change while work is active does not cancel, abort, restart, or reroute it; the new value applies only to the next logical reaction trigger. Already committed plans, publications, legacy structures, and player records remain readable. Rollback sets the flag to `false` for future triggers and requires no deletion or data rewrite.
+
+#### No mid-flight fallback
+
+A structured route never switches to legacy for the same logical reaction after provider failure, timeout, parse/schema failure, validation rejection, stale/duplicate result, publication/delivery failure, or a mid-flight flag change. The player commit remains at `N+1` when no NPC commit occurred; publication failure after commit retains `N+2`. No shadow dual commit is allowed.
+
+#### Emergency cancellation
+
+Emergency cancellation is a separate explicit engine operation, not an implication of setting the deployment flag to `false`. It targets one active logical reaction and must atomically mark the logical reaction `cancelled`, mark its active attempt `aborted`, abort provider/backoff/timers/listeners, write the redacted `reaction_cancelled` observation and tombstone, and reject every late result. It creates no NPC commit/publication, increments version by `0`, retains the successful player commit at `N+1`, and never invokes legacy fallback. If the reaction already committed or otherwise reached a terminal logical status, cancellation is an idempotent no-op or typed terminal conflict and cannot undo state.
+
+This section defines only the operational contract. Phase 6 does not add an emergency-cancellation UI, CLI command, HTTP endpoint, or runtime API in this docs-only change. Physical removal of legacy NPC/player paths remains Phase 9.
 
 Required comparison observability includes route selected, logical outcome, attempt count, normalized rejection/timeout/stale/duplicate reason, `N+1`/`N+2` transition outcome, publication delivery outcome, and privacy-redaction status. Metrics never grant authority and contain no private projection or raw text.
 
@@ -1539,42 +1643,56 @@ Each implementation stage is independently reviewable and may be rolled back by 
 
 The implementation PR must add tests; this docs-only PR adds none. Passing requires state and external-effect assertions, not only error-code assertions:
 
-- **Identity/unit:** logical ID remains byte-equal across all retries; every attempt ID is unique; provider-chosen/replaced IDs are rejected; exact trigger/result/input/turn/version graph is required.
+- **Authority/unit:** one browser session has exactly one active browser-process `WerewolfGame`; one CLI-local session has exactly one active CLI-process `WerewolfGame`; the two processes never co-own one session; server/sink/observer/history access cannot create authority.
+- **Identity/unit:** logical/request/correlation/trigger identities remain byte-equal across retries; every attempt ID is unique; provider-chosen/replaced IDs are rejected; exact trigger/result/input/turn/version graph is required; every required conflict-matrix case, including the split exact/conflicting-response subcases, produces its specified classification and version increment `0`.
 - **Projection/unit:** deterministic deep-equal output for equal snapshots; public, actor-private, derived, and presentation groups are allowlisted; every other participant private role/team/memory/result, raw legacy info, prompt, diagnostic, and credential field is absent; input is not mutated.
 - **Validation/unit:** strict fields, enums, IDs, bounds, array uniqueness, payload/nesting/code-point limits, actor/target eligibility, claim/disclosure permission, illegal effects, arbitrary patches, and syntactically valid but semantically invalid candidates fail closed with state deeply equal to `N+1`.
-- **Lifecycle/state machine:** every legal edge above succeeds; every omitted edge is rejected; timeout can create a new attempt under the same logical ID; timeout late result, racing attempts, post-commit result, superseded base, cancel/reset/destroy, and terminal validation rejection cannot commit.
+- **Lifecycle/state machines:** logical and attempt machines are tested separately; terminal attempts never reopen; retry creates a new attempt under the same logical ID; retry exhaustion produces logical `exhausted`; committed/rejected/superseded/cancelled/exhausted reactions never reopen; timeout late result, racing attempts, post-commit result, superseded base, reset/destroy, and emergency cancellation cannot commit.
 - **Version/atomicity:** player success is exactly `N -> N+1`; reaction success is exactly `N+1 -> N+2`; provider failure, timeout, reject, stale, duplicate, abort, and preparation/publication exception increment zero; commit exception restores the exact `N+1` graph; sink failure retains exact `N+2`.
-- **Idempotency:** one logical reaction commits at most once; exact replay returns the stored result with no provider/sink/version effect; changed fingerprint conflicts; unknown replay is not found; duplicate transport and concurrent late responses create no second claim/event/publication.
-- **Retry/timeout:** no more than three engine attempts, delays are 1 and 2 seconds under injected time, total deadline is bounded, each attempt signal reaches provider, no hidden proxy retry multiplies calls, and listeners/timers are cleaned.
+- **Idempotency/tombstones:** one logical reaction commits at most once; exact replay returns the stored result with no provider/sink/version effect; changed fingerprint conflicts; duplicate transport and concurrent late responses create no second claim/event/publication; coordinator cleanup retains bounded tombstones for every logical terminal status; committed IDs cross-check stored records; capacity fails closed; reset clears tombstones; late old-session results remain rejected.
+- **Retry invariants:** logical ID is stable, attempt ID changes, attempt count/deadline remain finite, validation and privacy do not weaken, player `N+1` remains committed, no legacy/hidden server retry occurs, final CAS repeats, and all terminal cleanup completes under injected time.
+- **Initial retry policy:** separately assert initial `maxAttempts = 3`, 1-second/2-second backoff, and 15-second logical deadline; a test with different finite policy values must preserve all authority/identity/validation/version invariants.
 - **Browser integration:** actual dispatch through `WerewolfGame`, stateless proxy adapter, commit, canonical record, DOM sink, acknowledgement, failure/retry, history-only read, and replay are exercised. Only committed canonical content is visible; sink failure never rolls back.
 - **CLI integration:** the same engine/projection/validator path reaches the configured writer; throw/rejection is retryable delivery only; history read emits no live output; no legacy bypass exists.
-- **Compatibility/flag:** disabled route preserves legacy behavior; enabled route requires Phase 4, does not change Phase 4 writer or any Phase 5 mode/delivery state, rejects structured failure without fallback, and disabling affects only later triggers. All existing Phase 4 and Phase 5 tests remain unchanged and pass; 287/287 is the pre-implementation baseline, not a Phase 6 completion claim.
+- **Compatibility/flag:** route is snapshotted when the logical reaction starts; mid-flight flag changes do not reroute/cancel; disabled future routes preserve legacy behavior; enabled routes require Phase 4 and do not change Phase 4/5; every mid-flight failure has no fallback; explicit emergency cancellation produces logical `cancelled`/attempt `aborted`, zero increment, retained player `N+1`, late-result rejection, and no runtime route switch. All existing Phase 4 and Phase 5 tests remain unchanged and pass; 287/287 is the pre-implementation baseline, not a Phase 6 completion claim.
 - **Adversarial:** actor/logical/attempt/version substitution, hidden-information request or response, illegal/unknown target, oversized/malformed/extra-field payload, arbitrary patch, stale base, duplicate delivery, mismatched attempt, valid syntax/invalid semantics, and concurrent late output all produce zero unauthorized display, mutation, or increment.
 - **Single-actor policy:** exactly one target reaction may derive from `ask_npc`; provider cannot add/reorder actors; no parallel commit occurs. A future multi-NPC fixture is rejected until a separately approved serialized policy exists.
 - **Observers/privacy:** only redacted lifecycle outcomes and committed records are observed; observer throw cannot change stored results; observer/history count changes no version; raw candidate/projection/private fields never reach logs, history, browser diagnostics, CLI diagnostics, or HTTP errors.
 
 Acceptance additionally requires the existing sample command, syntax checks, diff checks, privacy/default-ignorable Unicode scans, and GitHub Actions to pass. It must demonstrate that the server retains no game session and that no runtime path treats transport or delivery acknowledgement as commit confirmation.
 
+### Documentation Unicode verification record
+
+Unicode verification is documentation validation, not a runtime Phase 6 test. The review-fix validation scans three scopes independently: added lines in `origin/master...HEAD` for this file, the complete `origin/master` copy, and the complete PR-head copy. The code-point predicate covers bidi controls (`U+061C`, `U+200E`-`U+200F`, `U+202A`-`U+202E`, `U+2066`-`U+2069`), zero-width characters (`U+200B`-`U+200D`, `U+2060`, `U+FEFF`), the Default_Ignorable_Code_Point ranges used by the repository check (including variation selectors and tag characters), non-breaking space `U+00A0`, and unexpected BOM `U+FEFF`.
+
+The reproducible validation uses `git diff --unified=0 origin/master...HEAD -- docs/conversation-pipeline-design.md` plus a Python standard-library scanner (`unicodedata`, `subprocess`, and explicit code-point ranges). Each finding output is `(file line, column, U+code point, Unicode name, category)`. The same predicate scans `git show origin/master:docs/conversation-pipeline-design.md` and the working-tree file. No dependency or documentation toolchain is added.
+
+The review-fix scan found `0` matching code points in all three scopes. Because neither the base file, PR-head file, nor added lines contain a matching code point, a GitHub UI warning for these classes cannot be reproduced from this document's code-point content; an exact UI-reported line would be required for a different diagnosis. A future nonzero result must name the character, code point, file, and line and must replace unintended characters before commit.
+
 ### Deferred and out of scope
 
-Production/test/runtime/schema/provider/endpoint implementation is outside this docs-only change. Phase 6 also excludes persistence, reload/crash/offline recovery, durable queues, multi-tab/cross-tab ownership, account sync, server authority or transactions, distributed locking, remote observer guarantees, broad UI redesign, unrelated prompt tuning/game-rule redesign, controlled Renderer implementation, suspicion/memory migration, and physical legacy deletion. These require later phases or separate reviewed designs; none may be inferred from this section.
+Production/test/runtime/schema/provider/endpoint implementation is outside this docs-only change, including the runtime state machines, tombstone registry, flag plumbing, emergency-cancellation API/UI/CLI command, and candidate transport. Phase 6 also excludes persistence, reload/crash/offline recovery, durable queues, multi-tab/cross-tab ownership, account sync, server authority or transactions, distributed locking, remote observer guarantees, broad UI redesign, unrelated prompt tuning/game-rule redesign, controlled Renderer implementation, suspicion/memory migration, and physical legacy deletion. These require later phases or separate reviewed designs; none may be inferred from this section.
 
 ### Phase 6 invariants
 
-1. `WerewolfGame` is the only authoritative state owner; provider, server, sinks, history, and observers are not authorities.
+1. Exactly one active `WerewolfGame` owns one active session; browser and CLI instances own separate process-local sessions and never co-own or replicate one session. Provider, server, sinks, history, and observers are not authorities.
 2. Provider output is always untrusted and never supplies authoritative IDs, actor order, versions, or patches.
 3. Player and reaction commits are separate: `N -> N+1`, then at most one `N+1 -> N+2` for initial Phase 6.
 4. Failure, timeout, rejection, stale, duplicate, cancellation, and supersession preserve the player commit and increment zero.
 5. One authoritative commit increments exactly once; one logical reaction commits at most once.
-6. Retry preserves `reactionPlanId` and changes `reactionAttemptId`; final CAS checks current live state.
+6. Logical and attempt state machines are distinct; a terminal attempt never reopens, retry preserves `reactionPlanId` and changes `reactionAttemptId`, exhaustion is a logical terminal status, and final CAS checks current live state.
 7. The engine selects one eligible actor and creates the known-information projection before provider invocation.
 8. Validation failure cannot invoke raw/legacy authoritative fallback or display the candidate as committed.
 9. A committed NPC publication is separate from delivery; sink failure never rolls back `N+2`.
 10. History/replay/diagnostic reads never acknowledge or consume live delivery and never create authority.
 11. Phase 4 writer and Phase 5 player publication/delivery semantics are unchanged.
-12. `NPC_STRUCTURED_REACTION_MODE` is default-off; coexistence is pre-execution route selection, never post-failure fallback.
-13. Persistence, reload, multi-tab, and server authority remain out of scope; legacy physical deletion remains Phase 9.
-14. If a future design permits multiple NPCs, commits are deterministically ordered, serialized, and individually versioned.
+12. Identity conflicts, stale applicability, invalid responses, duplicates, and idempotent replay are distinct classifications; every repeated/conflicting input increments version by `0`.
+13. Bounded session-local tombstones suppress late/reused terminal identities without becoming authority/history or requiring persistence.
+14. Retry count and deadline are finite invariants; `3` attempts, `1`/`2` second backoff, and `15` second deadline are initial tunable policy values only.
+15. `NPC_STRUCTURED_REACTION_MODE` is default-off; its route is snapshotted at logical-reaction start and normal flag changes affect only later triggers.
+16. Emergency cancellation is explicit and separate from flag changes; it aborts/cancels without NPC commit, version increment, player rollback, or legacy fallback.
+17. Persistence, reload, multi-tab, and server authority remain out of scope; legacy physical deletion remains Phase 9.
+18. If a future design permits multiple NPCs, commits are deterministically ordered, serialized, and individually versioned.
 
 ## 26. Migration plan
 
@@ -1634,9 +1752,15 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Pending-state tests cover duplicate submission blocking, timeout/abort with unchanged authoritative phase, and stale response with unchanged state.
 - Version tests prove Interpreter pending uses precondition version, Renderer pending uses committed resulting version, Renderer is not compared with the old player version, and player/NPC commits increment separately.
 - NPC reaction tests prove canonical claims are created only in reaction commit, canonical segments never reference uncommitted claims/events, renderer failure preserves committed state, and one reaction yields exactly one NPC publication.
-- Phase 6 identity/lifecycle tests prove one engine-selected actor, stable logical ID, fresh attempt ID per retry, exact player-result/input/turn/base binding, every legal state transition, rejection of every illegal transition, at-most-one commit, and terminal late/duplicate suppression.
+- Phase 6 authority tests prove one active owner per session, separate browser and CLI-local sessions, no browser/CLI co-ownership or replica relationship, and no authority acquisition by server, sink, observer, or history read.
+- Phase 6 lifecycle tests independently cover every logical and attempt edge, prohibit every omitted edge, prove terminal attempts never reopen, create a fresh attempt on retry, permit multiple attempts under one logical ID, produce logical `exhausted` at retry exhaustion, and produce logical `cancelled` plus attempt `aborted` on emergency cancellation.
+- Phase 6 identity-matrix tests cover every row in section 25A, including conditional exact replay/duplicate and same-attempt candidate conflict, and assert the exact classification, terminal status behavior, commit count `0`, and version increment `0`.
+- Phase 6 tombstone tests prove cleanup-before-removal ordering, committed-record cross-check, late suppression for committed/rejected/exhausted/superseded/cancelled IDs, bounded capacity with fail-closed overflow, no history/authority role, and complete destruction on session reset.
+- Phase 6 retry-invariant tests prove stable logical/request/correlation/trigger binding, fresh attempt IDs, finite attempts/deadline, unchanged validation/privacy/projection, repeated final CAS, no player rollback, no legacy or hidden server retry, and terminal cleanup. Separate initial-policy tests assert `3` attempts, `1`/`2` second backoff, and `15` second deadline, then vary those finite values without changing authority invariants.
+- Phase 6 flag tests prove route snapshot at logical-reaction start, normal mid-flight flag changes affect only later triggers, every structured failure avoids fallback, and explicit emergency cancellation causes zero increment, retains player `N+1`, records a redacted diagnostic/tombstone, and rejects late output.
 - Phase 6 projection/validation tests prove deterministic strict allowlists, actor-private disclosure authorization, exclusion of every other private/legacy/internal field, provider ID/actor/version/patch rejection, final live CAS, exact `N+1 -> N+2`, zero increments for every non-commit outcome, and no legacy fallback after enabled-route rejection.
 - Phase 6 delivery/compatibility tests exercise actual browser DOM and CLI writer paths from committed canonical records, sink failure at retained `N+2`, non-consuming history/replay, default-off and disable rollback, unchanged Phase 4/5 behavior, stateless proxy operation, and no controlled Renderer activation before Phase 7.
+- Phase 6 documentation validation records the Unicode scan command, exact base/head/added-line scopes, inspected code-point classes, and file/line/code-point details for any finding; it is not a runtime test.
 - Phase tests prove provider pending does not mutate phase, accepted acts record `acceptedPhase`, events record `occurredPhase`, and commit deltas record `resultingPhase`.
 - Duplicate tests prove a committed retry returns the stored CommitResult without provider execution or mutation and rejects same request ID with a changed fingerprint.
 - Publication tests prove every displayable input has exactly one player publication and replay duplicates neither player nor NPC publication.
@@ -1673,7 +1797,7 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | Invariant | Status |
 | :--- | :--- |
 | **AI-generated display text** | PROHIBITED |
-| **Authoritative turn/version owner and writer** | `WerewolfGame` ONLY |
+| **Authoritative turn/version owner and writer** | EXACTLY ONE ACTIVE `WerewolfGame` PER ACTIVE SESSION; BROWSER/CLI SESSIONS ARE DISTINCT |
 | **Turn ID meaning** | OPAQUE logical-command identity; never ordering/version/request identity |
 | **Turn ordering source** | ENGINE `turnOrder`, never ID text/timestamp/index/request count |
 | **State version meaning** | SAFE-INTEGER CAS guard over complete authoritative protected state |
@@ -1729,10 +1853,16 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Pre-Phase 6 NPC compatibility reaction transition** | EXACTLY `N+1 -> N+2`; PHASE 6 REPLACES, NEVER ADDS TO IT |
 | **Phase 6 reaction logical identity** | ENGINE-OWNED `reactionPlanId`; STABLE ACROSS RETRIES; COMMITS AT MOST ONCE |
 | **Phase 6 reaction attempt identity** | ENGINE-OWNED `reactionAttemptId`; FRESH FOR EVERY ENGINE RETRY |
+| **Phase 6 logical/attempt status domains** | DISTINCT; TERMINAL ATTEMPT NEVER REOPENS; RETRY EXHAUSTION IS LOGICAL `exhausted` |
+| **Phase 6 identity classification** | REPLAY, CONFLICT, STALE, INVALID, AND DUPLICATE ARE DISTINCT; EVERY NON-COMMIT INCREMENT IS 0 |
+| **Phase 6 terminal identity retention** | BOUNDED SESSION-LOCAL TOMBSTONE; FAIL CLOSED AT CAPACITY; DESTROY ON SESSION END |
+| **Phase 6 retry policy layers** | FINITE ATTEMPTS/DEADLINE ARE INVARIANTS; 3 ATTEMPTS, 1/2 SECOND BACKOFF, 15 SECOND DEADLINE ARE TUNABLE INITIAL VALUES |
 | **Phase 6 initial actor policy** | EXACTLY ONE ENGINE-SELECTED TARGET NPC PER COMMITTED `ask_npc`; NO PARALLEL COMMIT |
 | **Phase 6 known-information projection** | PURE ENGINE ALLOWLIST; FULL STATE AND OTHER-ACTOR PRIVATE DATA PROHIBITED |
 | **Phase 6 validation failure fallback** | RAW/LEGACY AUTHORITATIVE FALLBACK FOR SAME LOGICAL REACTION PROHIBITED |
-| **Phase 6 flag** | `NPC_STRUCTURED_REACTION_MODE`; DEFAULT OFF; PHASE 4 COMMIT MODE REQUIRED |
+| **Phase 6 flag** | `NPC_STRUCTURED_REACTION_MODE`; DEFAULT OFF; ROUTE SNAPSHOTTED AT REACTION START; PHASE 4 COMMIT MODE REQUIRED |
+| **Phase 6 mid-flight flag change** | DOES NOT REROUTE OR CANCEL ACTIVE REACTION; APPLIES TO NEXT TRIGGER |
+| **Phase 6 emergency cancellation** | EXPLICIT SEPARATE OPERATION; LOGICAL `cancelled`, ATTEMPT `aborted`, VERSION +0, NO FALLBACK |
 | **Phase 6 NPC history read implies delivery** | PROHIBITED |
 | **Accepted-alternative domain mutations** | ATOMIC |
 | **Provider wait changes authoritative phase** | PROHIBITED |
