@@ -102,6 +102,7 @@ LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 - `INTERPRETER_VALIDATION_MODE`: Phase 3 authoritative candidate validationを有効化する（デフォルト: `false`）
 - `PLAYER_CONVERSATION_COMMIT_MODE`: Phase 4 atomic player conversation commitを有効化する（デフォルト: `false`、`INTERPRETER_VALIDATION_MODE=true`が必須）
 - `PLAYER_STRUCTURED_CONSUMER_MODE`: Phase 5のbrowser/CLI requested consumer modeを選択する（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）
+- `NPC_STRUCTURED_REACTION_MODE`: Phase 6 structured NPC reaction route用の基盤flag（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）。現段階ではbrowser/CLIのengine instanceへ値を渡すだけで、provider、commit、publicationの経路は変更しない
 
 Phase 3はvalidationとredacted diagnosticsのみを行い、Interpreter結果をゲームへ適用しません。両方のInterpreter flagが`true`の場合はPhase 3だけが1リクエストを送り、Phase 2 shadow送信は抑止されます。Phase 3をrollbackするには`INTERPRETER_VALIDATION_MODE=false`へ戻します。authoritative session/turn/version lifecycleはengine invariantとしてflagに依存せず維持され、データmigrationは不要です。
 
