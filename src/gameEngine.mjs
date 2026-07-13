@@ -188,15 +188,16 @@ export class WerewolfGame {
 
   createNpcReactionFoundation(actorId, triggerId) {
     const projection = this.buildNpcKnownInformationProjection(actorId, triggerId);
+    const trigger = projection.public.triggeringInput;
     const logicalReaction = createLogicalReactionFoundation({
       gameSessionId: this.state.gameSessionId,
-      triggerRequestId: projection.trigger.requestId,
-      inputRecordId: projection.trigger.inputRecordId,
-      turnId: projection.trigger.turnId,
+      triggerRequestId: trigger.requestId,
+      inputRecordId: trigger.inputRecordId,
+      turnId: trigger.turnId,
       turnOrder: this.state.turnOrder,
-      phase: projection.trigger.phase,
+      phase: projection.public.phase,
       actorId,
-      baseStateVersion: projection.trigger.stateVersion,
+      baseStateVersion: trigger.capturedStateVersion + 1,
       createId: this.createId
     });
     return deepFreeze({ logicalReaction, projection });
