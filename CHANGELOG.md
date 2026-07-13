@@ -15,6 +15,8 @@
 - Made consumer mode switches atomic and retryable: engine mode bookkeeping changes only after controller acceptance, the first cutover watermark remains fixed across repeated ON/OFF cycles, and unacknowledged work survives generation changes.
 - Recorded pre-cutover player identities only after a successful initial-OFF legacy sink, preventing rollback redisplay without treating failed writes as delivered.
 - Classified valid old-session receipt identities presented to a replacement controller as observable stale acknowledgements while retaining fail-closed rejection for forged current-session receipts.
+- Persisted terminal rendering failures by session and publication outside the active-attempt map, preventing mode or generation changes from rediscovering or bypassing the original fail-closed error through legacy fallback.
+- Made first cutover conditional on successful legacy sink evidence for every earlier publication; undelivered entries remain in a cursor-independent OFF-mode retry queue and cutover rejection changes no mode bookkeeping.
 - Added the default-off Migration Phase 4 atomic `PlayerConversationCommit`, including structured player artifacts, canonical result-claim assertions and relations, stored idempotency results, and the temporary legacy display compatibility delta.
 - Split Phase 4-enabled conversation handling into player `N -> N+1` and provisional NPC reaction `N+1 -> N+2` transactions. Exact replay calls neither provider and provider failure preserves the player commit without publishing `N+2`.
 - Added failure-injection, replay, version-ledger, claim, Unicode display-plan, feature-policy, and Phase 4-off regression coverage.

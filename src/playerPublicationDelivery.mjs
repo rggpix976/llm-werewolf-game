@@ -2,12 +2,13 @@ export class PlayerPublicationDeliveryController {
   constructor({ gameSessionId, createId, observer = () => {}, resolvePublication, listPublications, enabled = false, initialWatermark = 0 }) {
     this.gameSessionId = gameSessionId; this.createId = createId; this.observer = observer; this.resolvePublication = resolvePublication; this.listPublications = listPublications;
     this.enabled = enabled; this.consumerGeneration = 0; this.cutoverPublicationSlotOrder = enabled ? initialWatermark : null; this.preCutoverLegacyDelivered = new Set(); this.invalidated = false;
-    this.attempts = new Map(); this.activeByPublication = new Map(); this.acknowledgements = new Map(); this.capabilities = new WeakMap(); this.receipts = new WeakMap();
+    this.attempts = new Map(); this.activeByPublication = new Map(); this.terminalFailures = new Map(); this.acknowledgements = new Map(); this.capabilities = new WeakMap(); this.receipts = new WeakMap();
   }
 
   setEnabled(enabled, nextPublicationSlotOrder) {
     if (this.invalidated) throw deliveryError("stale_publication_session"); if (enabled === this.enabled) return;
     if ([...this.attempts.values()].some((attempt) => ["in_flight", "sink_succeeded"].includes(attempt.state))) throw deliveryError("consumer_mode_switch_in_flight");
+    if (enabled && this.cutoverPublicationSlotOrder === null && this.listPublications().some((publication) => publication.publicationSlotOrder < nextPublicationSlotOrder && !this.preCutoverLegacyDelivered.has(publication.publicationId))) throw deliveryError("pre_cutover_delivery_pending");
     this.consumerGeneration += 1; this.enabled = enabled; if (enabled && this.cutoverPublicationSlotOrder === null) this.cutoverPublicationSlotOrder = nextPublicationSlotOrder;
     for (const attempt of this.attempts.values()) if (!["acknowledged", "failed_terminal"].includes(attempt.state)) attempt.state = "stale_session";
     this.activeByPublication.clear();
@@ -15,22 +16,24 @@ export class PlayerPublicationDeliveryController {
 
   discover() {
     this._live(); if (this.cutoverPublicationSlotOrder === null) return [];
-    return this.listPublications().filter((publication) => publication.publicationSlotOrder >= this.cutoverPublicationSlotOrder && !this.acknowledgements.has(publication.publicationId)).map((publication) => publication.publicationId);
+    return this.listPublications().filter((publication) => publication.publicationSlotOrder >= this.cutoverPublicationSlotOrder && !this.acknowledgements.has(publication.publicationId) && !this.terminalFailures.has(publication.publicationId)).map((publication) => publication.publicationId);
   }
   discoverCandidates(deliveryMode) { this._live(); if (this.cutoverPublicationSlotOrder === null) return []; this._validateDeliveryMode(deliveryMode); return this.discover().map((publicationId) => { const attempt = this.activeByPublication.get(publicationId); return Object.freeze({ publicationId, deliveryMode, acknowledgementOnly: attempt?.state === "sink_succeeded", deliveryIdentity: attempt?.state === "sink_succeeded" ? receiptIdentity(attempt.receipt) : null }); }); }
   historyPublicationIds() { this._live(); return this.cutoverPublicationSlotOrder === null ? [] : this.listPublications().map((publication) => publication.publicationId); }
   liveScopePublicationIds() { this._live(); if (this.cutoverPublicationSlotOrder === null) return new Set(); return new Set(this.listPublications().filter((publication) => publication.publicationSlotOrder >= this.cutoverPublicationSlotOrder).map((publication) => publication.publicationId)); }
   preCutoverLegacyDeliveredPublicationIds() { this._live(); return new Set(this.preCutoverLegacyDelivered); }
+  pendingPreCutoverLegacyPublicationIds() { this._live(); if (this.cutoverPublicationSlotOrder !== null) return []; return this.listPublications().filter((publication) => !this.preCutoverLegacyDelivered.has(publication.publicationId)).map((publication) => publication.publicationId); }
   recordPreCutoverLegacyDelivery(publicationId) { this._live(); if (this.cutoverPublicationSlotOrder !== null) throw deliveryError("publication_not_found"); const publication = this.listPublications().find((entry) => entry.publicationId === publicationId); if (!publication) throw deliveryError("publication_not_found"); this.preCutoverLegacyDelivered.add(publicationId); }
 
   prepare({ publicationId, consumerId, sinkType, deliveryMode = "structured" }) {
     this._live(); this._validateDeliveryMode(deliveryMode); validateSinkIdentity(consumerId, sinkType);
+    if (this.terminalFailures.has(publicationId)) throw deliveryError(this.terminalFailures.get(publicationId));
     if (this.acknowledgements.has(publicationId)) throw deliveryError("publication_already_acknowledged");
     const publication = this.listPublications().find((entry) => entry.publicationId === publicationId); if (!publication || publication.publicationSlotOrder < this.cutoverPublicationSlotOrder) throw deliveryError("publication_not_found");
     const active = this.activeByPublication.get(publicationId); if (active?.state === "failed_terminal") throw deliveryError(active.failureCode ?? "history_projection_failure"); if (active && !["failed_retryable", "stale_session"].includes(active.state)) throw deliveryError(active.state === "sink_succeeded" ? "publication_not_delivered" : "publication_not_prepared");
     const attempt = { gameSessionId: this.gameSessionId, publicationId, deliveryAttemptId: `delivery-${this.createId()}`, consumerId, consumerGeneration: this.consumerGeneration, sinkType, deliveryMode, state: "unseen", rendered: null, capability: null, receipt: null }; this.attempts.set(attempt.deliveryAttemptId, attempt); this.activeByPublication.set(publicationId, attempt);
     try { attempt.rendered = this.resolvePublication(publicationId, deliveryMode); }
-    catch (error) { attempt.state = "failed_terminal"; attempt.failureCode = error?.code ?? "history_projection_failure"; this._observe("render_failed", attempt); throw error; }
+    catch (error) { attempt.state = "failed_terminal"; attempt.failureCode = error?.code ?? "history_projection_failure"; this.terminalFailures.set(publicationId, attempt.failureCode); this._observe("render_failed", attempt); throw error; }
     attempt.state = "prepared"; this._observe("render_prepared", attempt); return publicAttempt(attempt);
   }
 
@@ -66,7 +69,7 @@ export class PlayerPublicationDeliveryController {
     if (!attempt.receipt || !["sink_succeeded", "acknowledged"].includes(attempt.state)) throw deliveryError("publication_not_delivered"); return attempt.receipt;
   }
 
-  stateFor(publicationId) { return this.acknowledgements.has(publicationId) ? "acknowledged" : this.activeByPublication.get(publicationId)?.state ?? "unseen"; }
+  stateFor(publicationId) { return this.acknowledgements.has(publicationId) ? "acknowledged" : this.terminalFailures.has(publicationId) ? "failed_terminal" : this.activeByPublication.get(publicationId)?.state ?? "unseen"; }
   acknowledgedPublicationIds() { return new Set(this.acknowledgements.keys()); }
   invalidate() { this.invalidated = true; for (const attempt of this.attempts.values()) if (attempt.state !== "acknowledged") attempt.state = "stale_session"; this.activeByPublication.clear(); }
 
