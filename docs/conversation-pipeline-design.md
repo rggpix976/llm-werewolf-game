@@ -1488,10 +1488,10 @@ The engine computes `requestFingerprint` with `sha256CanonicalJson()` over a new
 
 Every proposal is a strict non-null object. No member may carry `descriptorId`, `claimId`, `eventId`, `segmentId`, `publicationId`, any authoritative or resulting version, an effect, a state patch, a policy/disclosure boolean, a confidence, an explanation, or display prose. Initial Phase 6 has no arbitrary proposal reference field: `targetId` is the only proposal-level reference. `knownInformation.constraints.allowedReferenceIds` bounds projected context and prompt use, but the provider cannot return one of those IDs as a proposal field. Trigger identity remains in the request binding.
 
-Exact proposal duplicates are determined by canonical JSON equality after strict reconstruction and reject the whole candidate as `duplicate_proposal`. Contradiction rules are also whole-candidate atomic:
+Exact proposal duplicates are determined by canonical JSON equality after strict reconstruction and reject the whole candidate as `duplicate_proposal`. Contradiction rules are also whole-candidate atomic, but stage 16 receives only proposals that each passed stage-15 authorization:
 
-- at most one role claim is allowed; a second identical one is a duplicate and a different role is `contradictory_proposals`;
-- one result claim is allowed per target; an identical target/result pair is a duplicate and two results for one target are contradictory; different result targets are allowed;
+- at most one role claim is allowed; a second identical authorized claim is a duplicate. Initial v1 authorizes only the actor's seer claim, so a different role fails stage-15 `permission_denied` and cannot be used as a `contradictory_proposals` reachability vector;
+- one result claim is allowed per target; an identical authorized target/result pair is a duplicate and two independently authorized results for one target would be contradictory. Initial engine-owned facts cannot authorize a false cross-result pair, so that pair first fails stage-15 `result_fact_mismatch`; different authorized result targets are allowed;
 - at most one vote declaration is allowed; an identical second vote is a duplicate and a different second target is contradictory;
 - one suspicion is allowed per target; an identical target is a duplicate and different targets are allowed;
 - different proposal kinds may coexist and retain their original order, but each is authorized independently from pre-candidate state.
@@ -1507,11 +1507,40 @@ All proposal kinds must appear in `knownInformation.constraints.allowedCandidate
 | Proposal kind | Target rule |
 | :--- | :--- |
 | `role_claim` | `targetId` is forbidden |
-| `result_claim` | target is in `allowedResultTargetIds`; current roster membership is required, but the target need not be alive |
+| `result_claim` | the common reference/target rules apply: the target is one captured/current NPC other than the actor and player; the target need not be alive. `allowedResultTargetIds`, `allowedResultValues`, and the exact actor-owned fact are checked later as one result-fact authorization step, not as common target eligibility |
 | `vote_declaration` | target is in `allowedLivingTargetIds` and remains alive at final validation |
 | `suspicion` | target is in `allowedLivingTargetIds` and remains alive at final validation |
 
-For `result_claim`, membership of `targetId` in `allowedResultTargetIds` and membership of `result` in `allowedResultValues` are necessary but not sufficient. `knownInformation.actorPrivate.investigationResults` must contain an exact actor-owned fact with the same `targetId` and `result`; changing the target or result independently is rejected as `result_fact_mismatch`. Public hearsay, provider assertion, the target's hidden role, another actor's fact, and a same-candidate role claim never substitute for that exact fact. Initial Phase 6 deliberately permits no NPC result bluff.
+For `result_claim`, membership of `targetId` in `allowedResultTargetIds` and membership of `result` in `allowedResultValues` are necessary but not sufficient. These two memberships are part of exact result-fact authorization and do not make a resolved NPC target ineligible. `knownInformation.actorPrivate.investigationResults` must contain an exact actor-owned fact with the same `targetId` and `result`; changing the target or result independently is rejected as `result_fact_mismatch`. Public hearsay, provider assertion, the target's hidden role, another actor's fact, and a same-candidate role claim never substitute for that exact fact. Initial Phase 6 deliberately permits no NPC result bluff.
+
+The stage-15 `result_claim` first-failure order is exact:
+
+| Order | Check | Exact failure |
+| :--- | :--- | :--- |
+| 1 | `result_claim` belongs to `allowedCandidateKinds` | `authorization/permission_denied/policy` |
+| 2 | the closed seer-disclosure policy, direct role/result question, actor role, actor-owned-result presence, phase, and every other disclosure precondition permit the claim | `authorization/permission_denied/policy`; an unknown engine-owned policy is a stage-0 request/projection invariant failure, not a provider rejection |
+| 3 | `targetId` resolves exactly once in captured participants/reference graph and the current same-session roster | a provider target absent from the valid captured graph is `authorization/unknown_reference/reference`; a duplicated engine-owned participant ID is a stage-0 request/live-snapshot invariant failure, and a hard session/turn/roster replacement is stage-10 `applicability/stale_request/live_state` |
+| 4 | the resolved target is an NPC other than `npcId` and the player-class participant and satisfies the common proposal target class rule | `authorization/target_ineligible/target`; dead-but-rostered is valid for `result_claim` |
+| 5 | `targetId` is in `allowedResultTargetIds`, `result` is in `allowedResultValues`, and one exact same-target/same-result actor-owned investigation fact exists | `authorization/result_fact_mismatch/known_information` |
+| 6 | stage 17 deterministically repeats the current target/reference/applicability predicates against the same immutable snapshot | the same specific code that owns the failed predicate; there is no generic final-live code |
+
+The exact-fact step classifies a target-only change, result-only change, cross-pair assembled from two different facts, public hearsay only, another actor's fact only, provider assertion only, hidden-role agreement only, and same-candidate role-claim support as `result_fact_mismatch`. A target absent from the common graph remains `unknown_reference`; a self or player-class target remains `target_ineligible`. Death alone never rejects a uniquely resolved result target.
+
+Normative result-claim vectors use otherwise conforming input and differ only as stated:
+
+| Vector | Minimum captured/current facts | Candidate difference | First outcome |
+| :--- | :--- | :--- | :--- |
+| exact valid fact | actor owns `(npc-beni, werewolf)`; target is a rostered NPC | `(npc-beni, werewolf)` | continue through stage 15 |
+| target-only mismatch | actor owns `(npc-beni, werewolf)`; `npc-chika` is another eligible rostered NPC | `(npc-chika, werewolf)` | `authorization/result_fact_mismatch/known_information` |
+| result-only mismatch | actor owns `(npc-beni, werewolf)` | `(npc-beni, not_werewolf)` | `authorization/result_fact_mismatch/known_information` |
+| cross-pair mismatch | actor owns `(npc-beni, werewolf)` and `(npc-chika, not_werewolf)` | `(npc-beni, not_werewolf)` | `authorization/result_fact_mismatch/known_information` |
+| absent common reference | target ID is well formed but absent from captured/current participants | absent target | `authorization/unknown_reference/reference` |
+| self target | actor resolves uniquely | `targetId == npcId` | `authorization/target_ineligible/target` |
+| player-class target | the single player resolves uniquely | player target | `authorization/target_ineligible/target` |
+| dead-but-rostered exact fact | actor owns the exact fact; the target is uniquely rostered with `publicStatus: "dead"` | exact target/result | continue through stage 15 and 17 |
+| public hearsay only | public projection contains the assertion but actor owns no matching investigation fact | same assertion | `authorization/result_fact_mismatch/known_information` |
+| another actor's fact only | selected actor owns no matching fact | same assertion | `authorization/result_fact_mismatch/known_information` |
+| policy denied | target/fact would otherwise be exact; known closed policy denies disclosure | exact target/result | `authorization/permission_denied/policy` before fact inspection |
 
 #### Closed role-disclosure policy
 
@@ -1529,7 +1558,9 @@ A role claim is allowed only when all of the following hold: the kind is allowli
 
 A result claim is allowed only when the same seer policy, phase, and direct-question conditions hold and the exact target/result fact passes the preceding matrix. A role claim earlier in the same candidate cannot create or broaden result permission; all proposals are authorized against the captured pre-candidate policy and facts. Prior public disclosure neither grants permission nor blocks a currently permitted repeat. Repeat/contradiction relations with committed claims are derived later by the authoritative preparation/commit phase; they are not provider fields and do not alter validation permission.
 
-Semantic denial precedence is exact: stale session/turn/version/phase/actor or broken trigger binding; candidate-kind allowlist; unknown or mismatched disclosure policy; role conditions; target and result-fact conditions; then within-candidate duplicate/contradiction checks. Structural validation always precedes these semantic checks. An unknown policy value fails closed as `role_disclosure_policy_unknown`. Public diagnostics expose only the normalized reason code, never the actor's hidden role, team, fact, or policy text.
+Semantic denial precedence is exact: stale session/turn/version/phase/actor or broken trigger binding; candidate-kind allowlist; closed disclosure-policy and role conditions; common reference resolution; common target eligibility; exact result-fact authorization; then within-candidate duplicate/contradiction checks. Structural validation always precedes these semantic checks. `roleDisclosurePolicy` is engine-owned and strictly validated as part of the captured projection at stage 0; an unknown value is `invalid_expected_request`, never a provider rejection. Public diagnostics expose only the normalized reason code, never the actor's hidden role, team, fact, or policy text.
+
+The initial strict projection requires `allowedCandidateKinds` to equal all four initial proposal kinds, so a conforming v1 request cannot produce a candidate-kind denial. The ordered check remains mandatory, but the provider-reachable `permission_denied` vector is a known-policy/direct-question/actor-role disclosure denial. Likewise, duplicate engine-owned participant IDs are stage-0 invariants; `unknown_reference` is reached by a well-formed provider `targetId` absent from an otherwise valid captured graph, not by corrupting that graph.
 
 #### Provider result and HTTP success envelope
 
@@ -1678,19 +1709,33 @@ Candidate validation accepts raw success-response evidence, not a pre-parsed Jav
 | `schemaVersion` | literal `1` |
 | `evidenceType` | literal `npc_reaction_candidate_http_success` |
 | `httpStatus` | literal `200`; non-success responses are provider/coordinator failures outside candidate validation |
-| `contentTypeHeader` | string `[1..256 Unicode code points]` or literal `null`; the transport adapter copies the received field value without semantic normalization, and `null` means the field was absent |
-| `contentEncodingHeader` | string `[1..128 Unicode code points]` or literal `null`; the transport adapter copies the received field value without semantic normalization, and `null` means the field was absent |
+| `contentTypeHeader` | string `[0..256 Unicode code points]` or literal `null`; the transport adapter copies the received field value without semantic normalization, and `null` means the field was absent |
+| `contentEncodingHeader` | string `[0..128 Unicode code points]` or literal `null`; the transport adapter copies the received field value without semantic normalization, and `null` means the field was absent |
 | `bodyBytes` | `Uint8Array`; the exact HTTP entity-body prefix after transfer framing and before UTF-8 decoding, length `[0..65,537]` |
 
-`null` is permitted only for the two header-evidence fields so absence can be validated rather than guessed. The object itself remains strict. The producer is the HTTP transport adapter at the successful-response boundary. For a body of at most 65,536 bytes it copies the complete entity body; for a larger body it stops bounded collection after and copies exactly the first 65,537 bytes, which is sufficient proof of overflow. It does not expose a mutable transport buffer, does not parse JSON, and does not call the candidate validator for a non-200 response. Accepted identity-encoded evidence is therefore both after all permitted content decoding and before UTF-8 decoding; a non-identity Content-Encoding is rejected without decoding. The synchronous validator treats the evidence as read-only for the duration of the call, makes no network call, and never returns a reference to `bodyBytes` or either header string.
+`null` is permitted only for the two header-evidence fields so absence can be validated rather than guessed. An empty or whitespace-only string is present but semantically invalid untrusted evidence, not a stage-0 invariant failure. Stage 0 checks the exact root field set, required-field presence, `null | string` type, Unicode-code-point bounds, exact `Uint8Array`, and other engine-owned input invariants only. A missing header-evidence field, wrong type, over-bound string, additional field, or non-`Uint8Array` body throws the closed `NpcReactionCandidateValidationInvariantError`; empty, whitespace-only, or otherwise semantically invalid header content reaches stage 1 and returns `invalid_envelope`.
+
+The object itself remains strict. The producer is the HTTP transport adapter at the successful-response boundary. For a body of at most 65,536 bytes it copies the complete entity body; for a larger body it stops bounded collection after and copies exactly the first 65,537 bytes, which is sufficient proof of overflow. It does not expose a mutable transport buffer, does not parse JSON, and does not call the candidate validator for a non-200 response. Accepted identity-encoded evidence is therefore both after all permitted content decoding and before UTF-8 decoding; a non-identity Content-Encoding is rejected without decoding. The synchronous validator treats the evidence as read-only for the duration of the call, makes no network call, and never returns a reference to `bodyBytes` or either header string.
 
 The exact media rules are:
 
-- `Content-Type` is required. The validator parses the field itself, trims HTTP optional whitespace around the media type, semicolons, and parameter separator, and compares the ASCII media type, parameter name, and value case-insensitively. The media type must be `application/json` and the parameter list must contain exactly one unquoted token `charset=utf-8`. A missing header, omitted charset, duplicate charset, empty or quoted value (including quoted UTF-8), or any additional/unknown parameter is `invalid_envelope` at `transport/http_envelope`. The transport adapter does not normalize or decide acceptance.
-- `Content-Encoding` may be absent or may contain the single ASCII case-insensitive token `identity`. An empty, comma-separated, duplicate, or non-identity value is `invalid_envelope` at `transport/http_envelope`. Candidate validation never decompresses or otherwise decodes a content encoding.
+- `Content-Type` is required. HTTP optional whitespace means only ASCII SP (`U+0020`) or HTAB (`U+0009`). The validator parses the complete field value itself, permits OWS before/after the media type and around the single semicolon and equals sign, and compares the ASCII media type, parameter name, and token value case-insensitively. The media type must be exactly `application/json` and the parameter list must contain exactly one unquoted token `charset=utf-8`. A `null`, empty, whitespace-only, syntactically malformed, omitted-charset, duplicate-charset, contradictory-charset, empty-value, quoted-value (including quoted UTF-8), comma-joined, or additional/unknown-parameter value is `invalid_envelope` at `transport/http_envelope`. Non-ASCII whitespace is not OWS and is invalid. The transport adapter does not normalize or decide acceptance.
+- `Content-Encoding` may be `null` or may contain exactly one ASCII case-insensitive token `identity`, with only leading/trailing OWS. An empty, whitespace-only, comma-separated, duplicate, parameterized, quoted, or non-identity value is `invalid_envelope` at `transport/http_envelope`. Candidate validation never decompresses or otherwise decodes a content encoding.
 - `bodyBytes.byteLength` is measured from the copied `Uint8Array` before UTF-8 decoding. Length `65,536` is accepted for further validation and length `65,537` is `body_too_large`; later parse/shape failure may still reject a 65,536-byte body. No caller-supplied integer or completion flag is accepted as byte evidence.
 - UTF-8 decoding is fatal. A malformed UTF-8 byte sequence is `malformed_json` at `transport/http_envelope`; no replacement character is inserted. An empty body or a decoded string that JSON parsing rejects is also `malformed_json`.
 - JSON parsing occurs exactly once inside this validator after size and header checks. The parsed value is then validated as the exact `NpcReactionCandidateHttpResponse`. There is no alternate parsed-object entry point that may emit raw-transport reason codes.
+
+The normative header vectors and their first outcomes are exact:
+
+| Evidence difference | Stage-0 shape result | First public outcome |
+| :--- | :--- | :--- |
+| `contentTypeHeader: "application/json; charset=utf-8"`, `contentEncodingHeader: null` | valid | continue to body-size validation |
+| `contentTypeHeader: ""` or SP/HTAB-only | valid | stage 1 `transport/invalid_envelope/http_envelope` |
+| `contentEncodingHeader: ""` or SP/HTAB-only | valid | stage 1 `transport/invalid_envelope/http_envelope` |
+| unsupported media type/charset, duplicate or contradictory charset, quoted charset, unknown parameter, non-identity encoding, or comma-joined encoding | valid | stage 1 `transport/invalid_envelope/http_envelope` |
+| either header is a number, object, array, or boolean | invalid | stage 0 `invalid_transport_evidence_shape` invariant exception; no rejection result |
+| Content-Type exceeds 256 code points or Content-Encoding exceeds 128 code points | invalid | stage 0 `invalid_transport_evidence_shape` invariant exception; no rejection result |
+| either required evidence field is missing | invalid | stage 0 `invalid_transport_evidence_shape` invariant exception; no rejection result |
 
 This evidence covers only the provider HTTP **success response**. The engine-owned outbound `NpcReactionCandidateRequest` is validated as a runtime object and fingerprinted before a later transport adapter serializes it. Outbound request bytes, request headers, network failures, non-200 response bodies, retry, timeout, and abort ownership remain later provider/transport work and are not measured or classified by this validator.
 
@@ -1954,7 +1999,7 @@ The exhaustive stage contract is:
 | 14 | normalized candidate, stage-10 route, and observation union | unobserved ordinary candidate | `duplicate_response` or `attempt_response_conflict`; unobserved terminal repeat is duplicate suppression | `provider_result` | no on duplicate/conflict | `0 / 0` |
 | 15 | unobserved candidate and captured projection; strict projection/hash/graph plus ordered authorization | normalized projection, projection fingerprint, individually authorized proposals | applicable closed authorization code | corresponding closed location | no on failure | `0 / 0` |
 | 16 | authorized proposals; whole-candidate duplicate/contradiction rules | coherent whole candidate | `duplicate_proposal` or `contradictory_proposals` | `proposal` | no on failure | `0 / 0` |
-| 17 | coherent candidate; candidate-sensitive check against the same snapshot | finally applicable candidate | `stale_request`, specific authorization code, or `final_live_validation_failure` | `live_state` or specific closed location | no on failure | `0 / 0` |
+| 17 | coherent candidate; deterministic candidate-sensitive recheck against the same immutable snapshot | finally applicable candidate | a failed predicate retains its specific owner: `stale_request`, `unknown_reference`, `target_ineligible`, `permission_denied`, or `result_fact_mismatch`; no generic final-live code exists | `live_state`, `reference`, `target`, `policy`, or `known_information`, matching the failed predicate | no on failure | `0 / 0` |
 | 18 | all prior outputs; detached value assembly and recursive freeze | exact validated result union member | invariant exception only if engine assembly violates its contract | none/public diagnostic forbidden | complete | `0 / 0` |
 
 #### Transport reason-code responsibility boundary
@@ -1968,7 +2013,7 @@ Reason ownership is exact and prevents a parsed-object harness from claiming evi
 | expected/provider binding | `binding_mismatch`, `idempotency_conflict`, `fingerprint_mismatch` | candidate fingerprint never produces `fingerprint_mismatch` |
 | observed-candidate / terminal-status comparison | `duplicate_response`, `attempt_response_conflict` | engine-computed candidate fingerprints when observed; an unobserved retained terminal attempt may only suppress as duplicate |
 | live snapshot and status route | `stale_request` | hard live mismatch, unavailable graph, superseded state, pending/live status race, or not-yet-captured `attempting`; terminal status alone is not stale |
-| candidate structure/semantics/final applicability | the existing closed structure, authorization, and applicability codes below | no transport code is copied into these layers |
+| candidate structure/semantics/final applicability | the active closed structure, authorization, and applicability codes below | no transport code, invariant identifier, or reserved identifier is copied into these layers |
 
 There is no exported parsed-object-only candidate validator. Internal helpers that receive an already parsed value may emit only envelope, binding, structure, fingerprint, duplicate, authorization, or applicability outcomes, never `body_too_large` or `malformed_json`. A future HTTP endpoint may translate invalid request media type to the existing HTTP `ErrorEnvelope` code `unsupported_media_type`, but this provider-success validator returns runtime `invalid_envelope`; neither code is mechanically copied into the other contract. Network errors, non-200 statuses, timeouts, aborts, and unavailable providers are coordinator/provider outcomes and cannot be synthesized as candidate-validation rejections.
 
@@ -2096,7 +2141,7 @@ A later engine-owned authoritative preparation stage may trust only that the ret
 - `retryable` is literal `false`. Candidate validation never decides that another provider attempt is safe. Only the later reaction coordinator may retry separately classified transient network/unavailable failures or timeouts under section 25A policy; those coordinator failures are not converted to a validation rejection.
 - `diagnostics` is a dense `NpcReactionCandidateValidationDiagnostic[0..8]`. Each diagnostic has exactly `code: NpcReactionCandidateRejectionCode` and `location: NpcReactionCandidateValidationLocation`, with no optional/null fields and `additionalProperties: false`. `location` is the closed enum `http_envelope | provider_result | binding | candidate | proposal | reference | actor | target | policy | known_information | fingerprint | live_state`. No diagnostic message, path string, provider value, raw body, raw candidate, private fact, policy text, display text, or hidden-information value is permitted.
 
-The rejection codes, stages, and normal diagnostic locations are exact:
+The **active initial Phase 6 v1** rejection codes, stages, and normal diagnostic locations are exact:
 
 | `reasonCode` | `stage` | Normal `location` | Covered classification |
 | :--- | :--- | :--- | :--- |
@@ -2114,14 +2159,80 @@ The rejection codes, stages, and normal diagnostic locations are exact:
 | `duplicate_proposal` | `authorization` | `proposal` | exact duplicate proposal in one candidate |
 | `contradictory_proposals` | `authorization` | `proposal` | the candidate violates a whole-candidate contradiction rule |
 | `unknown_reference` | `authorization` | `reference` | a referenced identity is absent, duplicated, or outside the captured reference graph |
-| `actor_ineligible` | `authorization` | `actor` | selected actor no longer satisfies the captured/current actor rules |
-| `target_ineligible` | `authorization` | `target` | proposal target fails an allowlist or current eligibility rule |
+| `target_ineligible` | `authorization` | `target` | a uniquely resolved target fails the common target-class/self/player rule or the proposal kind's current-alive rule; result-fact allowlists are excluded |
 | `permission_denied` | `authorization` | `policy` | a proposal kind or disclosure is not permitted by captured policy |
 | `result_fact_mismatch` | `authorization` | `known_information` | result target/value lacks the exact actor-owned projected fact |
-| `role_disclosure_policy_unknown` | `authorization` | `policy` | disclosure policy is outside the closed enum |
-| `known_information_boundary_violation` | `authorization` | `known_information` | candidate use would cross the captured actor/public information boundary |
 | `fingerprint_mismatch` | `fingerprint` | `fingerprint` | request fingerprint does not equal engine recomputation; candidate fingerprints use the duplicate/conflict codes |
-| `final_live_validation_failure` | `applicability` | `live_state` | final live semantic/applicability recheck fails without a more specific stale code |
+
+The following identifiers are reserved for possible future schemas and are **not** members of `NpcReactionCandidateRejectionCode`, diagnostic codes, active exports, accepted provider values, or normative rejection results in initial Phase 6 v1:
+
+| Reserved identifier | Why it is unreachable in initial Phase 6 | Required current classification |
+| :--- | :--- | :--- |
+| `actor_ineligible` | the provider cannot select or return an actor; `npcId` is fixed by the engine-owned request/pending/live graph | malformed or self-contradictory engine actor data is a stage-0 invariant; current session/roster/alive mismatch is stage-10 `stale_request`; role/disclosure denial is `permission_denied`; a provider-added actor field is `invalid_candidate_schema` |
+| `known_information_boundary_violation` | the strict four-member proposal union has no generic private-information or evidence field | graph/reference failures are `unknown_reference`; common target failure is `target_ineligible`; exact fact failure is `result_fact_mismatch`; kind/role/disclosure failure is `permission_denied`; an added hidden/private/provider field is `invalid_candidate_schema` |
+| `final_live_validation_failure` | stage 17 repeats named predicates against the same immutable live snapshot and has no unnamed predicate | retain the owning specific code (`stale_request`, `unknown_reference`, `target_ineligible`, `permission_denied`, or `result_fact_mismatch`); if every named predicate passes, continue to stage 18 |
+| `role_disclosure_policy_unknown` | `roleDisclosurePolicy` is an engine-owned closed projection enum validated before provider evidence is interpreted; no provider field can create an unknown policy | malformed expected request/projection throws stage-0 `invalid_expected_request`; a structurally valid proposal denied by a known policy returns `permission_denied` |
+
+Reactivating any reserved identifier requires a separately reviewed authoritative contract/schema change and a new strict provider-reachable vector. Reserved identifiers do not force a schema-version increment now and must not be implemented through a test hook or fabricated field.
+
+##### Active rejection-code reachability matrix
+
+Each active code has exactly one primary row. “Earlier stages pass” means the strict engine-owned input is conforming, transport/envelope/binding values not named as the trigger match, and every preceding stage succeeds. The vector column names the minimum intentional difference; it never relies on malformed engine-owned data.
+
+| Active `reasonCode` | Exact step; public stage/location | Input owner | Minimum conforming preconditions and one triggering difference | Why no earlier stage intercepts; first-failure precedence | Later stages | Result kind | Required implementation vector |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `invalid_envelope` | 1; `transport/http_envelope` | provider/transport-derived | exact evidence shape; `contentTypeHeader: ""` | empty is a valid `[0..256]` string, so stage 0 passes; header semantics are first | no | rejection | empty and whitespace-only Content-Type/Encoding; valid OWS/case control |
+| `body_too_large` | 2; `transport/http_envelope` | provider/transport-derived | valid headers; exact `Uint8Array(65_537)` | header stage passes and shape permits the bounded overflow proof | no | rejection | 65,536 continues; 65,537 rejects |
+| `malformed_json` | 3; `transport/http_envelope` | provider/transport-derived | valid headers and bounded body; `Uint8Array.of(0xc3, 0x28)` | size is valid; fatal UTF-8 decode is first | no | rejection | invalid UTF-8 plus separate stage-4 syntactically invalid JSON |
+| `unsupported_schema_version` | 6; `transport/http_envelope` | provider-derived | parsed strict HTTP field set; root `schemaVersion: 2` | shape is valid at stage 5; literal version is first examined at stage 6 | no | rejection | root version 2 plus nested provider-result version 2 |
+| `fingerprint_mismatch` | 7; `fingerprint/fingerprint` | engine-owned expected request | exact request shape with a well-formed but non-recomputed request fingerprint | transport/envelope/version pass; recomputation owns the first mismatch | no | rejection | change one covered request value without updating fingerprint |
+| `binding_mismatch` | 8; `binding/binding` | provider-derived echo | valid recomputed request fingerprint; change only provider `npcId` echo | request remains valid; provider echo comparison follows fingerprint verification | no | rejection | one vector for every immutable echo dimension |
+| `idempotency_conflict` | 9; `duplicate/binding` | live snapshot | correlated provider echoes; live graph reuses the reaction/request alias with a different request fingerprint or graph | binding to the expected request passes; alias reuse is checked before stale applicability | no | rejection | same reaction plan/request identity with conflicting fingerprint/graph |
+| `stale_request` | 10; `applicability/live_state` | live snapshot | all prior identity checks pass; current session/turn/phase/version/actor/trigger/attempt/status baseline differs, is unavailable, or is superseded | identity conflict is absent; hard live comparison is the first owner | no | rejection | each hard dimension, unavailable snapshot, status race, `attempting`, and superseded vectors |
+| `invalid_candidate_schema` | 11; `structure/candidate` | provider-derived candidate | correlated active response; candidate has `proposals: []` | candidate is not examined before live routing; bound failure is not reserved-kind handling | no | rejection | missing/null/extra/wrong-type/bound/nesting plus proposal-location cases |
+| `unsupported_in_phase6` | 11; `structure/proposal` | provider-derived candidate | otherwise strict candidate; one proposal discriminator is literal `commentary` | discriminator is a reserved provider literal, not an unknown shape | no | rejection | each reserved Phase-7 discriminator |
+| `duplicate_response` | 14; `duplicate/provider_result` | caller-owned observation/status route | strict reconstructed candidate; observed same-attempt fingerprint equals engine computation, or a retained terminal attempt has no observation | structure and stage-13 engine hash must exist first | no | rejection | observed equal, terminal-none suppression, and terminal-observed-equal |
+| `attempt_response_conflict` | 14; `duplicate/provider_result` | caller-owned observation | strict reconstructed candidate; same attempt observation carries a different prior candidate fingerprint | exact attempt equality is stage-0 input invariant and current hash first exists at stage 13 | no | rejection | active and compatible-terminal observed mismatch |
+| `permission_denied` | 15; `authorization/policy` | engine-owned captured projection plus provider proposal | ordinary unobserved candidate; e.g. a structurally valid role claim under `avoid_unnecessary_claim` | policy value itself is valid; structure/duplicate routing pass; denial precedes target/fact checks | no | rejection | each known-policy, direct-question, actor-role, and disclosure denial; fixed v1 kind allowlist is a passing control |
+| `unknown_reference` | 15; `authorization/reference` | provider proposal against captured/live graph | permitted targeted kind; well-formed `targetId` is absent from the otherwise valid common graph | policy passes; reference resolution precedes target eligibility and exact facts | no | rejection | absent and graph-outside provider target; duplicate engine graph is separately a stage-0 invariant and reset/roster replacement is stage-10 stale |
+| `target_ineligible` | 15; `authorization/target` | provider proposal against captured/live graph | reference resolves uniquely; target is self, player-class, wrong class, or fails kind-specific current eligibility | reference exists; common target eligibility precedes exact result fact | no | rejection | self, player, dead vote/suspicion, and wrong-class vectors; dead result target must pass |
+| `result_fact_mismatch` | 15; `authorization/known_information` | provider proposal against engine-owned actor-private projection | permitted result claim with a uniquely resolved eligible target; target/value/pair lacks the exact same actor-owned fact | kind, policy, reference, and common target checks pass first | no | rejection | target-only, result-only, cross-pair, hearsay-only, other-actor-only, and exact valid control |
+| `duplicate_proposal` | 16; `authorization/proposal` | provider-derived candidate | every proposal is individually authorized; append an exact canonical duplicate | authorization passes for both; whole-candidate coherence owns equality | no | rejection | each proposal kind's exact duplicate |
+| `contradictory_proposals` | 16; `authorization/proposal` | provider-derived candidate | every proposal is individually authorized; two valid vote declarations use different eligible living targets | neither proposal is duplicate or denied; contradiction is whole-candidate | no | rejection | different-target vote declarations provide the reachable vector; role/result alternatives that cannot both be authorized must prove their earlier `permission_denied`/`result_fact_mismatch` precedence instead of faking stage 16 |
+
+The complete active step/stage/location set is closed by this coverage matrix. Rows sharing a code are additional mandatory vectors, not additional primary reachability rows:
+
+| Step | Active `reasonCode` | Public `stage/location` |
+| ---: | :--- | :--- |
+| 1 | `invalid_envelope` | `transport/http_envelope` |
+| 2 | `body_too_large` | `transport/http_envelope` |
+| 3 | `malformed_json` | `transport/http_envelope` |
+| 4 | `malformed_json` | `transport/http_envelope` |
+| 5 | `invalid_envelope` | `transport/http_envelope` |
+| 5 | `invalid_envelope` | `transport/provider_result` |
+| 6 | `invalid_envelope` | `transport/http_envelope` |
+| 6 | `invalid_envelope` | `transport/provider_result` |
+| 6 | `unsupported_schema_version` | `transport/http_envelope` |
+| 6 | `unsupported_schema_version` | `transport/provider_result` |
+| 7 | `fingerprint_mismatch` | `fingerprint/fingerprint` |
+| 8 | `binding_mismatch` | `binding/binding` |
+| 9 | `idempotency_conflict` | `duplicate/binding` |
+| 10 | `stale_request` | `applicability/live_state` |
+| 11 | `invalid_candidate_schema` | `structure/candidate` |
+| 11 | `invalid_candidate_schema` | `structure/proposal` |
+| 11 | `unsupported_in_phase6` | `structure/proposal` |
+| 14 | `duplicate_response` | `duplicate/provider_result` |
+| 14 | `attempt_response_conflict` | `duplicate/provider_result` |
+| 15 | `permission_denied` | `authorization/policy` |
+| 15 | `unknown_reference` | `authorization/reference` |
+| 15 | `target_ineligible` | `authorization/target` |
+| 15 | `result_fact_mismatch` | `authorization/known_information` |
+| 16 | `duplicate_proposal` | `authorization/proposal` |
+| 16 | `contradictory_proposals` | `authorization/proposal` |
+
+No other active step/stage/location combination exists.
+
+Stage 17 adds no independently provider-reachable code/location combination in initial v1. It deterministically reruns the named stage-10/stage-15 predicates against the same immutable snapshot. A conforming input that passed those predicates must pass the recheck; implementations must test this equivalence and must never force a stage-17 failure with mutation, a second state read, or a hook. If a named predicate is reported there because an implementation decomposes the checks across stages, its public code/location remains the same specific owner shown above; `final_live_validation_failure` is never returned.
 
 The first failing layer controls `reasonCode`; later layers are not executed. A diagnostic may repeat that reason and may add only other codes already observed in the same executed layer, up to eight total. It cannot expose which hidden role, team, investigation fact, private score, or policy payload caused a denial. The exact `reasonCode`, but never the diagnostics array, may be copied into the existing redacted lifecycle observation. HTTP outcomes remain the coarser `ErrorEnvelope`; this runtime result is never returned to the provider or copied into public history.
 
@@ -2431,10 +2542,10 @@ The implementation PR must add tests; this docs-only PR adds none. Passing requi
 - **Projection/unit:** deterministic deep-equal output for equal snapshots; public, actor-private, derived, and presentation groups are allowlisted; every other participant private role/team/memory/result, raw legacy info, prompt, diagnostic, and credential field is absent; input is not mutated.
 - **Validation/unit:** strict fields, enums, IDs, bounds, array uniqueness, payload/nesting/code-point limits, actor/target eligibility, claim/disclosure permission, illegal effects, arbitrary patches, and syntactically valid but semantically invalid candidates fail closed with state deeply equal to `N+1`.
 - **Candidate envelope/unit:** validate every exact request/provider-result/HTTP field and echo, both normative JSON examples, `requestFingerprint` reconstruction across changed attempt IDs, 64 KiB and 8/5/10 nesting boundaries, null/unknown/missing fields, safe-integer exhaustion, and the complete pending-binding comparison.
-- **Proposal union/unit:** cover all four strict members, 1/16/17 proposal bounds, preserved order, every forbidden authoritative/effect/prose field, unsupported commentary/answer/acknowledgement, unknown kind, exact duplicates, each contradiction rule, mixed legal kinds, whole-candidate rejection, detached reconstruction, deep immutability, and provider-input nonmutation.
-- **Target and disclosure/unit:** cover each allowlist intersection, captured/current unknown or duplicate participant, actor/player target, dead vote/suspicion target, roster replacement/reset, dead-but-still-rostered result target, exact and mismatched actor-owned result pairs, public hearsay, all three role policies, direct role/result question matching, wrong phase/trigger, `allowedClaimRoles` `["seer"]`/`[]`, false/werewolf/citizen claim denial, prior disclosure neutrality, same-candidate permission independence, unknown policy, and deny precedence.
+- **Proposal union/unit:** cover all four strict members, 1/16/17 proposal bounds, preserved order, every forbidden authoritative/effect/prose field, unsupported commentary/answer/acknowledgement, unknown kind, exact duplicates for each kind, the reachable different-vote contradiction, the earlier authorization precedence for unreachable role/result contradiction shapes, mixed legal kinds, whole-candidate rejection, detached reconstruction, deep immutability, and provider-input nonmutation.
+- **Target and disclosure/unit:** cover each allowlist intersection, captured/current unknown or duplicate participant, actor/player target, dead vote/suspicion target, roster replacement/reset, dead-but-still-rostered result target, exact fact, target-only mismatch, result-only mismatch, cross-pair mismatch, public-hearsay-only and other-actor-only facts, all three known role policies, direct role/result question matching, wrong phase/trigger, `allowedClaimRoles` `["seer"]`/`[]`, false/werewolf/citizen claim denial, prior disclosure neutrality, same-candidate permission independence, and deny precedence. An unknown engine-owned policy is tested as stage-0 `invalid_expected_request`, not as a rejection result.
 - **Candidate fingerprint/unit:** prove the exact canonical JSON and digest example, lower-hex form, object-key-order independence, proposal-order dependence, no trim/case/Unicode normalization, echo/attempt/diagnostic exclusion, malformed-extra-field rejection before hashing, and separate correlation rejection when equal candidate fingerprints arrive under different echoes.
-- **Validation-only boundary/integration:** browser and CLI reach the same validator and may retain only the exact immutable `ValidatedNpcReactionCandidate`/closed `NpcReactionCandidateValidationResult`. Cover every required binding/context field, nested-only binding, null/unknown/missing rejection, provider detachment and nonmutation, candidate/projection fingerprint recomputation, both normative result examples, every closed rejection code/stage/location, the eight-diagnostic bound, retryability ownership, and expiry on reset/turn/attempt/logical-terminal changes. Success, rejection, retry, timeout, abort, duplicate, stale, and reset create no authoritative object/ID/delta/publication/display/fallback and leave the complete state/version graph equal to `N+1`.
+- **Validation-only boundary/integration:** browser and CLI reach the same validator and may retain only the exact immutable `ValidatedNpcReactionCandidate`/closed `NpcReactionCandidateValidationResult`. Cover every required binding/context field, nested-only binding, null/unknown/missing rejection, provider detachment and nonmutation, candidate/projection fingerprint recomputation, both normative result examples, every **active initial Phase 6** rejection code and every active public stage/location combination in the reachability matrix, the eight-diagnostic bound, retryability ownership, and expiry on reset/turn/attempt/logical-terminal changes. Separately prove that reserved identifiers are absent from the active enum, exported rejection constants, diagnostic codes, and returned results; do not force them through hooks. Stage 17 must be proven equivalent to its earlier checks on the same immutable snapshot and must not create a new generic outcome. Success, rejection, retry, timeout, abort, duplicate, stale, and reset create no authoritative object/ID/delta/publication/display/fallback and leave the complete state/version graph equal to `N+1`.
 - **Lifecycle/state machines:** logical and attempt machines are tested separately; terminal attempts never reopen; retry creates a new attempt under the same logical ID; retry exhaustion produces logical `exhausted`; committed/rejected/superseded/cancelled/exhausted reactions never reopen; timeout late result, racing attempts, post-commit result, superseded base, reset/destroy, and emergency cancellation cannot commit.
 - **Version/atomicity:** player success is exactly `N -> N+1`; reaction success is exactly `N+1 -> N+2`; provider failure, timeout, reject, stale, duplicate, abort, and preparation/publication exception increment zero; commit exception restores the exact `N+1` graph; sink failure retains exact `N+2`.
 - **Idempotency/tombstones:** one logical reaction commits at most once; exact replay returns the stored result with no provider/sink/version effect; changed fingerprint conflicts; duplicate transport and concurrent late responses create no second claim/event/publication; coordinator cleanup retains bounded tombstones for every logical terminal status; committed IDs cross-check stored records; capacity fails closed; reset clears tombstones; late old-session results remain rejected.
