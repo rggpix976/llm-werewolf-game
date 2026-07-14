@@ -3026,7 +3026,7 @@ The state-boundary ownership table is normative:
 | tombstones | NPC coordinator | no | no | `NpcReactionCoordinatorControlRoot` | discard | no |
 | `nextTerminalOrder` | NPC coordinator | no | no | `NpcReactionCoordinatorControlRoot` | `0` | no |
 | private projection working value | NPC coordinator/engine | no | no | bounded detached runtime evidence | discard | no |
-| delivery receipt/order | delivery controller | no | no | Docs PR C2 | Docs PR C2 contract | no |
+| NPC delivery attempts/receipts/acks/runtime orders | `NpcPublicationDeliveryController` | no | no | session-local NPC delivery root | discard controller root and capabilities | no |
 | observer state | observer owner | no | no | owner-specific | owner policy | no |
 
 The authoritative state root and coordinator control root are never merged into one copy-on-write domain. Partial mutation is prohibited inside each root, but a successful authoritative reaction commit may be followed by an independently retryable coordinator cleanup without making the coordinator authoritative.
@@ -3341,19 +3341,247 @@ Design-only, non-runtime example of the canonical plan shape:
 
 ### Publication, delivery, history, and observers
 
-Reaction commit and display delivery are distinct. A canonical Phase 6 commit appends exactly one `NpcCanonicalUtterancePublishedRecord` in the same `N+1 -> N+2` transaction. Only that committed publication can enter live NPC delivery. The browser/CLI adapter renders its canonical segments through the engine-owned canonical renderer and local-only `CanonicalRenderingContext`; it never renders the raw candidate. Phase 6 does not activate controlled commentary reservations or the Renderer; that remains Phase 7.
+Reaction commit and display delivery are distinct. A canonical Phase 6 commit appends exactly one `NpcCanonicalUtterancePublishedRecord` in the same `N+1 -> N+2` transaction. Only that committed publication can enter Phase 6 live NPC delivery. Delivery never creates, replaces, or repairs an authoritative plan, result, claim, event, publication, counter, turn, phase, or version. Re-publication and a second publication slot are prohibited.
 
-NPC delivery uses session + publication identity for deduplication and a separate non-authoritative delivery state/receipt. Sink success, acknowledgement, retry, and history follow the same ownership principles as Phase 5 but use NPC publication IDs and do not alter the completed player controller or player acknowledgement state. Re-publication or re-render never creates a second plan, result, event, claim, increment, or publication slot.
+#### Delivery ownership and non-ownership
 
-Browser DOM attachment and CLI configured-write completion are sink boundaries. A sink failure leaves the committed reaction at `N+2` and the publication retryable. Acknowledgement records delivery only. History, replay, diagnostics, snapshot, and observer reads never acknowledge, consume, or trigger live delivery. Late observers can read committed records without republication. Observer failure and observer count change no state/version; observers see committed records or redacted lifecycle outcomes, never raw candidates or private projections.
+Each active `WerewolfGame` session owns exactly one session-local `NpcPublicationDeliveryController`. It is distinct from `PlayerPublicationDeliveryController` and shares no attempt, generation, acknowledgement, cutover, receipt, retry, or observer state with the Phase 5 player controller. It owns live discovery, head-of-line ordering, attempt identity and state, timeout/abort handles, controller capabilities, receipts, acknowledgements, retry tokens, duplicate suppression, reset invalidation, and redacted delivery observations. All of those values are nonauthoritative runtime state.
 
-Redacted observer outcomes are exactly `reaction_planned`, `reaction_activated`, `reaction_attempt_started`, `reaction_attempt_failed`, `reaction_attempt_timed_out`, `reaction_attempt_aborted`, `reaction_candidate_rejected`, `reaction_exhausted`, `reaction_superseded`, `reaction_cancelled`, `reaction_committed`, `reaction_duplicate_suppressed`, `reaction_identity_conflict`, `npc_publication_delivered`, and `npc_publication_delivery_failed`. They may include session-scoped IDs, attempt number, normalized reason code, version numbers, actor ID, duration, and sink type. They exclude raw player/provider text, hidden facts, projection contents, prompts, credentials, private memory, and stack traces. Observer exceptions are isolated after the owning state transition/result is stored.
+The engine-owned pure canonical renderer owns deterministic reconstruction of canonical display payloads from the committed publication, matching reaction plan, committed claims/events, stored locale, stored `canonicalRendererVersion`, ordered canonical segment IDs, and a strict local-only `CanonicalRenderingContext`. It neither owns delivery state nor performs a sink write. It never reads the provider candidate or current UI locale and never calls the AI Renderer.
+
+The trusted browser and CLI delivery wrappers own only their concrete sink operations and exact sink bookkeeping. The browser owns safe DOM-node construction, attachment to the intended conversation container, and rollback of an unproved attachment. The CLI owns one configured synchronous or awaited writer invocation. Neither adapter discovers eligibility, constructs receipt identity, acknowledges by inference, retries a provider, or mutates authoritative state.
+
+The coordinator may request explicit delivery discovery after an eligible non-replay command or through a delivery-only pump, but it does not render, write, acknowledge, or infer success. The AI Renderer, candidate provider, server, HTTP endpoint, observers, history readers, replay readers, diagnostics, and snapshots never own delivery and never receive a delivery capability, receipt, acknowledgement, or retry token. Phase 6 does not activate `RendererRequest`, `PendingRendererRequest`, controlled-commentary reservation/finalization, or any Renderer provider call; those remain Phase 7 responsibilities.
+
+#### Eligibility, discovery, and the canonical delivery payload
+
+An NPC publication is Phase 6 live-eligible only when all of the following hold: it is an authoritative `NpcCanonicalUtterancePublishedRecord`; the matching canonical-only plan, commit result, claims/events, segment graph, session, actor, locale, renderer version, slot, and reaction-resulting version validate exactly; the publication belongs to the current session; it has no stored publication-level acknowledgement; and no earlier displayable NPC slot remains unacknowledged or terminally unresolved. `NpcUtterancePublicationReserved` is never eligible. `NpcUtterancePublicationFinalized` remains ineligible until Phase 7 defines and activates controlled delivery.
+
+The controller has exactly one current consumer registration. It is created with `consumerGeneration: 0` and one fixed `(consumerId, sinkType)` chosen by the local browser or CLI instance. Explicit consumer replacement is permitted only through the controller while no current attempt is `prepared`, `in_flight`, or `sink_succeeded`. Browser and CLI cannot coexist as consumers of one session.
+
+Consumer replacement is one detached controller-root transaction. Before staging, the controller validates the proposed consumer identity, safe generation increment, every current-record/attempt edge, retained attempt bound, and absence of an active sink-success capability. In the detached root it then performs the following exact operations:
+
+1. Each current `pending` record is rebound to the new consumer ID, generation, and sink type without creating an attempt.
+2. Each current `failed_retryable` record resolves its exact old attempt, changes that retained attempt to `abandoned` with `abandonedFromState: "failed_retryable"`, deletes its `repeat_sink` retry token and invalidates every old capability, timer, and abort handle, then replaces only the current publication record with a new-consumer `pending` record whose `currentAttemptId` is null.
+3. Every `acknowledged` or `failed_terminal` current record, its attempt, receipt/acknowledgement if any, and its original consumer identity remain byte-for-byte unchanged and continue to suppress discovery. No such terminal record is rebound.
+4. The root consumer generation increments exactly once, the complete detached graph is revalidated, and the controller root is replaced exactly once. Failure before replacement preserves the old root, counters, tokens, handles, and observer state byte-for-byte.
+
+The abandoned old attempt remains in `attemptsById`; it is not overwritten by the new `pending` record. A later attempt number is one plus the number of retained attempts for that publication and never exceeds 3, so consumer replacement does not reset the attempt budget. The old generation's callbacks, receipts, retry tokens, and capabilities fail closed by exact session, consumer, generation, sink, publication, and attempt identity; retained attempts make old-generation rejection and attempt-ID collision detection possible. Replacement emits exactly one `npc_publication_delivery_abandoned` outcome for each transformed retryable attempt and, after the root replacement, exactly one `npc_delivery_consumer_replaced` outcome. Observer failure is isolated. Consumer replacement never changes authoritative state/version and never invokes render, sink, acknowledgement, history, provider, or Renderer work.
+
+`discoverPendingNpcPublications(input)` is a synchronous non-consuming controller operation over authoritative publication state. Its strict input requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `afterPublicationSlotOrder: null | non-negative safe integer`, and `limit: integer 1..32`, with `additionalProperties: false`. It may materialize a missing `pending` controller record exactly once but never writes authoritative state. It returns frozen `NpcPublicationDeliverySummary` values in ascending `publicationSlotOrder`; repeated retrieval is idempotent. Only the lowest unresolved publication is preparable. The cursor is pagination only, not acknowledgement or a delivery cursor, and cannot hide an older pending publication.
+
+`NpcPublicationDeliverySummary` requires exactly `schemaVersion: 1`, `summaryType: "npc_publication_delivery"`, `gameSessionId: ID`, `publicationId: ID`, `reactionPlanId: ID`, `actorId: ID`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `state: "pending" | "failed_retryable" | "sink_succeeded"`, `currentAttemptId: null | ID`, and `retryTokenId: null | ID`, with `additionalProperties: false`. Both IDs are null for `pending`; both are set for `failed_retryable` and `sink_succeeded`. Acknowledged, terminal, abandoned, and non-head entries are not returned as live candidates.
+
+`prepareNpcPublicationDelivery(input)` is the only preparation entrypoint. Its strict input requires exactly the discovery identity plus `publicationId: ID`; `afterPublicationSlotOrder` and `limit` are absent. It reserves one runtime attempt key and returns one frozen `NpcPublicationDeliveryRequest`. Preparation is synchronous and pure with respect to authoritative state.
+
+`NpcCanonicalDeliveryPayload` requires exactly:
+
+- `schemaVersion: 1`
+- `payloadType: "npc_canonical_utterance"`
+- `publicationId: ID`
+- `reactionPlanId: ID`
+- `reactionCommitRequestId: ID`
+- `turnId: ID`
+- `reactionResultingStateVersion: integer >= 1`
+- `actorId: ID`
+- `locale: SupportedLocale`
+- `canonicalRendererVersion: integer >= 1`
+- `canonicalSegmentIds: ID[1..16]`, unique and in plan order
+- `displayText: string[1..1000 Unicode code points]`
+- `payloadFingerprint: Sha256Fingerprint`
+- `additionalProperties: false`
+
+The canonical renderer reconstructs a detached payload, checks `displayText` against the plan `maxChars`, computes `payloadFingerprint = sha256CanonicalJson(payload without payloadFingerprint)`, and recursively freezes the result. `displayText` is runtime-only and is not appended to the publication ledger or supplied by a caller. Browser/CLI callers cannot override text, locale, actor, segment order, or presentation metadata. A render failure before a sink makes the publication `failed_terminal` for that session and consumer generation; it is never rerouted to legacy text or the AI Renderer.
+
+`NpcPublicationDeliveryRequest` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, and `payload: NpcCanonicalDeliveryPayload`, with `additionalProperties: false`. The controller, not the adapter, allocates `deliveryAttemptId` and attempt order. The request is a frozen runtime value and is never a provider/HTTP request.
+
+#### Delivery record, receipt, acknowledgement, and retry token
+
+`NpcPublicationDeliveryControllerRoot` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `consumer: NpcPublicationDeliveryConsumer`, `invalidated: boolean`, `nextDeliveryAttemptOrder: non-negative safe integer`, `nextSinkStartedOrder: non-negative safe integer`, `nextSinkSucceededOrder: non-negative safe integer`, `nextAcknowledgedOrder: non-negative safe integer`, `currentRecordsByPublicationId: read-only index of NpcPublicationDeliveryRecord[0..1024]`, `attemptsById: read-only index of NpcPublicationDeliveryAttemptRecord[0..3072]`, `acknowledgementsByPublicationId: read-only index of NpcPublicationDeliveryAcknowledgement[0..1024]`, and `retryTokensById: read-only index of NpcPublicationDeliveryRetryToken[0..1024]`, with `additionalProperties: false`. `NpcPublicationDeliveryConsumer` requires exactly `consumerId: ID`, `consumerGeneration: non-negative safe integer`, and `sinkType: "browser" | "cli"`. Index keys equal their embedded IDs; foreign, duplicate, dangling, or cross-session members are invariant failures. Controller capabilities, timers, abort handles, and concrete sink bookkeeping are runtime handles outside the data root but are invalidated atomically with it.
+
+`NpcPublicationDeliveryRecord` is the current publication-level state and requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, `state: NpcPublicationDeliveryState`, and `currentAttemptId: null | ID`, with `additionalProperties: false`. `pending` has a null attempt ID. Every other state has a non-null attempt ID resolving to one exact `attemptsById` member whose publication, consumer identity, and state equal the current record. Terminal acknowledged/failure records retain the consumer identity that produced them; they are not rebound during consumer replacement.
+
+`NpcPublicationDeliveryAttemptRecord` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, `state: "prepared" | "in_flight" | "sink_succeeded" | "failed_retryable" | "failed_terminal" | "acknowledged" | "abandoned"`, `abandonedFromState: null | "prepared" | "in_flight" | "sink_succeeded" | "failed_retryable"`, `payloadFingerprint: Sha256Fingerprint`, `sinkStartedOrder: null | non-negative safe integer`, `sinkSucceededOrder: null | non-negative safe integer`, `acknowledgedOrder: null | non-negative safe integer`, `failure: null | NpcPublicationDeliveryFailure`, `receiptId: null | ID`, and `retryTokenId: null | ID`, with `additionalProperties: false`. Every allocated attempt remains in `attemptsById` until session reset; it is never overwritten, reused, or evicted. At most three attempts exist for one publication. Runtime orders are zero-based safe integers owned by the NPC controller and share no value or counter with authoritative publication or terminal orders. Each next-order counter advances exactly once with successful creation of its corresponding record transition; failure before that transition leaves no gap.
+
+The controller retains at most 1024 current publication records and 3072 attempt records. Capacity is checked before publication-state materialization, attempt ID allocation, order allocation, or consumer replacement staging. Exhaustion throws `npc_delivery_capacity_exhausted` and changes no record, attempt, token, capability, counter, or observer state. There is no attempt eviction because retained identity is required to reject old callbacks and ID reuse. Reset is the only operation that discards retained attempts.
+
+`NpcPublicationDeliveryState` is the closed enum `pending | prepared | in_flight | sink_succeeded | failed_retryable | failed_terminal | acknowledged | abandoned`. `pending` is derived and inserted when an eligible committed publication first enters controller discovery; `prepared` means the exact payload and attempt reservation exist; `in_flight` means the trusted wrapper consumed the controller-issued begin capability; `sink_succeeded` means the exact sink boundary completed and one receipt exists; `acknowledged` means that receipt was accepted; `failed_retryable` means a proved no-visible-effect sink failure permits a fresh attempt; `failed_terminal` means canonical reconstruction, retry exhaustion, or ambiguous sink outcome forbids automatic replay; and `abandoned` terminalizes an old attempt during consumer replacement or reset without acknowledging its publication.
+
+The attempt-field matrix is normative:
+
+| State | Started | Sink success | Ack | Failure | Receipt | Retry token | `abandonedFromState` |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `prepared` | null | null | null | null | null | null | null |
+| `in_flight` | set | null | null | null | null | null | null |
+| `sink_succeeded` | set | set | null | null | set | `ack_only` | null |
+| `failed_retryable` | set | null | null | retryable transport | null | `repeat_sink` | null |
+| `failed_terminal` | null or set | null | null | resolution, ambiguous transport, or exhaustion | null | null | null |
+| `acknowledged` | set | set | set | null | set | null | null |
+| `abandoned` | preserved from source | preserved only when source was `sink_succeeded` | null | preserved or null | preserved only when source was `sink_succeeded` | null | exact source state |
+
+No other nullability combination is valid. Consumer replacement retains an abandoned old attempt while publishing a new `pending` current record for the same publication; therefore an abandoned attempt need not be referenced by `currentRecordsByPublicationId`. Reset may abandon `prepared`, `in_flight`, `sink_succeeded`, or `failed_retryable`; `failed_terminal` and `acknowledged` are already terminal and are simply destroyed with the old root.
+
+`NpcPublicationSinkSuccessReceipt` requires exactly `schemaVersion: 1`, `receiptType: "npc_sink_success"`, `receiptId: ID`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `sinkType: "browser" | "cli"`, `payloadFingerprint: Sha256Fingerprint`, and `sinkSucceededOrder: non-negative safe integer`, with `additionalProperties: false`. It is an opaque frozen object created and retained by the controller only after the exact attempt is `in_flight` and the trusted completion capability is returned. A caller-created, cloned, changed, cross-attempt, cross-sink, or cross-session receipt is invalid even if its fields are equal.
+
+`NpcPublicationDeliveryAcknowledgement` requires exactly `schemaVersion: 1`, `acknowledgementType: "npc_publication_acknowledged"`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `sinkType: "browser" | "cli"`, `receiptId: ID`, `payloadFingerprint: Sha256Fingerprint`, and `acknowledgedOrder: non-negative safe integer`, with `additionalProperties: false`. It is a controller-private stored result keyed by `(gameSessionId, publicationId)`. It is not authoritative history and does not survive session destruction. Consumer replacement never makes an acknowledged publication live again.
+
+`NpcPublicationDeliveryRetryToken` requires exactly `schemaVersion: 1`, `tokenType: "npc_delivery_retry"`, `retryTokenId: ID`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `sinkType: "browser" | "cli"`, `payloadFingerprint: Sha256Fingerprint`, and `retryKind: "repeat_sink" | "ack_only"`, with `additionalProperties: false`. The controller alone issues and retains it. `repeat_sink` is valid only after a proved no-visible-effect `failed_retryable` outcome and creates a fresh `deliveryAttemptId` with the next attempt number; `ack_only` is created by successful sink completion, not by a transport failure, and reuses the exact retained receipt without invoking the renderer or sink. Tokens are one-session capabilities, are invalidated by their successful next step, consumer replacement, or reset, and are never serialized, exposed to providers/observers/history, or inferred from a publication ID.
+
+`completeNpcPublicationSink(capability)` returns a frozen `NpcPublicationSinkCompletion` requiring exactly `schemaVersion: 1`, `status: "sink_succeeded"`, `receipt: NpcPublicationSinkSuccessReceipt`, and `retryToken: NpcPublicationDeliveryRetryToken` with `retryKind: "ack_only"`, with `additionalProperties: false`. `recordNpcPublicationSinkFailure(capability, failureEvidence)` returns a frozen `NpcPublicationSinkFailureResult` requiring exactly `schemaVersion: 1`, `status: "failed_retryable" | "failed_terminal"`, `failure: NpcPublicationTransportFailure`, and `retryToken: null | NpcPublicationDeliveryRetryToken`, with `additionalProperties: false`; the token is present exactly for `failed_retryable` and has `retryKind: "repeat_sink"`.
+
+`getNpcPublicationDeliveryRetryToken(input)` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `payloadFingerprint: Sha256Fingerprint`, and `retryTokenId: ID`, with `additionalProperties: false`. It returns only the controller-retained exact token. Publication-ID-only lookup and caller-created/cloned/changed tokens are forbidden. `retryNpcPublicationDelivery(token)` accepts only that retained capability: `repeat_sink` consumes the token and returns a new frozen `NpcPublicationDeliveryRequest` with a fresh attempt ID/order and the next attempt number; `ack_only` calls acknowledgement with the retained exact receipt and returns the acknowledgement result without renderer, sink, history append, or authoritative mutation. Wrong session, consumer, generation, sink, publication, attempt, order, attempt number, fingerprint, token, or capability identity fails closed.
+
+The initial retry policy is exactly three total sink attempts per publication and a 15,000 ms deadline per attempt, with no automatic backoff or hidden retry. Attempt/deadline values are controller policy, not provider policy. After attempt 3 fails without visible effect, the publication becomes `failed_terminal` with `sink_retry_exhausted`; an explicit future recovery design is required to reopen it.
+
+#### Exact lifecycle and ordering
+
+The Phase 6 order is exact:
+
+1. `NpcReactionCommit` authoritatively publishes the canonical graph and one publication at `N+2`.
+2. Controller discovery derives `delivery pending`; it does not write authority.
+3. Preparation verifies the complete committed graph, head-of-line eligibility, consumer generation, and identity, reserves one attempt, renders the exact payload, and changes `pending -> prepared`.
+4. `beginNpcPublicationSink(...)` consumes one controller capability and changes `prepared -> in_flight`.
+5. The browser attaches and verifies the exact safe node, or the CLI configured writer returns/fulfills. No other event is sink success.
+6. `completeNpcPublicationSink(capability)` validates exact identity, changes `in_flight -> sink_succeeded`, assigns one sink-success order, and returns the retained receipt plus its controller-issued `ack_only` token.
+7. `acknowledgeNpcPublication(receipt)` accepts only that exact receipt, changes `sink_succeeded -> acknowledged`, assigns one acknowledgement order, stores the acknowledgement result, and then emits its observer outcome.
+8. Only after acknowledgement may discovery expose the next publication slot.
+
+Publication display order is ascending `publicationSlotOrder`. Delivery attempt order, sink-success order, and acknowledgement order are distinct controller counters but, because of head-of-line gating, successful first acknowledgements follow publication slot order. `recordAppendOrder` is audit order only. Canonical renderer execution occurs during preparation for the current head only. Phase 7 Renderer completion order cannot reorder delivery: a controlled slot is blocked until its finalization exists, and later slots cannot pass it. History projection is always ordered by `publicationSlotOrder` and has no append counter. Observer notification occurs after the corresponding controller transition/result is stored and never participates in ordering proof.
+
+`NPC_STRUCTURED_REACTION_MODE` controls reaction-route selection only. Once a canonical publication commits, later flag disablement does not abandon it, make it legacy-eligible, or remove it from discovery; the controller completes or terminalizes its delivery under the captured structured route. A reaction that selected the legacy route creates no C2 publication-delivery record and is never imported into the NPC controller. Re-enabling the flag affects only a later logical reaction. There is no NPC cutover watermark, dual delivery, backfill, or flag-driven acknowledgement, and Phase 5 requested/effective player mode is not consulted.
+
+#### Sink, timeout, abort, and retry ownership
+
+The NPC controller owns one bounded sink deadline, one AbortController, timer cleanup, and retry eligibility for each active attempt. The browser/CLI wrapper receives only the exact attempt capability and abort signal. It may stop its own pending sink work on abort but cannot extend the deadline, create a retry, or convert an ambiguous failure into retryable evidence. Provider retry, Renderer retry, reaction retry, and delivery retry are separate domains and never call one another.
+
+Browser success is the exact safe text node attached to and verified under the intended conversation container with controller identity bookkeeping stored on that node. Array/view-model insertion, render scheduling, paint, observer notification, or text equality is insufficient. If post-attachment bookkeeping fails, the wrapper must remove the exact node and verify removal before reporting `failed_retryable`; inability to prove removal is `failed_terminal`.
+
+CLI success is fulfillment of the configured writer for the exact payload. A writer failure is retryable only when the writer contract proves `visibleEffect: false`; a throw/rejection after an unknown or partial write is terminal to prevent duplicate output. Prompt redraw and console buffer inspection are not proof. Sink timeout or abort is retryable only when the wrapper proves the operation produced no visible effect and completed cleanup; otherwise it is terminal.
+
+Sink failure before success produces no receipt or acknowledgement, leaves authoritative state at `N+2`, and emits a redacted failure observation after the failure record is stored. Retry is explicit through a controller token or later delivery-only pump; no history/replay/action result implicitly retries. After sink success, every failure before acknowledgement is acknowledgement-only through the `ack_only` token created by sink completion and must never repeat rendering or output. This is not a transport-failure disposition. A terminal delivery failure does not invoke legacy NPC display, provider, Renderer, reaction preparation, or commit again.
+
+#### Idempotency, replay, history, and acknowledgement
+
+The delivery idempotency key is exactly `(gameSessionId, publicationId)`. One current record and at most one active attempt exist per key; all older attempts remain immutable in `attemptsById`. A fresh retry changes only `deliveryAttemptId`, `attemptNumber`, and its controller orders. Consumer replacement preserves publication-level acknowledgement/terminal suppression while invalidating old-generation attempts and capabilities and retaining their terminal identity evidence. The authoritative reaction commit idempotency key and delivery key are unrelated.
+
+An exact duplicate acknowledgement using the retained receipt under the same current consumer generation returns the stored acknowledgement result, changes no state/order, performs no sink/history write, and emits exactly one `npc_publication_duplicate_ack_suppressed` observer outcome per duplicate API invocation. After consumer replacement, even an exact old-generation receipt is stale and cannot invoke duplicate acknowledgement; the stored acknowledgement alone continues publication-level redisplay suppression. A different current-generation receipt or payload fingerprint for an acknowledged key is `npc_acknowledgement_conflict`. Receipt lookup requires the complete receipt identity; publication-ID-only lookup is forbidden.
+
+Reaction commit replay returns the stored commit result and never discovers, prepares, renders, sinks, acknowledges, or suppresses delivery. Delivery replay means only `repeat_sink` or `ack_only` through an exact retained retry token. History, `get_state`, diagnostics, snapshots, observer subscription, and publication lookup produce no live delivery request or token. Repeated history reads deterministically reconstruct the same canonical entry from authoritative records whether delivery is pending, acknowledged, failed, or the current consumer no longer exists. History completeness and live redisplay suppression never share one mutable set.
+
+#### Visibility and trust classification
+
+| Domain | Visible values | Forbidden values and authority |
+| :--- | :--- | :--- |
+| Authoritative | reaction plan/result, canonical claims/events/segments, `NpcCanonicalUtterancePublishedRecord`, slot/append orders, originating `N+2` | no delivery attempt, receipt, acknowledgement, retry token, DOM/CLI status, observer order, or rendered text |
+| Runtime private | controller root, generation, attempt record, capabilities, deadlines, abort handles, receipt, acknowledgement, retry token, runtime orders | not serialized, not returned by public snapshots/history, no state-version authority |
+| Observer visible | closed redacted outcome, session/publication/attempt IDs, consumer generation, sink type, normalized code, bounded duration/order | no payload text/fingerprint, raw candidate, prompt, projection, private fact, receipt/token/capability, stack/cause |
+| History visible | deterministic canonical player-facing entry ordered by publication slot | no live envelope, acknowledgement state, retry state, receipt, observer outcome, provider/Renderer data |
+| Renderer private | Phase 7 request/pending/provider result/selected variant/fallback bookkeeping only | inactive in Phase 6; never receives canonical delivery objects and never proves a sink |
+| Provider private | candidate request/response and redacted provider diagnostics only | never receives publication delivery identity, payload, receipt, acknowledgement, token, DOM/CLI state, or history cursor |
+
+#### Closed failure contracts
+
+Public controller methods either return their strict frozen success value or synchronously throw `NpcPublicationDeliveryError`. Its exact fields are `name: "NpcPublicationDeliveryError"`, `code: NpcPublicationDeliveryErrorCode`, and fixed message `"NPC publication delivery failed"`; it stores no raw payload, receipt, provider value, free-form path, nested cause, DOM node, or private state.
+
+`NpcPublicationDeliveryErrorCode` is the closed rejection set `npc_publication_not_found | npc_publication_not_eligible | npc_publication_already_acknowledged | npc_delivery_order_blocked | npc_delivery_in_progress | npc_delivery_not_prepared | npc_delivery_not_delivered | npc_delivery_terminal | npc_delivery_identity_conflict | npc_delivery_capacity_exhausted | sink_retry_exhausted | stale_npc_delivery_session | stale_npc_consumer_generation`.
+
+`NpcPublicationDeliveryInvariantError` is reserved for malformed engine-owned controller/publication input. Its exact fields are `name: "NpcPublicationDeliveryInvariantError"`, `code: NpcPublicationDeliveryInvariantCode`, and fixed message `"NPC publication delivery invariant failed"`. The closed invariant set is `invalid_npc_delivery_controller_root | invalid_npc_delivery_publication_graph | invalid_npc_delivery_attempt | invalid_npc_delivery_receipt | invalid_npc_delivery_acknowledgement | npc_delivery_identity_collision | npc_delivery_order_corruption | npc_delivery_state_transition_invalid`. Invariants do not terminalize or repair authority.
+
+`NpcPublicationDeliveryFailure = NpcPublicationResolutionFailure | NpcPublicationTransportFailure`, discriminated by `failureType`. `NpcPublicationResolutionFailure` requires exactly `schemaVersion: 1`, `failureType: "npc_delivery_resolution"`, `code: "canonical_render_failed" | "canonical_render_limit_exceeded"`, and `disposition: "terminal"`, with `additionalProperties: false`. It contains no rendered or source text. A malformed authoritative graph is an invariant, not a resolution failure.
+
+`NpcPublicationTransportFailure` is controller-private and requires exactly `schemaVersion: 1`, `failureType: "npc_delivery_transport"`, `code: "browser_sink_container_missing" | "browser_sink_attachment_failed" | "browser_sink_bookkeeping_failed" | "cli_sink_write_failed" | "sink_timeout" | "sink_aborted" | "sink_retry_exhausted"`, and `disposition: "retry_sink" | "terminal_exhausted" | "terminal_ambiguous"`, with `additionalProperties: false`. `retry_sink` requires proof of no visible effect, complete sink cleanup, and remaining attempt budget; it produces `failed_retryable` and one `repeat_sink` token. `terminal_exhausted` is used only for `sink_retry_exhausted` when the final operation proved no visible effect but attempt 3 consumed the budget; it produces `failed_terminal` and no token. `terminal_ambiguous` requires that visible effect is unknown or removal/write rollback cannot be proved; it produces `failed_terminal` immediately and no token regardless of remaining budget. Exhaustion and visibility ambiguity are distinct evidence and never substitute for one another. No transport operation produces `retry_ack_only`; successful sink completion creates the `ack_only` token.
+
+The failure/state/token matrix is normative:
+
+| Operation evidence | Failure code | Disposition | Resulting state | Token | Automatic sink retry |
+| :--- | :--- | :--- | :--- | :--- | :---: |
+| No visible effect proved, cleanup complete, attempt 1 or 2 | exact sink/timeout/abort code | `retry_sink` | `failed_retryable` | `repeat_sink` | no |
+| No visible effect proved, cleanup complete, attempt 3 | `sink_retry_exhausted` | `terminal_exhausted` | `failed_terminal` | none | no |
+| Visible effect unknown or cleanup/rollback unproved, any attempt | exact sink/timeout/abort code | `terminal_ambiguous` | `failed_terminal` | none | no |
+| Exact browser/CLI sink boundary succeeds | no transport failure | not applicable | `sink_succeeded` | `ack_only` | forbidden |
+| Exact acknowledgement succeeds | no transport failure | not applicable | `acknowledged` | consumed | forbidden |
+
+These examples are normative and contain no rendered content:
+
+```json
+[
+  {
+    "case": "consumer_replacement_after_retryable_failure",
+    "before": {
+      "consumerGeneration": 0,
+      "currentState": "failed_retryable",
+      "currentAttemptId": "attempt-1",
+      "retainedAttemptIds": ["attempt-1"],
+      "retryTokenIds": ["retry-1"]
+    },
+    "after": {
+      "consumerGeneration": 1,
+      "currentState": "pending",
+      "currentAttemptId": null,
+      "retainedAttempts": [
+        {
+          "deliveryAttemptId": "attempt-1",
+          "state": "abandoned",
+          "abandonedFromState": "failed_retryable"
+        }
+      ],
+      "retryTokenIds": []
+    },
+    "authoritativeVersionDelta": 0
+  },
+  {
+    "case": "third_no_effect_failure",
+    "attemptNumber": 3,
+    "visibleEffect": false,
+    "code": "sink_retry_exhausted",
+    "disposition": "terminal_exhausted",
+    "resultingState": "failed_terminal"
+  },
+  {
+    "case": "ambiguous_first_attempt",
+    "attemptNumber": 1,
+    "visibleEffect": "unknown",
+    "code": "cli_sink_write_failed",
+    "disposition": "terminal_ambiguous",
+    "resultingState": "failed_terminal"
+  },
+  {
+    "case": "sink_success_before_acknowledgement",
+    "transportFailure": null,
+    "resultingState": "sink_succeeded",
+    "retryKind": "ack_only"
+  }
+]
+```
+
+Receipt lookup and acknowledgement methods instead synchronously throw `NpcPublicationAcknowledgementError`, with exact `name: "NpcPublicationAcknowledgementError"`, fixed message `"NPC publication acknowledgement failed"`, and closed code `npc_acknowledgement_not_delivered | npc_acknowledgement_identity_mismatch | npc_acknowledgement_conflict | stale_npc_acknowledgement_session | stale_npc_acknowledgement_generation`. It retains no receipt, payload, cause, or free-form path. A stale acknowledgement emits exactly one redacted `npc_publication_stale_ack_rejected` outcome per invocation and changes nothing. Observer failure cannot change the primary code or stored result.
+
+#### Reset and late callbacks
+
+Session reset first prevents new preparation, aborts every active sink and timer, marks each nonterminal attempt `abandoned` in the old controller, invokes exactly one redacted abandonment observation per active attempt, and then destroys the complete NPC delivery controller root and all capabilities, receipts, acknowledgements, retry tokens, bookkeeping, and runtime counters. Observer failure is swallowed and does not alter this sequence. Reset does not mutate the old authoritative graph before that graph is destroyed with the session and does not copy delivery state into the new session.
+
+Every late completion, retry, receipt lookup, acknowledgement, observer callback, canonical-render callback, or adapter callback carries the old `gameSessionId` and fails closed as stale. It cannot attach to, acknowledge, suppress, reorder, or create output in the new session. If a sink became visible immediately before reset but acknowledgement did not complete, the old-session callback remains stale; no cross-session redisplay or reconciliation is attempted. Persistence/reload and multi-tab delivery coordination remain out of scope.
+
+#### Observer outcomes
+
+Redacted observer outcomes are exactly `reaction_planned`, `reaction_activated`, `reaction_attempt_started`, `reaction_attempt_failed`, `reaction_attempt_timed_out`, `reaction_attempt_aborted`, `reaction_candidate_rejected`, `reaction_exhausted`, `reaction_superseded`, `reaction_cancelled`, `reaction_committed`, `reaction_duplicate_suppressed`, `reaction_identity_conflict`, `npc_publication_delivery_prepared`, `npc_publication_sink_started`, `npc_publication_delivered`, `npc_publication_delivery_failed`, `npc_publication_acknowledged`, `npc_publication_duplicate_ack_suppressed`, `npc_publication_stale_ack_rejected`, `npc_publication_delivery_abandoned`, and `npc_delivery_consumer_replaced`.
+
+Delivery observations may contain only session/publication/attempt IDs, consumer generation, normalized reason code, originating reaction version, actor ID, bounded duration, runtime order, and sink type. They exclude payload text/fingerprint, raw player/provider text, hidden facts, projection contents, prompts, credentials, private memory, receipts/tokens/capabilities, DOM nodes, and stack traces. Observer exceptions are isolated after the owning controller transition/result is stored. An observer event is never sink evidence, acknowledgement evidence, retry authorization, or history content.
+
+#### C2 self-review closure
+
+- Current publication state and retained attempt history are separate bounded indexes, so consumer replacement can preserve the old abandoned identity and publish a new pending state without overwrite or ambiguity.
+- Old-generation attempts, receipts, tokens, capabilities, and callbacks remain exactly classifiable until reset; no bounded-retention rule permits silent eviction or attempt-ID reuse.
+- Every transport disposition is reachable through a real sink operation. `ack_only` is a sink-success capability, not a transport failure.
+- Retry exhaustion with proved no visible effect is `terminal_exhausted`; unknown visible effect is `terminal_ambiguous`. Both are terminal, but their machine-readable evidence is never conflated.
+- Consumer replacement, delivery, retry, receipt, acknowledgement, observer, and history operations change authoritative state/version by exactly zero.
+- Phase 6 does not invoke the AI Renderer, provider, server, endpoint, Phase 7 finalization, or player-delivery protocol, and no such responsibility is inferred by this contract.
 
 ### Browser and CLI responsibilities
 
-The browser flow invokes the authoritative `WerewolfGame` coordinator to allocate identities, select the actor, project knowledge, construct requests, validate responses, perform final CAS/commit, and expose committed publication/history. `public/browserApp.mjs` remains a non-authoritative DOM adapter and feature-control surface. It cannot reconstruct a reaction from display text or treat DOM success as commit success.
+The browser flow invokes the authoritative `WerewolfGame` coordinator to allocate identities, select the actor, project knowledge, construct requests, validate responses, perform final CAS/commit, and expose explicit committed publication history and delivery-controller APIs. `public/browserApp.mjs` remains a non-authoritative DOM adapter and feature-control surface. It cannot reconstruct a reaction from display text, discover from a history/result object, or treat DOM success as commit success. It passes only the controller-frozen payload to the sink and returns only the controller capability.
 
-The CLI uses the same `WerewolfGame` module and process-local authoritative instance, the same projection/validation/coordinator, and the same identity/version rules. `src/cli.mjs` may format outcomes and write committed canonical publications, but it cannot call a weaker provider path, apply legacy text after structured rejection, or consume delivery through history reads. Browser and CLI may differ only in sink evidence implementation, not authority, retry, validation, or publication eligibility.
+The CLI uses the same `WerewolfGame` module and process-local authoritative instance, the same projection/validation/coordinator, and the same NPC delivery controller contract. `src/cli.mjs` may frame the controller-owned `displayText` for its configured writer but cannot replace it, call a weaker provider path, apply legacy text after structured rejection, or consume delivery through history reads. Browser and CLI may differ only in the exact sink-success proof described above, not authority, retry, timeout/abort policy, validation, ordering, acknowledgement, or publication eligibility.
 
 ### Feature flag, coexistence, and rollback
 
@@ -3380,7 +3608,7 @@ Required comparison observability includes route selected, logical outcome, atte
 ### Migration sequence and rollback gates
 
 1. **Docs PR C1 — runtime ownership and ledgers:** establish the existing shared publication-counter authority and the session-local coordinator terminal-order/capacity contract. This step changes documentation only and grants no runtime or delivery API.
-2. **Docs PR C2 — NPC delivery contract:** after C1 is merged, define exact NPC committed-publication discovery, browser/CLI sink evidence, retry/acknowledgement, history, replay, reset, and feature-mode behavior without changing the player protocol by inference.
+2. **Docs PR C2 — NPC delivery contract:** define the independent NPC controller, exact committed-publication discovery and payload, browser/CLI sink evidence, retry/acknowledgement, history/replay separation, reset invalidation, visibility, ordering, observer, and Renderer non-ownership contract without changing the player protocol by inference. This section closes that design boundary without runtime changes.
 3. **Post-C2 implementation re-audit:** reread the merged candidate, preparation, commit, C1, and C2 contracts against current runtime and split implementation only where each owner/API/rollback boundary is closed.
 4. **Validator/schema alignment:** align the merged candidate/plan validators with the preparation contract, including canonical-only required fields and the four-claim cap, without routing or authority changes.
 5. **Pure authoritative preparation implementation:** convert a validated runtime candidate to the exact detached engine-owned prepared value; publish nothing and preserve version/counters.
@@ -3430,7 +3658,7 @@ The review-fix scan found `0` matching code points in all three scopes. Because 
 
 ### Deferred and out of scope
 
-Production, test, runtime schema-validator, provider, endpoint, and candidate-transport implementation are outside this docs-only change, including the runtime state machines, tombstone registry, flag plumbing, and emergency-cancellation API/UI/CLI command. The exact NPC browser/CLI delivery, sink-success evidence, retry/acknowledgement, history/replay presentation, and feature-mode contract is intentionally deferred to Docs PR C2; C1 does not copy the player API or invent an NPC API. Phase 6 also excludes persistence, reload/crash/offline recovery, durable queues, multi-tab/cross-tab ownership, account sync, server authority or transactions, distributed locking, remote observer guarantees, broad UI redesign, unrelated prompt tuning/game-rule redesign, controlled Renderer implementation, suspicion/memory migration, and physical legacy deletion. These require later phases or separate reviewed designs; none may be inferred from this section.
+Production, test, runtime schema-validator, provider, endpoint, and candidate-transport implementation are outside this docs-only design, including the runtime state machines, tombstone registry, flag plumbing, emergency-cancellation API/UI/CLI command, and the newly specified NPC delivery controller/adapters. C1 did not copy the player API or invent an NPC API; the C2 contract above now defines a separate NPC API and ownership boundary but implements none of it. Phase 6 also excludes persistence, reload/crash/offline recovery, durable queues, multi-tab/cross-tab ownership, account sync, server authority or transactions, distributed locking, remote observer guarantees, broad UI redesign, unrelated prompt tuning/game-rule redesign, controlled Renderer implementation, suspicion/memory migration, and physical legacy deletion. These require later phases or separate reviewed designs; none may be inferred from this section.
 
 ### Phase 6 invariants
 
@@ -3525,7 +3753,13 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Phase 6 retry-invariant tests prove stable logical/request/correlation/trigger binding, fresh attempt IDs, finite attempts/deadline, unchanged validation/privacy/projection, repeated final CAS, no player rollback, no legacy or hidden server retry, and terminal cleanup. Separate initial-policy tests assert `3` attempts, `1`/`2` second backoff, and `15` second deadline, then vary those finite values without changing authority invariants.
 - Phase 6 flag tests prove route snapshot at logical-reaction start, normal mid-flight flag changes affect only later triggers, every structured failure avoids fallback, and explicit emergency cancellation causes zero increment, retains player `N+1`, records a redacted diagnostic/tombstone, and rejects late output.
 - Phase 6 projection/validation tests prove deterministic strict allowlists, actor-private disclosure authorization, exclusion of every other private/legacy/internal field, provider ID/actor/version/patch rejection, final live CAS, exact `N+1 -> N+2`, zero increments for every non-commit outcome, and no legacy fallback after enabled-route rejection.
-- Phase 6 delivery/compatibility tests exercise actual browser DOM and CLI writer paths from committed canonical records, sink failure at retained `N+2`, non-consuming history/replay, default-off and disable rollback, unchanged Phase 4/5 behavior, stateless proxy operation, and no controlled Renderer activation before Phase 7.
+- Phase 6 delivery contract tests prove strict discovery/preparation/request/payload/current-record/retained-attempt/receipt/acknowledgement/retry-token schemas; detached frozen canonical rendering; caller payload override rejection; one active attempt; head-of-line slot order; distinct dense runtime orders; every permitted state edge; and every omitted edge rejection without authoritative mutation. They cover 1024/3072 capacity boundaries, no attempt eviction/reuse, attempt-number preservation across replacement, and exact `npc_delivery_capacity_exhausted` rollback.
+- Phase 6 browser delivery tests exercise the actual DOM adapter from a controller-frozen canonical payload and prove exact safe-node attachment plus identity bookkeeping before receipt, cleanup-proved retry after pre-proof failure, terminal ambiguity when cleanup cannot be proved, acknowledgement-only retry after receipt, no second node, and reset/late callback isolation.
+- Phase 6 CLI delivery tests exercise the actual configured writer and prove synchronous/awaited fulfillment evidence, no-effect failure retry, partial/unknown write terminalization, timeout/abort cleanup, acknowledgement-only retry without a second write, and exact parity with browser controller identity and ordering.
+- Phase 6 delivery idempotency tests cover repeated discovery, fresh-attempt sink retry, exact receipt/token lookup, exact duplicate acknowledgement and one suppression observation, conflicting/foreign receipt, wrong sink/consumer/generation/session, stale acknowledgement observations, terminal rendering failure, controller reset, and authoritative deep equality throughout. Consumer-replacement tests retain an old-generation `abandoned` attempt while publishing a new-generation `pending` current record, invalidate old capabilities/receipts/tokens/callbacks, reject attempt-ID collision, preserve acknowledged/terminal records, emit exact post-replacement observations, and prove byte-equal rollback at every pre-replacement fault point.
+- Phase 6 delivery failure reachability tests cover every transport code/disposition/state/token tuple. They prove `retry_sink` only for no-visible-effect evidence with budget remaining, `terminal_exhausted` on the third proved-no-effect failure, `terminal_ambiguous` for unknown effect at any attempt, absence of `retry_ack_only` from transport failures, and creation of `ack_only` only by exact sink completion. The normative JSON examples parse and match those transitions.
+- Phase 6 history/replay tests prove reaction replay, history, `get_state`, diagnostics, snapshot, and observer subscription produce no live request, render, sink, receipt, acknowledgement, token, or redisplay; repeated history remains complete and deterministic in publication-slot order across pending/acknowledged/failed delivery states.
+- Phase 6 delivery/compatibility tests additionally prove default-off and disable rollback, unchanged Phase 4/5 controllers and legacy route, stateless proxy operation, no raw/legacy fallback for a structured reaction, retained `N+2` after every sink outcome, and no controlled Renderer activation before Phase 7.
 - Phase 6 documentation validation records the Unicode scan command, exact base/head/added-line scopes, inspected code-point classes, and file/line/code-point details for any finding; it is not a runtime test.
 - Phase tests prove provider pending does not mutate phase, accepted acts record `acceptedPhase`, events record `occurredPhase`, and commit deltas record `resultingPhase`.
 - Duplicate tests prove a committed retry returns the stored CommitResult without provider execution or mutation and rejects same request ID with a changed fingerprint.
@@ -3638,6 +3872,18 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Phase 6 mid-flight flag change** | DOES NOT REROUTE OR CANCEL ACTIVE REACTION; APPLIES TO NEXT TRIGGER |
 | **Phase 6 emergency cancellation** | EXPLICIT SEPARATE OPERATION; LOGICAL `cancelled`, ATTEMPT `aborted`, VERSION +0, NO FALLBACK |
 | **Phase 6 NPC history read implies delivery** | PROHIBITED |
+| **Phase 6 NPC delivery owner** | EXACTLY ONE SESSION-LOCAL `NpcPublicationDeliveryController`; DISTINCT FROM PLAYER CONTROLLER |
+| **Phase 6 NPC delivery indexes** | ONE CURRENT RECORD PER PUBLICATION + BOUNDED IMMUTABLE ATTEMPTS BY ID; CONSUMER REPLACEMENT NEVER OVERWRITES OLD ATTEMPT EVIDENCE |
+| **Phase 6 live delivery source** | COMMITTED `NpcCanonicalUtterancePublishedRecord` + COMPLETE VALID CANONICAL GRAPH ONLY |
+| **Phase 6 delivery payload source** | ENGINE CANONICAL RENDERER; DETACHED, FROZEN, STORED LOCALE/VERSION; CALLER OVERRIDE PROHIBITED |
+| **Phase 6 delivery order** | HEAD-OF-LINE ASCENDING `publicationSlotOrder`; APPEND/ATTEMPT/SINK/ACK/OBSERVER ORDERS ARE DISTINCT |
+| **Phase 6 sink proof** | EXACT BROWSER DOM ATTACHMENT OR CONFIGURED CLI WRITE FULFILLMENT; OBSERVER/TEXT/VIEW MODEL INSUFFICIENT |
+| **Phase 6 acknowledgement proof** | EXACT CONTROLLER-RETAINED `sink_succeeded` RECEIPT ONLY; ACK-ONLY RETRY AFTER SINK SUCCESS |
+| **Phase 6 delivery replay** | EXACT RETAINED `repeat_sink` OR `ack_only` TOKEN; COMMIT/HISTORY REPLAY NEVER DELIVERS |
+| **Phase 6 delivery terminal evidence** | PROVED NO-EFFECT EXHAUSTION IS `terminal_exhausted`; UNKNOWN VISIBLE EFFECT IS `terminal_ambiguous` |
+| **Phase 6 delivery failure fallback** | LEGACY NPC TEXT, PROVIDER, REACTION, AND AI RENDERER FALLBACK PROHIBITED |
+| **Phase 6 delivery reset** | ABANDON OLD ATTEMPTS, DESTROY COMPLETE RUNTIME ROOT, REJECT EVERY OLD-SESSION CALLBACK |
+| **Phase 6 AI Renderer ownership** | NONE; PHASE 6 CANONICAL DELIVERY NEVER CREATES `RendererRequest` OR ACCEPTS RENDERER SINK PROOF |
 | **Accepted-alternative domain mutations** | ATOMIC |
 | **Provider wait changes authoritative phase** | PROHIBITED |
 | **Candidate spans within an alternative** | PAIRWISE NON-OVERLAPPING |
