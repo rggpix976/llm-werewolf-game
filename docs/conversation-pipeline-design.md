@@ -1669,6 +1669,305 @@ Normative conforming HTTP success example for that request:
 
 The examples' `requestFingerprint` is the exact `sha256CanonicalJson()` value over the request-fingerprint input defined above; both copies must be byte-equal.
 
+#### Candidate transport evidence contract
+
+Candidate validation accepts raw success-response evidence, not a pre-parsed JavaScript object. `NpcReactionCandidateTransportEvidence` is a strict runtime-only object with exactly the following required fields, no optional or additional fields, and only the two explicitly nullable header fields:
+
+| Field | Required type and rule |
+| :--- | :--- |
+| `schemaVersion` | literal `1` |
+| `evidenceType` | literal `npc_reaction_candidate_http_success` |
+| `httpStatus` | literal `200`; non-success responses are provider/coordinator failures outside candidate validation |
+| `contentTypeHeader` | string `[1..256 Unicode code points]` or literal `null`; the transport adapter copies the received field value without semantic normalization, and `null` means the field was absent |
+| `contentEncodingHeader` | string `[1..128 Unicode code points]` or literal `null`; the transport adapter copies the received field value without semantic normalization, and `null` means the field was absent |
+| `bodyBytes` | `Uint8Array`; the exact HTTP entity-body prefix after transfer framing and before UTF-8 decoding, length `[0..65,537]` |
+
+`null` is permitted only for the two header-evidence fields so absence can be validated rather than guessed. The object itself remains strict. The producer is the HTTP transport adapter at the successful-response boundary. For a body of at most 65,536 bytes it copies the complete entity body; for a larger body it stops bounded collection after and copies exactly the first 65,537 bytes, which is sufficient proof of overflow. It does not expose a mutable transport buffer, does not parse JSON, and does not call the candidate validator for a non-200 response. Accepted identity-encoded evidence is therefore both after all permitted content decoding and before UTF-8 decoding; a non-identity Content-Encoding is rejected without decoding. The synchronous validator treats the evidence as read-only for the duration of the call, makes no network call, and never returns a reference to `bodyBytes` or either header string.
+
+The exact media rules are:
+
+- `Content-Type` is required. The validator parses the field itself, trims HTTP optional whitespace around the media type, semicolons, and parameter separator, and compares the ASCII media type, parameter name, and value case-insensitively. The media type must be `application/json` and the parameter list must contain exactly one unquoted token `charset=utf-8`. A missing header, omitted charset, duplicate charset, empty or quoted value (including quoted UTF-8), or any additional/unknown parameter is `invalid_envelope` at `transport/http_envelope`. The transport adapter does not normalize or decide acceptance.
+- `Content-Encoding` may be absent or may contain the single ASCII case-insensitive token `identity`. An empty, comma-separated, duplicate, or non-identity value is `invalid_envelope` at `transport/http_envelope`. Candidate validation never decompresses or otherwise decodes a content encoding.
+- `bodyBytes.byteLength` is measured from the copied `Uint8Array` before UTF-8 decoding. Length `65,536` is accepted for further validation and length `65,537` is `body_too_large`; later parse/shape failure may still reject a 65,536-byte body. No caller-supplied integer or completion flag is accepted as byte evidence.
+- UTF-8 decoding is fatal. A malformed UTF-8 byte sequence is `malformed_json` at `transport/http_envelope`; no replacement character is inserted. An empty body or a decoded string that JSON parsing rejects is also `malformed_json`.
+- JSON parsing occurs exactly once inside this validator after size and header checks. The parsed value is then validated as the exact `NpcReactionCandidateHttpResponse`. There is no alternate parsed-object entry point that may emit raw-transport reason codes.
+
+This evidence covers only the provider HTTP **success response**. The engine-owned outbound `NpcReactionCandidateRequest` is validated as a runtime object and fingerprinted before a later transport adapter serializes it. Outbound request bytes, request headers, network failures, non-200 response bodies, retry, timeout, and abort ownership remain later provider/transport work and are not measured or classified by this validator.
+
+Normative valid evidence construction, where the referenced response is the conforming HTTP success object above:
+
+```js
+const evidence = Object.freeze({
+  schemaVersion: 1,
+  evidenceType: "npc_reaction_candidate_http_success",
+  httpStatus: 200,
+  contentTypeHeader: "application/json; charset=utf-8",
+  contentEncodingHeader: null,
+  bodyBytes: new TextEncoder().encode(
+    JSON.stringify(NORMATIVE_NPC_REACTION_CANDIDATE_HTTP_RESPONSE)
+  )
+});
+```
+
+#### Pure candidate-validation input contract
+
+The validation-only API is the synchronous pure function `validateNpcReactionCandidate(input) -> NpcReactionCandidateValidationResult`. `NpcReactionCandidateValidationInput` is a strict runtime-only object with exactly these required fields, no nullable fields, and `additionalProperties: false`:
+
+| Field | Exact type and ownership |
+| :--- | :--- |
+| `schemaVersion` | literal `1` |
+| `request` | detached, strict `NpcReactionCandidateRequest`; engine-owned expected request |
+| `pendingAttempt` | detached, strict `PendingNpcReactionAttempt`; engine-owned expected attempt snapshot |
+| `transportEvidence` | strict `NpcReactionCandidateTransportEvidence`; untrusted response evidence copied by the transport adapter |
+| `observedCandidate` | strict `NpcReactionCandidateObservedResponse`; coordinator-owned read-only prior-observation snapshot |
+| `liveApplicability` | strict `NpcReactionCandidateLiveApplicabilitySnapshot`; engine-owned read-only live snapshot |
+
+The input does not duplicate `knownInformation`, limits, binding echoes, or fingerprints outside their owning values. `request.knownInformation` is the captured authorization projection. `pendingAttempt` and `liveApplicability` are comparison inputs only; validation never transitions them. The validator reconstructs every accepted request, pending, parsed response, candidate, projection, observation, and live-snapshot value into detached plain data before comparison. It never freezes, strips, normalizes, or otherwise mutates caller/provider objects.
+
+Malformed engine-owned input is a programmer/invariant failure, not a provider rejection. Before examining response semantics, the validator synchronously throws `NpcReactionCandidateValidationInvariantError`, a repository-local error with exactly `name: "NpcReactionCandidateValidationInvariantError"`, one closed `code`, and a redacted fixed message. The closed codes are `invalid_validation_input`, `invalid_expected_request`, `invalid_expected_pending_attempt`, `invalid_transport_evidence_shape`, `invalid_observed_candidate`, `invalid_live_applicability_snapshot`, and `validation_input_binding_mismatch`. It contains no raw body, provider value, private fact, free-form path, or nested cause. Invalid header **content**, oversize bytes, invalid UTF-8, malformed JSON, and malformed provider envelopes are well-shaped untrusted evidence and return the rejection union instead of throwing.
+
+At API entry, `request` and `pendingAttempt` must identify one expected session/logical reaction/attempt/request/trigger/turn/phase/version/actor graph. `pendingAttempt.targetNpcId == request.npcId`, `pendingAttempt.operation == request.operation`, and its complete immutable binding equals the request. `observedCandidate` may be `observed` only for that exact expected attempt. Failure of these caller-owned expected-context invariants throws `validation_input_binding_mismatch`.
+
+`liveApplicability` is different: it must be internally self-consistent, but it is an independent current-state projection and is **not** required to equal the expected binding at API entry. A well-formed difference in its session, logical/request graph, attempt, turn, phase, version, actor, or roster is the evidence used by steps 9, 10, and 17 to return `idempotency_conflict`, `stale_request`, or a more specific closed applicability/authorization rejection. Treating such a difference as an invariant exception would make stale validation unreachable and is prohibited. A well-formed provider echo that differs from the expected request/pending graph returns `binding_mismatch` before those live comparisons.
+
+Normative validation-input construction, using the strict values defined in this section:
+
+```js
+const validationInput = Object.freeze({
+  schemaVersion: 1,
+  request: EXPECTED_NPC_REACTION_CANDIDATE_REQUEST,
+  pendingAttempt: EXPECTED_PENDING_NPC_REACTION_ATTEMPT,
+  transportEvidence: evidence,
+  observedCandidate: Object.freeze({
+    schemaVersion: 1,
+    observationStatus: "none"
+  }),
+  liveApplicability: EXPECTED_NPC_REACTION_LIVE_APPLICABILITY_SNAPSHOT
+});
+```
+
+The uppercase names identify the normative strict objects defined by their respective contracts; this JavaScript example demonstrates runtime composition and is not a JSON schema.
+
+#### Observed-candidate union and fingerprint ownership
+
+`NpcReactionCandidateObservedResponse` is the strict union `NpcReactionCandidateUnobserved | NpcReactionCandidateObserved`, discriminated by `observationStatus`; every member has `schemaVersion: 1` and `additionalProperties: false`:
+
+- `NpcReactionCandidateUnobserved` has exactly `schemaVersion: 1` and `observationStatus: "none"`.
+- `NpcReactionCandidateObserved` has exactly `schemaVersion: 1`, `observationStatus: "observed"`, `reactionAttemptId: ID`, and `candidateFingerprint: Sha256Fingerprint`.
+
+The provider never supplies an observation or candidate fingerprint. After strict structural reconstruction of the current candidate, the engine computes `candidateFingerprint = sha256CanonicalJson(detachedCandidate)`. The session-local reaction coordinator owns the prior observation and passes a detached read-only snapshot to the pure validator. This contract defines no registry, insertion, transition, retry, tombstone, or persistence API; producing and retaining the snapshot belongs to the later coordinator implementation.
+
+The union is evaluated only after transport, envelope, binding, request-fingerprint, and candidate-structure checks have succeeded. `none` continues to authorization. For `observed`, exact attempt equality is an input invariant; session ownership comes from the containing validation input and is not redundantly stored in this minimum union. Engine-computed fingerprints then classify the current candidate: equal is `duplicate_response`; unequal is `attempt_response_conflict`. Both are terminal validation rejections with no state transition. A response cannot select the duplicate classification by echoing a fingerprint.
+
+Normative members:
+
+```json
+{ "schemaVersion": 1, "observationStatus": "none" }
+```
+
+```json
+{
+  "schemaVersion": 1,
+  "observationStatus": "observed",
+  "reactionAttemptId": "reaction-attempt-1",
+  "candidateFingerprint": "64a82470787c3492e03bca709c779088957fa0b451481c3386aa5c494af7b481"
+}
+```
+
+#### Live applicability snapshot contract
+
+`NpcReactionCandidateLiveApplicabilitySnapshot` is the strict union `NpcReactionCandidateLiveApplicabilityAvailable | NpcReactionCandidateLiveApplicabilityUnavailable`, discriminated by `snapshotStatus`. It is detached, recursively frozen, and built synchronously by `WerewolfGame` from the current session immediately before candidate validation. Building it is a pure read that allocates no authoritative ID, mutates no state, and increments no version. It is valid for this validation call only and is never provider-facing, authoritative history, a registry entry, or permission to commit. Every member has `schemaVersion: 1`, no optional/null fields, and `additionalProperties: false` at every level.
+
+`NpcReactionCandidateLiveApplicabilityAvailable` has `snapshotStatus: "available"`, `engineLifecycleStatus: "active"`, and exactly the remaining fields below:
+
+| Field | Exact type and rule |
+| :--- | :--- |
+| `gameSessionId` | `ID`; current session |
+| `turnId` | `ID`; current originating turn |
+| `turnOrder` | safe integer `>= 0` |
+| `phase` | literal `player_question` for initial Phase 6 validation |
+| `stateVersion` | safe integer `>= 0`; must equal request/pending `preconditionStateVersion` (`N+1`) |
+| `reactionPlanId` | `ID`; current logical reaction |
+| `logicalReactionStatus` | `ReactionLogicalStatus` |
+| `reactionAttemptId` | `ID`; current attempt |
+| `reactionAttemptStatus` | `ReactionAttemptStatus` |
+| `requestId` | `ID` |
+| `requestFingerprint` | `Sha256Fingerprint`; engine recomputation target |
+| `correlationId` | `ID` |
+| `causationId` | `ID`; triggering player commit request |
+| `originatingInputRecordId` | `ID` |
+| `npcId` | `ID`; expected actor |
+| `triggeringPlayerCommit` | exact `NpcReactionTriggeringPlayerCommitSnapshot` |
+| `triggeringInput` | exact `NpcReactionTriggeringInputSnapshot` |
+| `participants` | dense `NpcReactionLiveParticipantSnapshot[2..16]` |
+
+`NpcReactionTriggeringPlayerCommitSnapshot` requires exactly `requestId: ID`, `requestFingerprint: Sha256Fingerprint`, `correlationId: ID`, `inputRecordId: ID`, `turnId: ID`, and `resultingStateVersion: safe integer >= 1`. `NpcReactionTriggeringInputSnapshot` requires exactly `inputRecordId: ID`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `capturedStateVersion: safe integer >= 0`, and `actorId: "player"`. `NpcReactionLiveParticipantSnapshot` requires exactly `participantId: ID`, `participantClass: "player" | "npc"`, and `publicStatus: "alive" | "dead"`.
+
+`NpcReactionCandidateLiveApplicabilityUnavailable` represents a current lookup that cannot produce the complete available member without fabrication. It has exactly `schemaVersion: 1`, `snapshotStatus: "unavailable"`, `currentGameSessionId: ID`, `engineLifecycleStatus: "active" | "destroyed"`, and `missingDimension: "session_replaced" | "turn" | "logical_reaction" | "reaction_attempt" | "trigger_graph" | "roster"`. It contains no expected/request IDs, private facts, or partial roster. Session replacement uses the new current session ID and `missingDimension: "session_replaced"`; destruction uses `engineLifecycleStatus: "destroyed"`. A well-formed unavailable member is valid input and returns `stale_request` at step 10. It is never an invariant exception and prevents a caller from fabricating old IDs after reset, terminal removal, or destruction.
+
+Participant entries are ordered by `participantId`, IDs are unique, exactly one entry has class `player`, and `npcId` resolves exactly once to an `npc` entry; whether that entry remains alive is evaluated as applicability. The exact participant ID/status set must equal the current authoritative roster projection for the snapshot's own `gameSessionId`; replacement/reset produces a current snapshot whose session or roster comparison invalidates the expected request. The snapshot's trigger subgraphs must internally resolve the same current player result and input: commit/request/turn/input identities match the snapshot's own `causationId`, `originatingInputRecordId`, and `turnId`; player result `resultingStateVersion == stateVersion`; and input identities match that current commit. Equality with the expected request and `request.knownInformation.public.triggeringInput` is a step-10 stale/identity comparison, not an input-shape invariant.
+
+Initial applicability requires logical status `active`, attempt status `candidate_received`, and the current actor entry to be alive. It also requires the request/pending/live session, reaction, attempt, request, correlation, trigger/input, turn/order, phase, version, and actor dimensions to agree exactly. Candidate-sensitive final applicability additionally resolves every proposal target exactly once in `participants` and reapplies the kind-specific current-alive requirements. Reset/destroy, session or roster replacement, phase/version advance, logical terminalization, attempt replacement/terminalization, actor death/removal, or target removal/ineligibility returns `stale_request` or the more specific closed authorization code. The validator never refreshes or mutates the snapshot and never treats it as a later commit CAS.
+
+Normative live snapshot example:
+
+```json
+{
+  "schemaVersion": 1,
+  "snapshotStatus": "available",
+  "engineLifecycleStatus": "active",
+  "gameSessionId": "game-session-1",
+  "turnId": "turn-1",
+  "turnOrder": 1,
+  "phase": "player_question",
+  "stateVersion": 2,
+  "reactionPlanId": "reaction-plan-1",
+  "logicalReactionStatus": "active",
+  "reactionAttemptId": "reaction-attempt-1",
+  "reactionAttemptStatus": "candidate_received",
+  "requestId": "reaction-request-1",
+  "requestFingerprint": "ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6",
+  "correlationId": "correlation-1",
+  "causationId": "player-request-1",
+  "originatingInputRecordId": "input-1",
+  "npcId": "npc-aoi",
+  "triggeringPlayerCommit": {
+    "requestId": "player-request-1",
+    "requestFingerprint": "f474c5f4b65312fb30d0edb4a35b12e4406d3e2e112c5470af6ee8c2f508bc22",
+    "correlationId": "player-correlation-1",
+    "inputRecordId": "input-1",
+    "turnId": "turn-1",
+    "resultingStateVersion": 2
+  },
+  "triggeringInput": {
+    "inputRecordId": "input-1",
+    "requestId": "player-request-1",
+    "correlationId": "player-correlation-1",
+    "turnId": "turn-1",
+    "capturedStateVersion": 1,
+    "actorId": "player"
+  },
+  "participants": [
+    { "participantId": "npc-aoi", "participantClass": "npc", "publicStatus": "alive" },
+    { "participantId": "npc-beni", "participantClass": "npc", "publicStatus": "alive" },
+    { "participantId": "player", "participantClass": "player", "publicStatus": "alive" }
+  ]
+}
+```
+
+Normative unavailable member after session replacement:
+
+```json
+{
+  "schemaVersion": 1,
+  "snapshotStatus": "unavailable",
+  "currentGameSessionId": "game-session-2",
+  "engineLifecycleStatus": "active",
+  "missingDimension": "session_replaced"
+}
+```
+
+#### Exact candidate-validation evaluation order
+
+The pure validator executes the following total order. The first failing step returns or throws as stated; no later step executes, and diagnostics cannot change precedence:
+
+0. Validate, strictly reconstruct, and cross-check the exact engine-owned `NpcReactionCandidateValidationInput`, request, pending attempt, observation, and live snapshot. Malformed or internally inconsistent expected context throws an invariant error.
+1. Validate transport metadata: HTTP status evidence, `Content-Type`, charset, and `Content-Encoding`.
+2. Measure `bodyBytes.byteLength`; reject evidence proving more than 65,536 bytes.
+3. Decode fatal UTF-8.
+4. Parse JSON exactly once.
+5. Validate the strict outer field sets of `NpcReactionCandidateHttpResponse` and its nested provider result.
+6. Validate their literal schema versions and operations plus top-level/nested envelope echo agreement.
+7. Reconstruct the expected request fingerprint input and recompute `requestFingerprint`. A mismatch within the engine-owned request is `fingerprint_mismatch`; no provider echo is trusted during recomputation.
+8. Compare every provider binding echo, including its request-fingerprint echo, with the validated expected request and pending attempt.
+9. Apply logical/request identity-conflict checks, including plan/request aliasing represented in the supplied expected context; `idempotency_conflict` precedes stale and duplicate classification.
+10. Apply initial live applicability for session, trigger/input graph, turn/order, phase, version, logical/attempt status, and actor.
+11. Strictly validate the candidate/proposal union, bounds, nesting, nullability, and unknown fields.
+12. Reconstruct a detached normalized candidate.
+13. Compute the engine-owned `candidateFingerprint` from that reconstruction.
+14. Compare `candidateFingerprint` with `observedCandidate`: equal observed fingerprint is `duplicate_response`; different observed fingerprint is `attempt_response_conflict`.
+15. Strictly reconstruct the captured `knownInformation`, compute engine-owned `projectionFingerprint`, verify request/live graph relations, and apply per-proposal authorization in proposal order: candidate-kind allowlist, disclosure policy, actor/target/reference eligibility, and exact actor-owned result-fact checks.
+16. Apply whole-candidate duplicate and contradiction rules.
+17. Apply candidate-sensitive final applicability against the same immutable live snapshot, including current target eligibility and every step-10 dimension. This is a final logical validation boundary, not a second state read and not a commit CAS.
+18. Construct the detached recursively frozen `ValidatedNpcReactionCandidate`, then return the exact validated union member.
+
+The candidate fingerprint is not available before step 13, and the projection fingerprint is not available before step 15. Duplicate classification therefore cannot precede strict candidate structure/reconstruction. Semantic authorization cannot precede observation conflict classification. No raw/provider object is frozen or returned, and no step allocates an authoritative ID, calls a provider, changes an attempt status, writes a registry, publishes, displays, or increments a version.
+
+The exhaustive stage contract is:
+
+| Step | Accepted input / validation | Success output | Primary failure | Location | Later stages | Mutation / version |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 0 | unknown root; strict reconstruction and exact expected-context cross-check | detached expected context | closed invariant exception | none/public diagnostic forbidden | no on failure | `0 / 0` |
+| 1 | exact transport evidence; validate status/header grammar | accepted identity JSON metadata | `invalid_envelope` | `http_envelope` | no on failure | `0 / 0` |
+| 2 | accepted metadata; measure actual `Uint8Array` | complete body of at most 65,536 bytes | `body_too_large` | `http_envelope` | no on failure | `0 / 0` |
+| 3 | bounded bytes; fatal UTF-8 decode | decoded Unicode text | `malformed_json` | `http_envelope` | no on failure | `0 / 0` |
+| 4 | decoded text; JSON parse | one parsed value | `malformed_json` | `http_envelope` | no on failure | `0 / 0` |
+| 5 | parsed value; strict HTTP/provider outer field sets | strict outer envelope shape | `invalid_envelope` | `http_envelope` or `provider_result` | no on failure | `0 / 0` |
+| 6 | strict outer shape; literal versions/operations and envelope echoes | supported operation envelope | `unsupported_schema_version` or `invalid_envelope` | `http_envelope` or `provider_result` | no on failure | `0 / 0` |
+| 7 | validated expected request; engine request-fingerprint recomputation | trustworthy expected request fingerprint | `fingerprint_mismatch` | `fingerprint` | no on failure | `0 / 0` |
+| 8 | strict envelope and expected request/pending; all echo comparisons | correlated provider candidate | `binding_mismatch` | `binding` | no on failure | `0 / 0` |
+| 9 | correlated identities; logical/request alias checks | conflict-free logical identity | `idempotency_conflict` | `binding` | no on failure | `0 / 0` |
+| 10 | conflict-free identity; initial live binding/status check | initially applicable response | `stale_request` | `live_state` | no on failure | `0 / 0` |
+| 11 | untrusted candidate; strict proposal shape/bounds | structurally valid candidate source | `invalid_candidate_schema` or `unsupported_in_phase6` | `candidate` or `proposal` | no on failure | `0 / 0` |
+| 12 | valid source; detached candidate reconstruction | normalized candidate | structural failure from step 11 only | `candidate` | yes | `0 / 0` |
+| 13 | normalized candidate; canonical hash | engine-owned candidate fingerprint | invariant exception only if canonical engine data is invalid | none/public diagnostic forbidden | yes | `0 / 0` |
+| 14 | normalized candidate and observation union; exact fingerprint comparison | unobserved candidate | `duplicate_response` or `attempt_response_conflict` | `provider_result` | no on failure | `0 / 0` |
+| 15 | unobserved candidate and captured projection; strict projection/hash/graph plus ordered authorization | normalized projection, projection fingerprint, individually authorized proposals | applicable closed authorization code | corresponding closed location | no on failure | `0 / 0` |
+| 16 | authorized proposals; whole-candidate duplicate/contradiction rules | coherent whole candidate | `duplicate_proposal` or `contradictory_proposals` | `proposal` | no on failure | `0 / 0` |
+| 17 | coherent candidate; candidate-sensitive check against the same snapshot | finally applicable candidate | `stale_request`, specific authorization code, or `final_live_validation_failure` | `live_state` or specific closed location | no on failure | `0 / 0` |
+| 18 | all prior outputs; detached value assembly and recursive freeze | exact validated result union member | invariant exception only if engine assembly violates its contract | none/public diagnostic forbidden | complete | `0 / 0` |
+
+#### Transport reason-code responsibility boundary
+
+Reason ownership is exact and prevents a parsed-object harness from claiming evidence it cannot prove:
+
+| Evidence/layer | Codes this validator may issue | Rule |
+| :--- | :--- | :--- |
+| raw success-response transport evidence | `body_too_large`, `malformed_json`, `invalid_envelope` | size, fatal UTF-8/JSON, media type/charset/encoding respectively |
+| parsed HTTP/provider envelope | `invalid_envelope`, `unsupported_schema_version` | strict envelope/operation/echo shape and literal schema versions |
+| expected/provider binding | `binding_mismatch`, `idempotency_conflict`, `fingerprint_mismatch` | candidate fingerprint never produces `fingerprint_mismatch` |
+| observed-candidate comparison | `duplicate_response`, `attempt_response_conflict` | engine-computed candidate fingerprints only |
+| candidate structure/semantics/live snapshot | the existing closed structure, authorization, and applicability codes below | no transport code is copied into these layers |
+
+There is no exported parsed-object-only candidate validator. Internal helpers that receive an already parsed value may emit only envelope, binding, structure, fingerprint, duplicate, authorization, or applicability outcomes, never `body_too_large` or `malformed_json`. A future HTTP endpoint may translate invalid request media type to the existing HTTP `ErrorEnvelope` code `unsupported_media_type`, but this provider-success validator returns runtime `invalid_envelope`; neither code is mechanically copied into the other contract. Network errors, non-200 statuses, timeouts, aborts, and unavailable providers are coordinator/provider outcomes and cannot be synthesized as candidate-validation rejections.
+
+Normative classification vectors:
+
+| Input condition | First outcome |
+| :--- | :--- |
+| 65,537 response body bytes | `transport/body_too_large/http_envelope` |
+| fatal UTF-8 failure or syntactically invalid JSON | `transport/malformed_json/http_envelope` |
+| missing charset or non-identity content encoding | `transport/invalid_envelope/http_envelope` |
+| valid envelope with mismatched provider request echo | `binding/binding_mismatch/binding` |
+| recomputed request fingerprint differs | `fingerprint/fingerprint_mismatch/fingerprint` |
+| same attempt and same engine-computed observed candidate fingerprint | `duplicate/duplicate_response/provider_result` |
+| same attempt and different engine-computed observed candidate fingerprint | `duplicate/attempt_response_conflict/provider_result` |
+| valid candidate after the supplied live snapshot shows a phase/version/attempt mismatch | `applicability/stale_request/live_state`; candidate authorization does not execute |
+| structurally valid unobserved candidate denied by disclosure policy | `authorization/permission_denied/policy` |
+
+The byte-boundary and malformed-input vectors are constructed without embedding a large raw body in this document:
+
+```js
+const maxAcceptedBody = new Uint8Array(65_536);
+
+const tooLargeEvidence = Object.freeze({
+  ...evidence,
+  bodyBytes: new Uint8Array(65_537)
+});
+
+const malformedUtf8Evidence = Object.freeze({
+  ...evidence,
+  bodyBytes: Uint8Array.of(0xc3, 0x28)
+});
+
+const malformedJsonEvidence = Object.freeze({
+  ...evidence,
+  bodyBytes: new TextEncoder().encode("{")
+});
+```
+
+`maxAcceptedBody.byteLength === 65_536` and proceeds past the byte-limit step, where only its later content can reject it. `tooLargeEvidence.bodyBytes.byteLength === 65_537` and fails before decoding. `malformedUtf8Evidence` is bounded but fails fatal UTF-8 decoding before `JSON.parse`; `malformedJsonEvidence` decodes successfully and then fails `JSON.parse`. Both latter failures use `malformed_json`.
+
 #### Candidate fingerprint
 
 After the complete response and proposal shapes pass strict structural validation, the engine reconstructs the detached normalized `NpcReactionCandidate` and computes:
@@ -1750,9 +2049,9 @@ The rejection codes, stages, and normal diagnostic locations are exact:
 
 | `reasonCode` | `stage` | Normal `location` | Covered classification |
 | :--- | :--- | :--- | :--- |
-| `body_too_large` | `transport` | `http_envelope` | decoded body exceeds 65,536 bytes |
-| `malformed_json` | `transport` | `http_envelope` | body is not valid JSON |
-| `invalid_envelope` | `transport` | `http_envelope` or `provider_result` | media/encoding, operation, required envelope, or strict provider-result shape is invalid |
+| `body_too_large` | `transport` | `http_envelope` | raw identity entity-body evidence exceeds 65,536 bytes before UTF-8 decoding |
+| `malformed_json` | `transport` | `http_envelope` | body is not fatal UTF-8 or is not valid JSON |
+| `invalid_envelope` | `transport` | `http_envelope` or `provider_result` | media/charset/encoding, operation, required envelope, or strict provider-result shape is invalid |
 | `unsupported_schema_version` | `transport` | `http_envelope` or `provider_result` | any required schema version is not literal `1` |
 | `binding_mismatch` | `binding` | `binding` | an echo differs from the active request/pending binding |
 | `stale_request` | `applicability` | `live_state` | session, turn, phase, version, actor, target, or active attempt is no longer applicable |
@@ -1770,7 +2069,7 @@ The rejection codes, stages, and normal diagnostic locations are exact:
 | `result_fact_mismatch` | `authorization` | `known_information` | result target/value lacks the exact actor-owned projected fact |
 | `role_disclosure_policy_unknown` | `authorization` | `policy` | disclosure policy is outside the closed enum |
 | `known_information_boundary_violation` | `authorization` | `known_information` | candidate use would cross the captured actor/public information boundary |
-| `fingerprint_mismatch` | `fingerprint` | `fingerprint` | request or candidate fingerprint does not equal engine recomputation |
+| `fingerprint_mismatch` | `fingerprint` | `fingerprint` | request fingerprint does not equal engine recomputation; candidate fingerprints use the duplicate/conflict codes |
 | `final_live_validation_failure` | `applicability` | `live_state` | final live semantic/applicability recheck fails without a more specific stale code |
 
 The first failing layer controls `reasonCode`; later layers are not executed. A diagnostic may repeat that reason and may add only other codes already observed in the same executed layer, up to eight total. It cannot expose which hidden role, team, investigation fact, private score, or policy payload caused a denial. The exact `reasonCode`, but never the diagnostics array, may be copied into the existing redacted lifecycle observation. HTTP outcomes remain the coarser `ErrorEnvelope`; this runtime result is never returned to the provider or copied into public history.
@@ -1862,13 +2161,7 @@ The future engine-owned authoritative preparation stage is responsible for the r
 
 While only the validation stage exists, it is exercised through pure contract/validator APIs and an explicit non-routing integration harness. `NPC_STRUCTURED_REACTION_MODE` must not route an ordinary top-level command into a live provider workflow that can stop with logical `active` or attempt `validated`; the current inert route remains unchanged until a later reviewed coordinator stage can either continue through preparation/commit or reach an existing legal terminal status. Validation-only code must not invent a terminal “success”, mark an attempt `accepted`, or hold a player command open.
 
-Validation is ordered and fail-closed:
-
-1. **Transport:** validate content type/encoding/size/schema; exact top-level and nested echoes; active pending/logical/attempt identity; and abort/late-attempt state.
-2. **Structure:** require exact fields, enums, IDs, safe integers, array/nesting bounds, non-null values, and `additionalProperties: false`; reconstruct the detached candidate and compute its fingerprint.
-3. **Semantic authorization:** re-resolve actor, trigger, policy, targets, and exact result facts using the captured projection and matching live state, then apply the whole-candidate duplicate/contradiction rules above.
-4. **Validation-only result:** retain only the immutable runtime candidate/binding/fingerprint and a redacted outcome; perform zero authoritative writes or external display effects.
-5. **Later preparation and commit:** outside the validation-only implementation, allocate authoritative IDs, derive a closed copy-on-write delta, repeat final session/turn/order/phase/version/actor/target/identity/policy/CAS checks, and atomically publish or restore the exact `N+1` snapshot.
+Validation is ordered and fail-closed by the exact nineteen-stage evaluation order numbered 0 through 18 above. In summary, raw transport evidence precedes envelope and binding checks; request fingerprint and initial live applicability precede candidate reconstruction; observed-candidate duplicate/conflict comparison follows engine-owned candidate fingerprint computation and precedes semantic authorization/projection fingerprinting; final applicability is last. A successful validation retains only the immutable runtime candidate/binding/fingerprints and redacted outcome with zero authoritative writes or external display effects. Later preparation and commit remain outside validation-only implementation and must repeat live session/turn/order/phase/version/actor/target/identity/policy/CAS checks before any atomic publication.
 
 Validation never degrades on retry. Raw provider text, a legacy text field, display output, a server response, or sink acknowledgement cannot bypass a failed layer. The provider selects semantic proposals only; later engine rule functions alone may construct closed authoritative effects.
 
@@ -1907,7 +2200,7 @@ A candidate referencing hidden information must be authorized against the captur
 
 ### Identity, idempotency, and terminal retention
 
-The reaction idempotency key is `(gameSessionId, reactionPlanId, requestId)` with exact `requestFingerprint`. `correlationId` is checked for equality but is not part of the key. Attempt response deduplication additionally uses `(reactionAttemptId, candidateFingerprint)`. Classification is ordered: exact committed replay, identity conflict, stale applicability, invalid response, duplicate terminal/repeated delivery, then ordinary validation. None of these read/classification paths commits or increments a version.
+The reaction idempotency key is `(gameSessionId, reactionPlanId, requestId)` with exact `requestFingerprint`. `correlationId` is checked for equality but is not part of the key. Attempt response deduplication additionally uses `(reactionAttemptId, candidateFingerprint)`. An exact committed replay is resolved before provider work and therefore never invokes candidate validation. For a raw response that does enter the pure validator, section 25A's exact stages 0 through 18 control precedence: transport/envelope/request-fingerprint/binding checks, logical identity conflict, stale applicability, candidate structure/fingerprint, observed duplicate/conflict, authorization, and final applicability. This is the exact interpretation of the cases in the matrix below. None of these read/classification paths commits or increments a version.
 
 | Case | Required classification | State-machine/result behavior |
 | :--- | :--- | :--- |

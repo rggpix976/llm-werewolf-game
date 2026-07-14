@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Defined the remaining Phase 6 validation-only input boundary: raw HTTP success-response evidence before UTF-8/JSON parsing, one strict pure validation input, an engine-owned observed-candidate union, an exact live applicability projection, a nineteen-stage fail-closed evaluation order numbered 0 through 18, and explicit transport/runtime reason-code ownership. No runtime, provider, endpoint, routing, coordinator, or candidate-validation implementation changed.
 - Defined the docs-only Phase 6 NPC candidate-validation contract: exact correlated request/success envelopes, a strict four-member proposal union, kind-specific target authorization, a closed role-disclosure policy, reproducible candidate fingerprints, an immutable detached `ValidatedNpcReactionCandidate`, a closed redacted validation-result union, and a nonauthoritative validation-only lifecycle boundary. Runtime/provider/commit behavior is unchanged.
 - Added the Phase 4 `PlayerLegacyDisplayCompatibilityRecord` writer and session-scoped registry. Each Phase 4 player publication now atomically records one engine-owned mapping to its unchanged legacy player-log location using the canonical-entry SHA-256 fingerprint in the existing `N -> N+1` transaction.
 - Added strict mapping schema and committed-graph validation, one-to-one identity/cardinality checks, final-CAS append-location protection, replay corruption rejection without backfill, complete working-copy rollback, and immutable read-only lookup by publication or mapping ID.

@@ -8,7 +8,7 @@ Last updated: 2026-07-14
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. Phase 5 resolves that identity without positional/text inference and keeps history, live delivery, and acknowledgement separate.
 - Phase 6 architecture is defined in `docs/conversation-pipeline-design.md`. The merged foundation provides the default-off flag, engine-owned logical/attempt identity domains, pure known-information projection, and no-op route compatibility; it does not call a candidate provider or perform an NPC structured commit.
 - The browser-safe engine identity/fingerprint implementation and SHA-256 boundary coverage are merged. No weak random fallback, Node-only browser import, dependency, polyfill, or bundler was added.
-- The Phase 6 NPC candidate-validation contract is defined authoritatively, including its exact request/response envelopes, proposal union, target and disclosure authorization, candidate fingerprint, immutable `ValidatedNpcReactionCandidate`, closed validation-result union, redacted rejection contract, and validation-only lifecycle boundary. Production candidate-validation implementation has not started, and the previously blocked Phase 6 implementation Goal has not been resumed.
+- The Phase 6 NPC candidate-validation contract is defined authoritatively, including exact raw success-response transport evidence, the pure validation input, observed-candidate fingerprint ownership, live applicability snapshot, total evaluation order, transport reason-code ownership, request/response envelopes, proposal authorization, immutable validated value, redacted rejection union, and validation-only lifecycle boundary. Production candidate-validation implementation has not started, and the previously blocked Phase 6 implementation Goal remains BLOCKED and has not been resumed or changed.
 - Validation-only success is explicitly nonauthoritative: no descriptor/claim/event/publication/commit ID, delta, `N+1 -> N+2`, display, acknowledgement, or legacy fallback is created by candidate validation.
 - Exact replay performs no redisplay or provider call, and all migration feature flags remain default-off.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
@@ -57,7 +57,7 @@ Last updated: 2026-07-14
 
 ## Next Recommended Task
 
-1. Define and approve a new validation-only implementation Goal from the latest `master`, following the implementation sequence in section 25A.
+1. After this docs-only boundary is reviewed and merged, define and approve a new validation-only implementation Goal from that latest `master`, following the exact input and evaluation sequence in section 25A.
 2. Keep authoritative preparation/commit, `N+1 -> N+2`, publication, retry/timeout coordination, provider routing, and Renderer migration in their later separately reviewed stages.
 
 ## Read This First Next Time
