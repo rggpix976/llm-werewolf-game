@@ -2331,7 +2331,7 @@ Validation never degrades on retry. Raw provider text, a legacy text field, disp
 
 ### Pure authoritative NPC reaction preparation
 
-This subsection is normative for the separately reviewed preparation stage in migration step 5. It defines what is prepared from one `ValidatedNpcReactionCandidate`; it does not define final replay lookup, compare-and-commit order, atomic application, coordinator/tombstone transitions, provider routing, or publication delivery. Those commit responsibilities remain the next Authoritative Commit Contract.
+This subsection is normative for the separately reviewed preparation stage in migration step 5. It defines what is prepared from one `ValidatedNpcReactionCandidate`; it does not perform final replay lookup, compare-and-commit, atomic application, coordinator/tombstone transition, provider routing, or publication delivery. The following Authoritative Commit Contract defines the commit responsibilities without implementing them.
 
 Initial Phase 6 preparation is canonical-only. Every one of the four accepted proposal types becomes a canonical descriptor/artifact set. Preparation never accepts or returns controlled commentary, commentary descriptors, a `RendererRequest`, a controlled-publication reservation, a fallback variant, or a finalization record. Those remain Phase 7.
 
@@ -2628,9 +2628,294 @@ For status/actor reachability, start from the valid preparation input above and 
 
 Invariant errors are runtime errors, not JSON result members. Example: malformed allocation with duplicate IDs throws `NpcReactionPreparationInvariantError` with `code == "duplicate_engine_id"` and the fixed redacted message.
 
-#### Explicit commit-contract handoff
+#### Explicit preparation/commit boundary
 
-This preparation contract constructs an expected result and an uncommitted idempotency reservation but does not define or perform idempotency-index lookup, replay priority, final CAS, atomic insertion/application order, rollback implementation, logical/attempt status transition, tombstone write, compatibility-route replacement, or `N+1 -> N+2`. The next Authoritative Commit Contract must define those operations before any prepared value is connected to production.
+This preparation contract constructs an expected result and an uncommitted idempotency reservation but performs none of the commit operations below. The following Authoritative Commit Contract closes idempotency lookup, replay priority, final CAS, atomic insertion/application order, rollback, lifecycle/tombstone ordering, compatibility-route replacement, and `N+1 -> N+2`. Neither contract connects a prepared value to production; runtime implementation remains a later separately reviewed stage.
+
+### Authoritative NPC reaction commit
+
+This subsection is normative for initial Phase 6 canonical-only commit. It defines how one previously prepared value may become authoritative. It does not implement preparation, commit, replay, coordinator/tombstone runtime, provider routing, delivery, Renderer, or any Phase 7/8/9 behavior.
+
+#### Commit audit closure matrix
+
+| Commit contract | Existing authority | Runtime evidence | Exact pre-change gap | Contract closed here |
+| :--- | :--- | :--- | :--- | :--- |
+| replay lookup | section 6A and reaction identity prose | player replay by request/fingerprint | no reaction lookup/result union | exact pre-provider lookup and stored-graph verification |
+| idempotency record | preparation reservation only | player idempotency records | no committed reaction record/index | strict reaction record, separate registry, shared uniqueness constraints |
+| commit API | none | internal player commit method | no reaction entrypoint/input/result | one synchronous internal entrypoint and closed unions |
+| final CAS | section 6A prose | Phase 4 live checks | incomplete dimension/order list | exact current-state dimensions and first-failure order |
+| atomic apply | copy-on-write requirement | `_workingCopy()` plus one `commitState()` | no reaction graph apply order | detached graph stages, validation, one root publication |
+| lifecycle | reaction state-machine prose | foundation status validators | no commit outcome transition matrix | exact attempt/logical terminal classification |
+| tombstone | bounded registry prose | none | capacity could fail after commit | provider-before terminal-slot reservation and strict tombstone union |
+| publication ownership | canonical publication prose | shared publication registry | transaction boundary incomplete | exactly one same-transaction canonical publication |
+| legacy replacement | section 6A principle | provisional Phase 4 reaction transaction | replacement call site not closed | route-fixed replacement at the same `N+1 -> N+2` ledger position |
+
+#### Authority and exact entrypoints
+
+Only the active browser- or CLI-process `WerewolfGame` that owns the session may commit. The server, provider, browser/CLI adapter, publication sink, history reader, observer, tombstone, caller snapshot, and prepared value are not authorities. Immediately before commit, `WerewolfGame` rereads its current authoritative root; supplied preparation evidence never substitutes for current truth.
+
+The one internal commit entrypoint is:
+
+```js
+_commitPreparedNpcReaction(input)
+```
+
+It is synchronous and returns `NpcReactionCommitExecutionResult`. It is not a public browser/CLI API and cannot be called directly by a server, provider, adapter, sink, or observer. From input reconstruction through authoritative root publication it performs no `await`, provider/network operation, timer, callback, observer, DOM/CLI write, Renderer work, or event-loop yield. No external code executes after final CAS begins and before the root is published.
+
+`NpcReactionCommitInput` requires exactly `schemaVersion: 1` and `preparedReaction: PreparedCanonicalNpcReaction`; it has no optional/null fields and `additionalProperties: false`. Commit reconstructs a detached value, recalculates the preparation fingerprint, requires outer/delta/reservation fingerprint equality, and shares no caller-owned reference. Raw candidate, provider body, preparation snapshot, current state, lifecycle state, or registry is forbidden in the input. Current state, active logical reaction, winning attempt, terminal-slot reservation, and indexes are read only from the owning `WerewolfGame`.
+
+The pre-provider read-only entrypoint is:
+
+```js
+_lookupNpcReactionCommitReplay(input)
+```
+
+It is synchronous and returns `NpcReactionCommitReplayLookupResult`. It never validates a candidate, prepares, allocates an ID/order, advances a counter/version, mutates lifecycle/state, appends a publication, delivers, or reopens a terminal operation.
+
+#### Pre-provider replay lookup contract
+
+`NpcReactionCommitReplayLookupInput` requires exactly `schemaVersion: 1`, `gameSessionId`, `reactionPlanId`, `requestId`, `requestFingerprint`, `correlationId`, `causationId`, `originatingInputRecordId`, `turnId`, `turnOrder`, `preconditionPhase`, `preconditionStateVersion`, and `npcId`. IDs/fingerprint/phase use existing types; integers are safe and non-negative. It has no optional/null fields and `additionalProperties: false`.
+
+`NpcReactionCommitReplayLookupResult` is the strict union:
+
+- `not_found`: exactly `{ schemaVersion: 1, status: "not_found" }`.
+- `replayed`: exactly `{ schemaVersion: 1, status: "replayed", result: CanonicalNpcReactionCommitResult }`.
+- `conflict`: exactly `{ schemaVersion: 1, status: "conflict", conflictCode: NpcReactionCommitLookupConflictCode }`.
+
+`NpcReactionCommitLookupConflictCode` is `idempotency_conflict | identity_conflict`. A primary-key/request-fingerprint disagreement is `idempotency_conflict`; any request/plan/trigger/attempt alias disagreement is `identity_conflict`. Exact replay is resolved before current phase/version stale checks and remains valid after later unrelated transactions, provided the complete stored graph is intact. It returns a detached recursively frozen stored result and never rebuilds from current locale, renderer version, roster, tombstone, or display state.
+
+The replay trace is exact:
+
+| Lookup evidence | Index | Stored graph checked | Outcome | Mutation |
+| :--- | :--- | :--- | :--- | :---: |
+| no primary record and no alias | reaction primary plus secondary uniqueness | none | `not_found` | 0 |
+| exact primary/request identity | primary reaction index | plan, result, publication, claims, events, segments, idempotency record | `replayed` | 0 |
+| exact primary, different request fingerprint | primary reaction index | no stale/CAS work | `conflict/idempotency_conflict` | 0 |
+| request, plan, trigger, or attempt alias | secondary uniqueness indexes | no stale/CAS work | `conflict/identity_conflict` | 0 |
+| primary exists but committed graph is corrupt | all authoritative registries | complete integrity check | throw `corrupt_committed_reaction_graph` | 0 |
+
+#### Committed idempotency record and indexes
+
+`NpcReactionCommitIdempotencyRecord` requires exactly `schemaVersion: 1`, `recordType: "npc_reaction_commit_idempotency"`, `gameSessionId`, `reactionPlanId`, `requestId`, `requestFingerprint`, `preparationFingerprint`, `successfulAttemptId`, `correlationId`, `causationId`, `originatingInputRecordId`, `turnId`, `turnOrder`, `npcId`, `preconditionStateVersion`, `resultingStateVersion`, `npcPublicationId`, and `commitResultRequestId`.
+
+It has no optional/null fields and `additionalProperties: false`. All identity fields use `ID`; both fingerprints use `Sha256Fingerprint`; order/version values are safe non-negative integers; resulting version is precondition plus one; `commitResultRequestId == requestId`. Plan, result, publication, successful attempt, request, version, and origin identities resolve exactly in the stored graph. It has no separate record ID and stores no candidate/projection fingerprint, provider metadata/body, private projection/fact, display/rendered text, policy payload, or diagnostic.
+
+The authoritative reaction primary key is `(gameSessionId, reactionPlanId, requestId)` with exact `requestFingerprint`. Reaction records use a separate `npcReactionCommitIdempotencyRecords` registry because the existing player idempotency record has a different exact schema. Separation does not permit request reuse: one shared session-scoped request-identity uniqueness index covers player and reaction result/idempotency registries. The commit-result registry key is `(gameSessionId, requestId)`; inside the session-scoped state root this is physically the unique `requestId`. No new commit-result payload or schema version is introduced.
+
+The transaction enforces these logical indexes together:
+
+1. reaction primary `(gameSessionId, reactionPlanId, requestId)`;
+2. shared session request ID uniqueness;
+3. session reaction-plan ID uniqueness;
+4. initial one-reaction trigger `(gameSessionId, causationId, originatingInputRecordId, npcId)`;
+5. successful-attempt-to-committed-plan uniqueness;
+6. artifact-ID-to-object uniqueness;
+7. commit-result `(gameSessionId, requestId)`;
+8. reaction-plan and canonical-publication registries.
+
+Same primary with different request or preparation fingerprint is `idempotency_conflict`. Same request/different plan, same plan/different request, same trigger/different logical reaction, same attempt/different plan, same publication/different reaction, or same artifact ID/different object is `identity_conflict`. Only a byte-for-byte canonical-equal committed graph is replay. Pre-provider lookup has no preparation fingerprint, so it proves request identity plus stored graph integrity; a final-commit race additionally requires the stored preparation fingerprint to equal the supplied prepared value.
+
+Replay trusts no idempotency record in isolation. It resolves exactly one `NpcReactionPlan`, `CanonicalNpcReactionCommitResult`, `NpcCanonicalUtterancePublishedRecord`, every created claim/event/segment, the successful attempt, and all request/correlation/causation/origin/turn/actor/version/fingerprint/order identities. Missing, dangling, duplicate, or mismatched stored data throws `corrupt_committed_reaction_graph`; it never returns replay/conflict. Replay allocates/publishes/increments nothing and never reopens lifecycle.
+
+#### Commit result and failure contracts
+
+`NpcReactionCommitExecutionResult` is exactly:
+
+- committed: `{ schemaVersion: 1, status: "committed", result: CanonicalNpcReactionCommitResult }`;
+- replayed: `{ schemaVersion: 1, status: "replayed", result: CanonicalNpcReactionCommitResult }`;
+- rejected: `{ schemaVersion: 1, status: "rejected", binding: NpcReactionCommitRejectionBinding, rejection: NpcReactionCommitRejection }`.
+
+Every member has no optional/null fields and `additionalProperties: false`. Committed/replayed results have the same shape; replay changes no authoritative/lifecycle/counter/publication state.
+
+`NpcReactionCommitRejectionBinding` requires exactly `schemaVersion: 1`, `gameSessionId`, `reactionPlanId`, `successfulAttemptId`, `requestId`, `correlationId`, `turnId`, `preconditionStateVersion`, and `npcId`, copied from reconstructed engine-owned preparation evidence. `NpcReactionCommitRejection` requires exactly `stage`, `reasonCode`, `retryable: false`, and `diagnostics`. Diagnostics are dense `NpcReactionCommitDiagnostic[0..8]`, each exactly `{ code, location }`; there is no message/free-form path/body/private fact/role/team/policy/provider/stack/prepared graph.
+
+Stages are `idempotency | applicability | authorization | allocation | ordering | integrity | application`. Locations are `idempotency_record | identity_index | session | turn | phase | state_version | logical_reaction | attempt | actor | target | reference | policy | known_information | artifact_allocation | order_reservation`. Initial Phase 6 emits no ordinary rejection at `application`; application failures are invariant errors.
+
+| Active reason code | Stage/location | Exact first reachable vector |
+| :--- | :--- | :--- |
+| `idempotency_conflict` | `idempotency/idempotency_record` | existing primary/request record has a different request or preparation fingerprint |
+| `identity_conflict` | `idempotency/identity_index` | request/plan/trigger/publication/attempt/artifact alias conflicts with another owner |
+| `stale_session` | `applicability/session` | no replay/conflict; current session differs or is destroyed |
+| `stale_turn` | `applicability/turn` | session matches; current turn ID/order differs |
+| `stale_phase` | `applicability/phase` | turn matches; current phase differs |
+| `stale_state_version` | `applicability/state_version` | phase matches; current version differs from prepared `N+1` |
+| `logical_reaction_mismatch` | `applicability/logical_reaction` | immutable binding/trigger matches but active logical identity/status is not exact `active` |
+| `attempt_mismatch` | `applicability/attempt` | logical reaction is active but winning attempt identity/status is not exact `validated` |
+| `actor_ineligible` | `authorization/actor` | actor is removed, dead, or cannot speak |
+| `target_ineligible` | `authorization/target` | referenced target is removed/reclassified or fails kind-specific life eligibility |
+| `invalid_reference` | `authorization/reference` | triggering result/input/event or referenced prior claim/event no longer resolves exactly |
+| `permission_denied` | `authorization/policy` | current disclosure policy no longer authorizes a role/result proposal |
+| `result_fact_mismatch` | `authorization/known_information` | no exact current actor-owned target/result pair authorizes the result claim |
+| `artifact_id_collision` | `allocation/artifact_allocation` | a prepared artifact ID is now occupied by a different object |
+| `order_precondition_mismatch` | `ordering/order_reservation` | any captured next-created/publication-slot/record-append value differs |
+| `state_version_exhausted` | `ordering/state_version` | current precondition is `Number.MAX_SAFE_INTEGER` |
+| `order_exhausted` | `ordering/order_reservation` | a required counter addition exceeds safe-integer range |
+
+The first row that applies ends evaluation and later diagnostics are not added. All rejected results preserve authoritative state/version/counters exactly and terminalize only through the lifecycle table below.
+
+`NpcReactionCommitInvariantError` has exact `name: "NpcReactionCommitInvariantError"`, fixed message `Invalid NPC reaction commit operation.`, and exactly one `code`; it stores no cause, raw value, free-form path, provider data, or additional field. Closed codes are `invalid_commit_input | unsupported_commit_schema | invalid_prepared_reaction | preparation_fingerprint_mismatch | invalid_commit_delta | corrupt_committed_reaction_graph | invalid_idempotency_record | invalid_authoritative_registry | invalid_terminal_slot_reservation | commit_application_failure | working_copy_validation_failure`. Malformed engine input, corrupt stored graphs/registries, impossible prepared graphs, missing/foreign terminal reservation, and internal application failure throw; expected current-state mismatch returns the closed rejection union.
+
+#### Terminal-slot reservation and tombstone union
+
+Before any logical-reaction ID allocation or provider call, the session-local coordinator must prove that one terminal slot is available. It then allocates `reactionPlanId` and inserts its `ReactionTerminalSlotReservation` as one synchronous failure-free logical-reaction creation step, before request/attempt/content IDs or provider work; it never leaves an allocated plan ID without a reservation. The reservation requires exactly `schemaVersion: 1`, `reservationType: "reaction_terminal_slot"`, `gameSessionId: ID`, `reactionPlanId: ID`, `terminalOrder: safe integer >= 0`, and `status: "reserved"`; no optional/null/extra fields. The active logical reaction exclusively owns it. It is nonauthoritative, changes version by zero, is never history/observer data, cannot be evicted early, and is destroyed on reset.
+
+Capacity is always `tombstones.size + terminalSlotReservations.size <= 1024`. Failure occurs before logical/request/attempt/content ID allocation and provider work. Terminalization converts the exact reservation into exactly one tombstone using the same terminal order. Missing/foreign/duplicate reservation or terminal order is `invalid_terminal_slot_reservation`.
+
+`ReactionTombstoneAttemptSummary` is a strict union. Common fields are `schemaVersion: 1`, `reactionAttemptId`, and `status: ReactionAttemptStatus`. The `observation: "none"` member forbids a fingerprint; the `observation: "fingerprinted"` member additionally requires `candidateFingerprint: Sha256Fingerprint`. Attempt summaries are unique, in attempt creation order, and bounded by configured `maxAttempts`.
+
+`ReactionTombstone` is the union below. Common fields are `schemaVersion: 1`, `gameSessionId`, `reactionPlanId`, `requestId`, `requestFingerprint`, `correlationId`, `causationId`, `originatingInputRecordId`, `npcId`, `preconditionStateVersion`, `terminalOrder`, and `attempts: ReactionTombstoneAttemptSummary[0..maxAttempts]`.
+
+- committed member requires `tombstoneType: "committed"`, `terminalStatus: "committed"`, `successfulAttemptId`, `preparationFingerprint`, `npcPublicationId`, and `commitResultRequestId`;
+- non-commit member requires `tombstoneType: "non_commit"`, `terminalStatus: "rejected" | "superseded" | "cancelled" | "exhausted"`, and `reason: "identity_conflict" | "stale_applicability" | "authorization_failure" | "allocation_failure" | "ordering_failure" | "retry_exhausted" | "cancelled" | "internal_failure"`.
+
+Members have no optional/null/extra fields. They contain no raw candidate/provider body/projection/private fact/display/rendered text/sink/DOM/stack. A committed tombstone is only a lookup hint: replay must verify authoritative plan/result/publication. Non-commit tombstones never reconstruct authority.
+
+#### Exact replay/CAS order and traces
+
+The commit entrypoint executes exactly these stages:
+
+0. strict input/prepared/fingerprint/terminal-slot invariant checks;
+1. primary idempotency lookup;
+2. exact committed graph replay verification;
+3. request/plan/trigger/publication/attempt/artifact alias checks;
+4. current session;
+5. current turn ID/order;
+6. current phase;
+7. current state version;
+8. triggering player result/origin input/causation graph;
+9. logical reaction identity/status;
+10. winning attempt identity/status;
+11. actor roster/alive/speech eligibility;
+12. target/reference current integrity;
+13. current disclosure/result-fact authorization;
+14. artifact collisions;
+15. all three order-counter preconditions;
+16. state-version/counter exhaustion;
+17. complete prepared graph referential integrity;
+18. detached authoritative working-copy construction;
+19. complete working-copy validation;
+20. exactly one authoritative root publication;
+21. nonauthoritative lifecycle/tombstone finalization;
+22. redacted observer notification.
+
+Malformed input precedes lookup; exact replay and idempotency conflict precede stale checks; only `not_found` proceeds to CAS. Final CAS failure mutates nothing. No callback occurs before step 22. A first failure returns/throws immediately and no partial result is returned.
+
+The CAS trace is normative:
+
+| Step | Current source | Prepared evidence | Failure | Lifecycle outcome |
+| ---: | :--- | :--- | :--- | :--- |
+| 1-3 | idempotency/result/plan/publication/index registries | request, preparation, artifact identities | replay, conflict, or invariant corruption | replay retains terminal state; conflict follows conflict row |
+| 4-7 | root session/turn/phase/version | binding and precondition | exact `stale_*` | attempt `aborted`, logical `superseded` |
+| 8-10 | committed trigger graph and active coordinator | causation/origin/logical/attempt | reference/logical/attempt rejection | rejection-specific terminal row |
+| 11-13 | current roster/rules/private actor-owned authorization | actor/target/claim descriptors | authorization rejection | attempt/logical `rejected` |
+| 14-16 | occupied IDs and three root counters | allocation/reservation/version arithmetic | allocation/ordering rejection | attempt `failed`, logical `rejected` |
+| 17-19 | complete current graph and detached working copy | prepared delta/fingerprint | invariant throw | internal failure terminalization after discarding copy |
+| 20 | current live root | fully validated working root | single synchronous replacement | authoritative `N+2` committed |
+| 21-22 | coordinator reservation/observer | committed result IDs/redacted outcome | cleanup/observer failure isolated | authoritative commit remains committed |
+
+Final CAS rereads and compares every dimension: session ID; turn ID/order; phase; state version; reaction plan; request ID/fingerprint; correlation; causation; originating input; triggering player result; logical identity/status; winning attempt identity/status; actor identity/roster/life/speech; every target identity/class/life eligibility; disclosure policy; actor-owned exact result facts; referenced input/claim/event identities; occupied artifact IDs; next created/publication-slot/record-append counters; trigger uniqueness index; and terminal-slot reservation. Preparation snapshot is evidence, never current truth.
+
+#### Lifecycle and tombstone ordering
+
+The lifecycle trace is exact:
+
+| Commit outcome | Attempt status | Logical status | Tombstone | Active removal | Version |
+| :--- | :--- | :--- | :--- | :--- | ---: |
+| new commit | `validated -> accepted` | `active -> committed` | committed | only after tombstone | exactly `N+1 -> N+2` |
+| exact replay | retain existing | retain existing | retain/repair control cleanup only after graph verification | idempotent cleanup allowed | 0 |
+| hard stale | `aborted` | `superseded` | non-commit `stale_applicability` | after tombstone | 0 |
+| identity/idempotency conflict | `rejected` | `rejected` | non-commit `identity_conflict` | after tombstone | 0 |
+| authorization/reference failure | `rejected` | `rejected` | non-commit `authorization_failure` | after tombstone | 0 |
+| allocation/order/exhaustion failure | `failed` | `rejected` | corresponding non-commit reason | after tombstone | 0 |
+| malformed input invariant | unchanged | unchanged | none | none | 0 |
+| application invariant after valid CAS input | coordinator normalizes attempt `failed` | logical `rejected` | non-commit `internal_failure` | after tombstone | 0; live root remains `N+1` |
+
+Only logical `active` plus winning attempt `validated` may create a new commit. For each other well-shaped `LogicalReactionStatus` (`planned`, `committed`, `rejected`, `superseded`, `cancelled`, `exhausted`), absent replay yields `logical_reaction_mismatch` and no attempt transition. With logical `active`, each other well-shaped `ReactionAttemptStatus` (`attempting`, `candidate_received`, `accepted`, `failed`, `timed_out`, `rejected`, `aborted`) yields `attempt_mismatch`. Existing terminal statuses never reopen; unknown statuses or impossible ownership combinations are invariants. Future implementation tests cover the full 7-by-8 cross-product.
+
+Commit success ordering is: validate complete working graph; publish authoritative root; set winning attempt `accepted`; set logical reaction `committed`; convert reservation to committed tombstone; then remove active entry. Lifecycle/tombstone changes are nonauthoritative and increment zero. Tombstone insertion must precede active removal. If post-publication cleanup fails, the authoritative root/result/idempotency/publication remain committed, the active committed entry remains available for idempotent cleanup retry, replay prefers the authoritative graph, and no rollback/additional increment occurs. Observer notification is last and isolated.
+
+#### Atomic graph, copy-on-write, and publication
+
+One canonical commit transaction contains exactly one `CanonicalOnlyReactionPlan`, `CanonicalClaim[0..4]`, `PublicEvent[1..16]`, one `NpcCanonicalUtterancePublishedRecord`, one `NpcReactionCommitIdempotencyRecord`, one `CanonicalNpcReactionCommitResult`, exact zero suspicion/memory/legacy-history/vote/phase deltas, three counter updates, and one state-version update. Every created object uses resulting `N+2`; object count never changes the one increment.
+
+The atomic graph trace is exact:
+
+| Artifact/index/counter | Working-copy stage | Validation | Root publication | Replay source |
+| :--- | ---: | ---: | ---: | :--- |
+| reaction plan | 2 | graph/reference/policy | one object | plan registry |
+| claims | 3 | strict source/relation/cardinality | `0..4` | result claim IDs |
+| events | 4 | source/descriptor/order/version | `1..16` | result event IDs |
+| canonical publication | 5 | plan/segment/request/turn/version/actor/locale/order | exactly one | result publication ID |
+| idempotency record and indexes | 6 | all primary/secondary uniqueness | exactly one record | primary reaction key |
+| commit result | 7 | canonical-equal to prepared expected result | exactly one | session/request result key |
+| created/publication/append counters | 8-10 | exact reservation arithmetic | three resulting values | stored result/publication/orders |
+| phase and state version | 11-12 | unchanged phase; exact `+1` | resulting phase and `N+2` | plan/result provenance |
+
+The engine creates a detached working copy of the current root, then stages plan; claims in proposal order; events in created order; publication; idempotency record/indexes; expected result; counters; unchanged resulting phase; and finally state version. It validates the complete working graph, then calls the existing root publication primitive exactly once. It never pushes/sets/increments live structures early and never uses partial manual undo. Any exception before root publication discards the copy and leaves exact `N+1`, including counters and indexes.
+
+Stored `CanonicalNpcReactionCommitResult` is canonically equal to `delta.expectedCommitResult`; commit does not recalculate or replace its payload. It only verifies shape, references, versions, IDs, order, request/correlation/fingerprint, and current registry collision. `commitResultRequestId` resolves exactly one result from the `(gameSessionId, requestId)` registry. Candidate/projection fingerprints and provider metadata are not added to the result.
+
+Exactly one canonical publication is inserted in the same transaction and checked for plan/segment/request/turn/version/actor/locale equality, ID uniqueness, and slot/append CAS. Commit performs no canonical-text generation, Renderer, DOM/CLI delivery, retry, acknowledgement, receipt, history consumption, or observer-driven delivery. Sink failure retains `N+2`; replay inserts no publication.
+
+#### Legacy replacement and one-transition ledger
+
+At logical-reaction creation the engine freezes one route. Structured selection replaces, never follows, the Phase 4 provisional NPC transaction at the identical `N+1 -> N+2` ledger position. It does not run legacy `handlePlayerQuestion()` NPC working-copy mutation, free-form response persistence, NPC log/publicInfo/memory/claim mutation, or fallback after any structured failure. Legacy selection preserves existing Phase 4 behavior and never invokes structured preparation/commit. Mid-flight flags cannot change the route. Physical deletion remains Phase 9.
+
+The ledger is exact: player commit `N -> N+1`; preparation `0`; one successful reaction commit `N+1 -> N+2`; replay/rejection/stale/conflict/preparation exception/commit exception/lifecycle/tombstone/delivery/Renderer/finalization/observer/history `0`. No initial Phase 6 path creates `N+2 -> N+3`.
+
+#### Normative commit examples
+
+The marker string `preparation-example:suspicion-only.value` below is a documentation reference to the exact `value` object in the earlier suspicion-only `NpcReactionPreparedResult`. Dereferencing it before validation produces the schema-complete commit input without duplicating the large delta; `$ref` is documentation notation and is never a runtime field.
+
+Valid replay lookup input:
+
+```json
+{"schemaVersion":1,"gameSessionId":"game-session-1","reactionPlanId":"reaction-plan-1","requestId":"reaction-request-1","requestFingerprint":"ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6","correlationId":"correlation-1","causationId":"player-request-1","originatingInputRecordId":"input-1","turnId":"turn-1","turnOrder":1,"preconditionPhase":"player_question","preconditionStateVersion":2,"npcId":"npc-aoi"}
+```
+
+Replay lookup results (`not_found`, exact replay, request-fingerprint conflict):
+
+```json
+[{"schemaVersion":1,"status":"not_found"},{"schemaVersion":1,"status":"replayed","result":{"schemaVersion":1,"requestId":"reaction-request-1","correlationId":"correlation-1","requestFingerprint":"ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6","commitType":"npc_reaction","preconditionStateVersion":2,"resultingStateVersion":3,"reactionPlanId":"reaction-plan-1","npcPublicationId":"case-4-publication","createdEventIds":["case-4-event-1"],"createdClaimIds":[],"createdAtOrder":3,"resultMode":"canonical_only"}},{"schemaVersion":1,"status":"conflict","conflictCode":"idempotency_conflict"}]
+```
+
+Valid committed idempotency record:
+
+```json
+{"schemaVersion":1,"recordType":"npc_reaction_commit_idempotency","gameSessionId":"game-session-1","reactionPlanId":"reaction-plan-1","requestId":"reaction-request-1","requestFingerprint":"ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6","preparationFingerprint":"c1469d46a3b84c40a481f1accb54b8b3c77fea09ad04d5c9587a192c54c9b605","successfulAttemptId":"reaction-attempt-1","correlationId":"correlation-1","causationId":"player-request-1","originatingInputRecordId":"input-1","turnId":"turn-1","turnOrder":1,"npcId":"npc-aoi","preconditionStateVersion":2,"resultingStateVersion":3,"npcPublicationId":"case-4-publication","commitResultRequestId":"reaction-request-1"}
+```
+
+Valid commit input after deterministic documentation-reference dereference:
+
+```json
+{"schemaVersion":1,"preparedReaction":{"$ref":"preparation-example:suspicion-only.value"}}
+```
+
+Committed and replayed execution results:
+
+```json
+[{"schemaVersion":1,"status":"committed","result":{"schemaVersion":1,"requestId":"reaction-request-1","correlationId":"correlation-1","requestFingerprint":"ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6","commitType":"npc_reaction","preconditionStateVersion":2,"resultingStateVersion":3,"reactionPlanId":"reaction-plan-1","npcPublicationId":"case-4-publication","createdEventIds":["case-4-event-1"],"createdClaimIds":[],"createdAtOrder":3,"resultMode":"canonical_only"}},{"schemaVersion":1,"status":"replayed","result":{"schemaVersion":1,"requestId":"reaction-request-1","correlationId":"correlation-1","requestFingerprint":"ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6","commitType":"npc_reaction","preconditionStateVersion":2,"resultingStateVersion":3,"reactionPlanId":"reaction-plan-1","npcPublicationId":"case-4-publication","createdEventIds":["case-4-event-1"],"createdClaimIds":[],"createdAtOrder":3,"resultMode":"canonical_only"}}]
+```
+
+Stale, idempotency-conflict, and order-precondition rejections:
+
+```json
+[{"schemaVersion":1,"status":"rejected","binding":{"schemaVersion":1,"gameSessionId":"game-session-1","reactionPlanId":"reaction-plan-1","successfulAttemptId":"reaction-attempt-1","requestId":"reaction-request-1","correlationId":"correlation-1","turnId":"turn-1","preconditionStateVersion":2,"npcId":"npc-aoi"},"rejection":{"stage":"applicability","reasonCode":"stale_state_version","retryable":false,"diagnostics":[{"code":"stale_state_version","location":"state_version"}]}},{"schemaVersion":1,"status":"rejected","binding":{"schemaVersion":1,"gameSessionId":"game-session-1","reactionPlanId":"reaction-plan-1","successfulAttemptId":"reaction-attempt-1","requestId":"reaction-request-1","correlationId":"correlation-1","turnId":"turn-1","preconditionStateVersion":2,"npcId":"npc-aoi"},"rejection":{"stage":"idempotency","reasonCode":"idempotency_conflict","retryable":false,"diagnostics":[{"code":"idempotency_conflict","location":"idempotency_record"}]}},{"schemaVersion":1,"status":"rejected","binding":{"schemaVersion":1,"gameSessionId":"game-session-1","reactionPlanId":"reaction-plan-1","successfulAttemptId":"reaction-attempt-1","requestId":"reaction-request-1","correlationId":"correlation-1","turnId":"turn-1","preconditionStateVersion":2,"npcId":"npc-aoi"},"rejection":{"stage":"ordering","reasonCode":"order_precondition_mismatch","retryable":false,"diagnostics":[{"code":"order_precondition_mismatch","location":"order_reservation"}]}}]
+```
+
+Committed and non-commit tombstones:
+
+```json
+[{"schemaVersion":1,"tombstoneType":"committed","gameSessionId":"game-session-1","reactionPlanId":"reaction-plan-1","requestId":"reaction-request-1","requestFingerprint":"ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6","correlationId":"correlation-1","causationId":"player-request-1","originatingInputRecordId":"input-1","npcId":"npc-aoi","preconditionStateVersion":2,"terminalOrder":1,"attempts":[{"schemaVersion":1,"reactionAttemptId":"reaction-attempt-1","status":"accepted","observation":"fingerprinted","candidateFingerprint":"895b02e355f391fc91c247d42891cecbebc0b40fa3773f8e47325b2544444ecb"}],"terminalStatus":"committed","successfulAttemptId":"reaction-attempt-1","preparationFingerprint":"c1469d46a3b84c40a481f1accb54b8b3c77fea09ad04d5c9587a192c54c9b605","npcPublicationId":"case-4-publication","commitResultRequestId":"reaction-request-1"},{"schemaVersion":1,"tombstoneType":"non_commit","gameSessionId":"game-session-1","reactionPlanId":"reaction-plan-2","requestId":"reaction-request-2","requestFingerprint":"1111111111111111111111111111111111111111111111111111111111111111","correlationId":"correlation-2","causationId":"player-request-1","originatingInputRecordId":"input-1","npcId":"npc-aoi","preconditionStateVersion":2,"terminalOrder":2,"attempts":[{"schemaVersion":1,"reactionAttemptId":"reaction-attempt-2","status":"aborted","observation":"none"}],"terminalStatus":"superseded","reason":"stale_applicability"}]
+```
+
+Invariant errors are synchronous errors and never JSON result members.
+
+#### Commit implementation acceptance tests
+
+The later implementation must cover pre-provider exact replay including later current versions; request/preparation fingerprint conflicts; every request/plan/trigger/publication/attempt/artifact alias; every final CAS dimension independently; all 7 logical by 8 attempt status combinations; actor removed/dead/unable; target removed/reclassified/dead eligibility; permission/result-fact changes; artifact collision; all three order mismatches; version/order exhaustion; every dangling plan/claim/event/segment/publication reference; corrupt idempotency/stored replay graph; faults before/after every working-copy stage; exact rollback to `N+1`; zero counter gaps and partial inserts; one root publication; exactly one `N+1 -> N+2`; replay publication zero; no delivery during commit; observer isolation; tombstone-before-removal; cleanup failure retaining the committed active entry; structured suppression of legacy mutation; no fallback; fixed route; and unchanged Phase 4/5 regression.
+
+Tests also prove exact input/result/invariant schemas, diagnostic bounds/privacy, registry/index set equality, three-way preparation fingerprint verification, full rejection reachability, final-CAS checklist completeness, three-counter arithmetic, atomic graph completeness, tombstone strict unions/capacity, and zero authoritative effects for every non-commit outcome.
 
 ### Engine-owned known-information projection
 
@@ -2859,7 +3144,7 @@ The implementation PR must add tests; this docs-only PR adds none. Passing requi
 - **Initial retry policy:** separately assert initial `maxAttempts = 3`, 1-second/2-second backoff, and 15-second logical deadline; a test with different finite policy values must preserve all authority/identity/validation/version invariants.
 - **Browser integration:** actual dispatch through `WerewolfGame`, stateless proxy adapter, commit, canonical record, DOM sink, acknowledgement, failure/retry, history-only read, and replay are exercised. Only committed canonical content is visible; sink failure never rolls back.
 - **CLI integration:** the same engine/projection/validator path reaches the configured writer; throw/rejection is retryable delivery only; history read emits no live output; no legacy bypass exists.
-- **Compatibility/flag:** route is snapshotted when the logical reaction starts; mid-flight flag changes do not reroute/cancel; disabled future routes preserve legacy behavior; enabled routes require Phase 4 and do not change Phase 4/5; every mid-flight failure has no fallback; explicit emergency cancellation produces logical `cancelled`/attempt `aborted`, zero increment, retained player `N+1`, late-result rejection, and no runtime route switch. All existing Phase 4 and Phase 5 tests remain unchanged and pass; 300/300 is the current docs-only baseline after the inert Phase 6 foundation and browser-compatibility fixes, not a candidate-validation completion claim.
+- **Compatibility/flag:** route is snapshotted when the logical reaction starts; mid-flight flag changes do not reroute/cancel; disabled future routes preserve legacy behavior; enabled routes require Phase 4 and do not change Phase 4/5; every mid-flight failure has no fallback; explicit emergency cancellation produces logical `cancelled`/attempt `aborted`, zero increment, retained player `N+1`, late-result rejection, and no runtime route switch. All existing Phase 4 and Phase 5 tests remain unchanged and pass; 321/321 is the current docs-only baseline after the merged isolated candidate validator and preparation design, not a preparation/commit runtime-completion claim.
 - **Adversarial:** actor/logical/attempt/version substitution, hidden-information request or response, illegal/unknown target, oversized/malformed/extra-field payload, arbitrary patch, stale base, duplicate delivery, mismatched attempt, valid syntax/invalid semantics, and concurrent late output all produce zero unauthorized display, mutation, or increment.
 - **Single-actor policy:** exactly one target reaction may derive from `ask_npc`; provider cannot add/reorder actors; no parallel commit occurs. A future multi-NPC fixture is rejected until a separately approved serialized policy exists.
 - **Observers/privacy:** only redacted lifecycle outcomes and committed records are observed; observer throw cannot change stored results; observer/history count changes no version; raw candidate/projection/private fields never reach logs, history, browser diagnostics, CLI diagnostics, or HTTP errors.
