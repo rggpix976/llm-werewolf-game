@@ -17,10 +17,8 @@ export const NPC_REACTION_CANDIDATE_REJECTION_CODES = Object.freeze([
   "body_too_large", "malformed_json", "invalid_envelope", "unsupported_schema_version",
   "binding_mismatch", "stale_request", "duplicate_response", "attempt_response_conflict",
   "idempotency_conflict", "invalid_candidate_schema", "unsupported_in_phase6",
-  "duplicate_proposal", "contradictory_proposals", "unknown_reference", "actor_ineligible",
-  "target_ineligible", "permission_denied", "result_fact_mismatch",
-  "role_disclosure_policy_unknown", "known_information_boundary_violation",
-  "fingerprint_mismatch", "final_live_validation_failure"
+  "duplicate_proposal", "contradictory_proposals", "unknown_reference", "target_ineligible",
+  "permission_denied", "result_fact_mismatch", "fingerprint_mismatch"
 ]);
 
 const REQUEST_FIELDS = Object.freeze([
@@ -146,9 +144,8 @@ export function validateNpcReactionCandidate(input) {
   if (hardLiveMismatch(context.request, context.pendingAttempt, context.liveApplicability)) {
     return rejected(binding, "applicability", "stale_request", "live_state");
   }
-  if (!candidateTargetsRemainApplicable(candidate, context.liveApplicability, context.request.npcId)) {
-    return rejected(binding, "applicability", "final_live_validation_failure", "live_state");
-  }
+  const finalAuthorizationFailure = authorizeCandidate(candidate, projection, context.liveApplicability, context.request);
+  if (finalAuthorizationFailure) return rejected(binding, "authorization", finalAuthorizationFailure.code, finalAuthorizationFailure.location);
 
   return deepFreeze({
     schemaVersion: SCHEMA_VERSION,
@@ -228,6 +225,7 @@ function validateExpectedProjectionRelations(request) {
   ])];
   const participantIds = projection.public.participants.map((entry) => entry.participantId);
   if (!sameArray(participantIds, [...participantIds].sort())) fail();
+  if (!ROLE_POLICIES.includes(projection.constraints.roleDisclosurePolicy)) fail();
   if (!sameArray(projection.constraints.allowedTargetIds, expectedTargets)
     || !sameArray(projection.constraints.allowedLivingTargetIds, expectedLivingTargets)
     || !sameArray(projection.constraints.allowedResultTargetIds, expectedResultTargets)
@@ -472,30 +470,36 @@ function reconstructCandidate(value) {
 function authorizeCandidate(candidate, projection, live, request) {
   for (const proposal of candidate.proposals) if (!projection.constraints.allowedCandidateKinds.includes(proposal.proposalType)) return { code: "permission_denied", location: "policy" };
   const policy = projection.constraints.roleDisclosurePolicy;
-  if (!ROLE_POLICIES.includes(policy)) return { code: "role_disclosure_policy_unknown", location: "policy" };
-  const actor = projection.public.participants.filter((entry) => entry.participantId === request.npcId);
-  if (actor.length !== 1 || actor[0].publicStatus !== "alive") return { code: "actor_ineligible", location: "actor" };
   const directQuestion = projection.public.events.some((event) => event.projectionType === "public_question_event" && event.actorId === "player" && event.targetId === request.npcId && event.turnId === request.turnId && event.occurredPhase === "day_discussion" && ["role", "result"].includes(event.topic) && projection.constraints.allowedReferenceIds.includes(event.eventId));
   for (const proposal of candidate.proposals) {
-    if (proposal.targetId !== undefined) {
-      const captured = projection.public.participants.filter((entry) => entry.participantId === proposal.targetId);
-      if (captured.length !== 1) return { code: "unknown_reference", location: "reference" };
-      if (proposal.targetId === request.npcId || captured[0].participantId === "player" || !projection.constraints.allowedTargetIds.includes(proposal.targetId)) return { code: "target_ineligible", location: "target" };
-      const current = live.snapshotStatus === "available" ? live.participants.filter((entry) => entry.participantId === proposal.targetId && entry.participantClass === "npc") : [];
-      if (current.length !== 1) return { code: "target_ineligible", location: "target" };
-    }
     if (proposal.proposalType === "role_claim") {
       if (policy !== "claim_when_directly_asked_after_result" || !directQuestion || projection.actorPrivate.ownRole !== "seer" || projection.actorPrivate.investigationResults.length === 0 || projection.constraints.allowedClaimRoles.length !== 1 || projection.constraints.allowedClaimRoles[0] !== "seer" || proposal.claimedRole !== "seer") return { code: "permission_denied", location: "policy" };
     } else if (proposal.proposalType === "result_claim") {
       if (policy !== "claim_when_directly_asked_after_result" || !directQuestion || projection.actorPrivate.ownRole !== "seer") return { code: "permission_denied", location: "policy" };
-      if (!projection.constraints.allowedResultTargetIds.includes(proposal.targetId) || !projection.constraints.allowedResultValues.includes(proposal.result)) return { code: "target_ineligible", location: "target" };
-      if (!projection.actorPrivate.investigationResults.some((fact) => fact.targetId === proposal.targetId && fact.result === proposal.result)) return { code: "result_fact_mismatch", location: "known_information" };
+      const targetFailure = validateCommonTarget(proposal.targetId, projection, live, request.npcId);
+      if (targetFailure) return targetFailure;
+      if (!projection.constraints.allowedResultTargetIds.includes(proposal.targetId)
+        || !projection.constraints.allowedResultValues.includes(proposal.result)
+        || !projection.actorPrivate.investigationResults.some((fact) => fact.targetId === proposal.targetId && fact.result === proposal.result)) {
+        return { code: "result_fact_mismatch", location: "known_information" };
+      }
     } else if (["vote_declaration", "suspicion"].includes(proposal.proposalType)) {
+      const targetFailure = validateCommonTarget(proposal.targetId, projection, live, request.npcId);
+      if (targetFailure) return targetFailure;
       if (!projection.constraints.allowedLivingTargetIds.includes(proposal.targetId)) return { code: "target_ineligible", location: "target" };
       const current = live.participants.find((entry) => entry.participantId === proposal.targetId);
       if (current?.publicStatus !== "alive") return { code: "target_ineligible", location: "target" };
     }
   }
+  return null;
+}
+
+function validateCommonTarget(targetId, projection, live, npcId) {
+  const captured = projection.public.participants.filter((entry) => entry.participantId === targetId);
+  if (captured.length !== 1) return { code: "unknown_reference", location: "reference" };
+  if (targetId === npcId || captured[0].participantId === "player" || !projection.constraints.allowedTargetIds.includes(targetId)) return { code: "target_ineligible", location: "target" };
+  const current = live.snapshotStatus === "available" ? live.participants.filter((entry) => entry.participantId === targetId && entry.participantClass === "npc") : [];
+  if (current.length !== 1) return { code: "target_ineligible", location: "target" };
   return null;
 }
 
@@ -519,16 +523,6 @@ function validateCandidateCoherence(candidate) {
   }
   if (roleClaims.length > 1 || votes.length > 1) return "contradictory_proposals";
   return null;
-}
-
-function candidateTargetsRemainApplicable(candidate, live, npcId) {
-  if (live.snapshotStatus !== "available") return false;
-  return candidate.proposals.every((proposal) => {
-    if (proposal.targetId === undefined) return true;
-    const matches = live.participants.filter((entry) => entry.participantId === proposal.targetId && entry.participantClass === "npc");
-    if (matches.length !== 1 || proposal.targetId === npcId) return false;
-    return proposal.proposalType === "result_claim" || matches[0].publicStatus === "alive";
-  });
 }
 
 function createBinding(request) {

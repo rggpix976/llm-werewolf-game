@@ -11,6 +11,44 @@ import {
 import * as validationApi from "../src/npcReactionCandidateValidation.mjs";
 
 const FINGERPRINT = "a".repeat(64);
+const ACTIVE_REJECTION_CODES = Object.freeze([
+  "body_too_large", "malformed_json", "invalid_envelope", "unsupported_schema_version",
+  "binding_mismatch", "stale_request", "duplicate_response", "attempt_response_conflict",
+  "idempotency_conflict", "invalid_candidate_schema", "unsupported_in_phase6",
+  "duplicate_proposal", "contradictory_proposals", "unknown_reference", "target_ineligible",
+  "permission_denied", "result_fact_mismatch", "fingerprint_mismatch"
+]);
+const RESERVED_REJECTION_IDENTIFIERS = Object.freeze([
+  "actor_ineligible", "known_information_boundary_violation",
+  "final_live_validation_failure", "role_disclosure_policy_unknown"
+]);
+const ACTIVE_REACHABILITY_TUPLES = Object.freeze([
+  "1|invalid_envelope|transport|http_envelope",
+  "2|body_too_large|transport|http_envelope",
+  "3|malformed_json|transport|http_envelope",
+  "4|malformed_json|transport|http_envelope",
+  "5|invalid_envelope|transport|http_envelope",
+  "5|invalid_envelope|transport|provider_result",
+  "6|invalid_envelope|transport|http_envelope",
+  "6|invalid_envelope|transport|provider_result",
+  "6|unsupported_schema_version|transport|http_envelope",
+  "6|unsupported_schema_version|transport|provider_result",
+  "7|fingerprint_mismatch|fingerprint|fingerprint",
+  "8|binding_mismatch|binding|binding",
+  "9|idempotency_conflict|duplicate|binding",
+  "10|stale_request|applicability|live_state",
+  "11|invalid_candidate_schema|structure|candidate",
+  "11|invalid_candidate_schema|structure|proposal",
+  "11|unsupported_in_phase6|structure|proposal",
+  "14|duplicate_response|duplicate|provider_result",
+  "14|attempt_response_conflict|duplicate|provider_result",
+  "15|permission_denied|authorization|policy",
+  "15|unknown_reference|authorization|reference",
+  "15|target_ineligible|authorization|target",
+  "15|result_fact_mismatch|authorization|known_information",
+  "16|duplicate_proposal|authorization|proposal",
+  "16|contradictory_proposals|authorization|proposal"
+]);
 const REQUEST_FIELDS = [
   "schemaVersion", "operation", "gameSessionId", "reactionPlanId", "reactionAttemptId", "requestId",
   "requestFingerprint", "correlationId", "causationId", "originatingInputRecordId", "turnId", "turnOrder",
@@ -139,6 +177,41 @@ function merge(value, overrides) {
   return result;
 }
 
+function mutateInput(input, mutate) {
+  mutate(input);
+  return input;
+}
+
+function addNpc(input, participantId, { status = "alive", result = null } = {}, refingerprintAfter = true) {
+  input.request.knownInformation.public.participants.push({ participantId, displayName: participantId, publicStatus: status });
+  input.request.knownInformation.public.participants.sort((left, right) => left.participantId.localeCompare(right.participantId));
+  input.liveApplicability.participants.push({ participantId, participantClass: "npc", publicStatus: status });
+  input.liveApplicability.participants.sort((left, right) => left.participantId.localeCompare(right.participantId));
+  if (result !== null) {
+    input.request.knownInformation.actorPrivate.investigationResults.push({ day: 1, targetId: participantId, result, disclosurePolicy: "engine_policy_required" });
+    input.request.knownInformation.actorPrivate.investigationResults.sort((left, right) => left.day - right.day || left.targetId.localeCompare(right.targetId));
+  }
+  refreshProjectionConstraints(input);
+  if (refingerprintAfter) refingerprint(input);
+  return input;
+}
+
+function refreshProjectionConstraints(input) {
+  const projection = input.request.knownInformation;
+  projection.constraints.allowedTargetIds = projection.public.participants
+    .filter((entry) => ![input.request.npcId, "player"].includes(entry.participantId))
+    .map((entry) => entry.participantId);
+  projection.constraints.allowedLivingTargetIds = projection.public.participants
+    .filter((entry) => ![input.request.npcId, "player"].includes(entry.participantId) && entry.publicStatus === "alive")
+    .map((entry) => entry.participantId);
+  projection.constraints.allowedResultTargetIds = [...new Set(projection.actorPrivate.investigationResults.map((entry) => entry.targetId))];
+  projection.constraints.allowedResultValues = [...new Set(projection.actorPrivate.investigationResults.map((entry) => entry.result))];
+}
+
+function sixteenCandidate(input) {
+  return JSON.parse(new TextDecoder().decode(input.transportEvidence.bodyBytes)).result.candidate;
+}
+
 function assertRejected(result, stage, reasonCode, location) {
   assert.equal(result.status, "rejected");
   assert.deepEqual(Object.keys(result).sort(), ["binding", "rejection", "schemaVersion", "status"]);
@@ -217,7 +290,9 @@ test("transport evidence enforces media, encoding, byte, UTF-8, and JSON boundar
     (e) => { e.contentTypeHeader = "application/json; charset=utf-8; x=y"; },
     (e) => { e.contentEncodingHeader = "gzip"; },
     (e) => { e.contentTypeHeader = ""; },
-    (e) => { e.contentEncodingHeader = ""; }
+    (e) => { e.contentEncodingHeader = ""; },
+    (e) => { e.contentTypeHeader = " \t "; },
+    (e) => { e.contentEncodingHeader = "\t " ; }
   ]) {
     const input = inputFor(); mutate(input.transportEvidence);
     assertRejected(validateNpcReactionCandidate(input), "transport", "invalid_envelope", "http_envelope");
@@ -232,6 +307,15 @@ test("transport evidence enforces media, encoding, byte, UTF-8, and JSON boundar
   assertRejected(validateNpcReactionCandidate(utf8), "transport", "malformed_json", "http_envelope");
   const json = inputFor(); json.transportEvidence.bodyBytes = new TextEncoder().encode("{");
   assertRejected(validateNpcReactionCandidate(json), "transport", "malformed_json", "http_envelope");
+  for (const mutate of [
+    (e) => { e.contentTypeHeader = 1; },
+    (e) => { e.contentEncodingHeader = {}; },
+    (e) => { e.contentTypeHeader = "x".repeat(257); },
+    (e) => { e.contentEncodingHeader = "x".repeat(129); }
+  ]) {
+    const input = inputFor(); mutate(input.transportEvidence);
+    assert.throws(() => validateNpcReactionCandidate(input), (error) => error.code === "invalid_transport_evidence_shape");
+  }
 });
 
 test("envelope, schema, request fingerprint, binding, stale, structure, duplicate, and authorization obey first-failure order", () => {
@@ -254,6 +338,68 @@ test("envelope, schema, request fingerprint, binding, stale, structure, duplicat
   assertRejected(validateNpcReactionCandidate(terminalBeforeAuthorization), "duplicate", "duplicate_response", "provider_result");
   const terminalStructure = withStatuses("exhausted", "timed_out"); replaceResponse(terminalStructure, (body) => { body.result.candidate = { schemaVersion: 1, proposals: [{ proposalType: "unknown" }] }; });
   assertRejected(validateNpcReactionCandidate(terminalStructure), "structure", "invalid_candidate_schema", "proposal");
+});
+
+test("active rejection export and all 25 authoritative reachability tuples have real input vectors", () => {
+  const fingerprint = inputFor();
+  fingerprint.request.knownInformation.presentation.speechStyleId = "changed";
+  synchronizeFingerprint(fingerprint);
+
+  const conflict = withStatuses("active", "failed", { observed: "different" });
+  const permission = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "role_claim", claimedRole: "seer" }] });
+  permission.request.knownInformation.constraints.roleDisclosurePolicy = "avoid_unnecessary_claim";
+  refingerprint(permission);
+
+  const contradiction = inputFor({ schemaVersion: 1, proposals: [
+    { proposalType: "vote_declaration", targetId: "npc-beni" },
+    { proposalType: "vote_declaration", targetId: "npc-chika" }
+  ] });
+  addNpc(contradiction, "npc-chika");
+
+  const vectors = [
+    [1, mutateInput(inputFor(), (input) => { input.transportEvidence.contentTypeHeader = ""; }), "transport", "invalid_envelope", "http_envelope"],
+    [2, mutateInput(inputFor(), (input) => { input.transportEvidence.bodyBytes = new Uint8Array(65_537); }), "transport", "body_too_large", "http_envelope"],
+    [3, mutateInput(inputFor(), (input) => { input.transportEvidence.bodyBytes = Uint8Array.of(0xc3, 0x28); }), "transport", "malformed_json", "http_envelope"],
+    [4, mutateInput(inputFor(), (input) => { input.transportEvidence.bodyBytes = new TextEncoder().encode("{"); }), "transport", "malformed_json", "http_envelope"],
+    [5, replaceResponse(inputFor(), (body) => { body.extra = true; }), "transport", "invalid_envelope", "http_envelope"],
+    [5, replaceResponse(inputFor(), (body) => { body.result.extra = true; }), "transport", "invalid_envelope", "provider_result"],
+    [6, replaceResponse(inputFor(), (body) => { body.operation = "other_operation"; }), "transport", "invalid_envelope", "http_envelope"],
+    [6, replaceResponse(inputFor(), (body) => { body.result.operation = "other_operation"; }), "transport", "invalid_envelope", "provider_result"],
+    [6, replaceResponse(inputFor(), (body) => { body.schemaVersion = 2; }), "transport", "unsupported_schema_version", "http_envelope"],
+    [6, replaceResponse(inputFor(), (body) => { body.result.schemaVersion = 2; }), "transport", "unsupported_schema_version", "provider_result"],
+    [7, fingerprint, "fingerprint", "fingerprint_mismatch", "fingerprint"],
+    [8, replaceResponse(inputFor(), (body) => { body.result.npcId = "npc-beni"; }), "binding", "binding_mismatch", "binding"],
+    [9, mutateInput(inputFor(), (input) => { input.liveApplicability.requestId = "reaction-request-2"; }), "duplicate", "idempotency_conflict", "binding"],
+    [10, mutateInput(inputFor(), (input) => { input.liveApplicability.stateVersion += 1; }), "applicability", "stale_request", "live_state"],
+    [11, inputFor({ schemaVersion: 1, proposals: [] }), "structure", "invalid_candidate_schema", "candidate"],
+    [11, inputFor({ schemaVersion: 1, proposals: [{ proposalType: "unknown" }] }), "structure", "invalid_candidate_schema", "proposal"],
+    [11, inputFor({ schemaVersion: 1, proposals: [{ proposalType: "commentary" }] }), "structure", "unsupported_in_phase6", "proposal"],
+    [14, withStatuses("active", "validated", { observed: "same" }), "duplicate", "duplicate_response", "provider_result"],
+    [14, conflict, "duplicate", "attempt_response_conflict", "provider_result"],
+    [15, permission, "authorization", "permission_denied", "policy"],
+    [15, inputFor({ schemaVersion: 1, proposals: [{ proposalType: "suspicion", targetId: "npc-unknown" }] }), "authorization", "unknown_reference", "reference"],
+    [15, inputFor({ schemaVersion: 1, proposals: [{ proposalType: "suspicion", targetId: "npc-aoi" }] }), "authorization", "target_ineligible", "target"],
+    [15, inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "not_werewolf" }] }), "authorization", "result_fact_mismatch", "known_information"],
+    [16, inputFor({ schemaVersion: 1, proposals: [
+      { proposalType: "suspicion", targetId: "npc-beni" },
+      { proposalType: "suspicion", targetId: "npc-beni" }
+    ] }), "authorization", "duplicate_proposal", "proposal"],
+    [16, contradiction, "authorization", "contradictory_proposals", "proposal"]
+  ];
+
+  const actualTuples = [];
+  const testedCodes = new Set();
+  for (const [step, input, stage, code, location] of vectors) {
+    const result = validateNpcReactionCandidate(input);
+    assertRejected(result, stage, code, location);
+    actualTuples.push(`${step}|${code}|${stage}|${location}`);
+    testedCodes.add(code);
+  }
+  assert.deepEqual(NPC_REACTION_CANDIDATE_REJECTION_CODES, ACTIVE_REJECTION_CODES);
+  assert.deepEqual([...testedCodes].sort(), [...ACTIVE_REJECTION_CODES].sort());
+  assert.deepEqual(actualTuples, ACTIVE_REACHABILITY_TUPLES);
+  assert.deepEqual(RESERVED_REJECTION_IDENTIFIERS.filter((code) => NPC_REACTION_CANDIDATE_REJECTION_CODES.includes(code)), []);
+  assert.equal(vectors.some(([, input]) => RESERVED_REJECTION_IDENTIFIERS.some((code) => JSON.stringify(validateNpcReactionCandidate(input)).includes(code))), false);
 });
 
 test("strict candidate union rejects missing, null, extra, unsupported, bounds, and nesting", () => {
@@ -313,7 +459,7 @@ test("authorization enforces policy, actor-owned result facts, and target eligib
   const denied = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "role_claim", claimedRole: "seer" }] }); denied.request.knownInformation.constraints.roleDisclosurePolicy = "avoid_unnecessary_claim"; refingerprint(denied);
   assertRejected(validateNpcReactionCandidate(denied), "authorization", "permission_denied", "policy");
   const unknownPolicy = inputFor(); unknownPolicy.request.knownInformation.constraints.roleDisclosurePolicy = "future_policy"; refingerprint(unknownPolicy);
-  assertRejected(validateNpcReactionCandidate(unknownPolicy), "authorization", "role_disclosure_policy_unknown", "policy");
+  assert.throws(() => validateNpcReactionCandidate(unknownPolicy), (error) => error.code === "invalid_expected_request");
   const mismatch = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "not_werewolf" }] });
   mismatch.request.knownInformation.public.participants.splice(2, 0, { participantId: "npc-chika", displayName: "Chika", publicStatus: "alive" });
   mismatch.request.knownInformation.actorPrivate.investigationResults.push({ day: 1, targetId: "npc-chika", result: "not_werewolf", disclosurePolicy: "engine_policy_required" });
@@ -328,6 +474,51 @@ test("authorization enforces policy, actor-owned result facts, and target eligib
   assertRejected(validateNpcReactionCandidate(dead), "applicability", "stale_request", "live_state");
 });
 
+test("result claims use permission, reference, common target, then exact actor-owned fact precedence", () => {
+  const targetOnly = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-chika", result: "werewolf" }] });
+  addNpc(targetOnly, "npc-chika");
+  assertRejected(validateNpcReactionCandidate(targetOnly), "authorization", "result_fact_mismatch", "known_information");
+
+  const resultOnly = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "not_werewolf" }] });
+  assertRejected(validateNpcReactionCandidate(resultOnly), "authorization", "result_fact_mismatch", "known_information");
+
+  const crossPair = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "not_werewolf" }] });
+  addNpc(crossPair, "npc-chika", { result: "not_werewolf" });
+  assertRejected(validateNpcReactionCandidate(crossPair), "authorization", "result_fact_mismatch", "known_information");
+
+  const exact = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" }] });
+  assert.equal(validateNpcReactionCandidate(exact).status, "validated");
+
+  const deadButRostered = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" }] });
+  deadButRostered.request.knownInformation.public.participants.find((entry) => entry.participantId === "npc-beni").publicStatus = "dead";
+  deadButRostered.request.knownInformation.constraints.allowedLivingTargetIds = [];
+  deadButRostered.liveApplicability.participants.find((entry) => entry.participantId === "npc-beni").publicStatus = "dead";
+  refingerprint(deadButRostered);
+  assert.equal(validateNpcReactionCandidate(deadButRostered).status, "validated");
+
+  const absent = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-unknown", result: "werewolf" }] });
+  assertRejected(validateNpcReactionCandidate(absent), "authorization", "unknown_reference", "reference");
+  const self = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-aoi", result: "werewolf" }] });
+  assertRejected(validateNpcReactionCandidate(self), "authorization", "target_ineligible", "target");
+  const player = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "player", result: "werewolf" }] });
+  assertRejected(validateNpcReactionCandidate(player), "authorization", "target_ineligible", "target");
+
+  const hearsayOnly = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "not_werewolf" }] });
+  addNpc(hearsayOnly, "npc-chika");
+  hearsayOnly.request.knownInformation.public.claims.push({
+    schemaVersion: 1, projectionType: "result_claim", claimId: "claim-hearsay-1",
+    actorId: "npc-chika", targetId: "npc-beni", result: "not_werewolf"
+  });
+  hearsayOnly.request.knownInformation.constraints.allowedReferenceIds.splice(1, 0, "claim-hearsay-1");
+  refingerprint(hearsayOnly);
+  assertRejected(validateNpcReactionCandidate(hearsayOnly), "authorization", "result_fact_mismatch", "known_information");
+
+  const deniedBeforeReference = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-unknown", result: "not_werewolf" }] });
+  deniedBeforeReference.request.knownInformation.constraints.roleDisclosurePolicy = "avoid_unnecessary_claim";
+  refingerprint(deniedBeforeReference);
+  assertRejected(validateNpcReactionCandidate(deniedBeforeReference), "authorization", "permission_denied", "policy");
+});
+
 test("whole-candidate duplicates and contradictions fail atomically", () => {
   const duplicate = { schemaVersion: 1, proposals: [{ proposalType: "suspicion", targetId: "npc-beni" }, { proposalType: "suspicion", targetId: "npc-beni" }] };
   assertRejected(validateNpcReactionCandidate(inputFor(duplicate)), "authorization", "duplicate_proposal", "proposal");
@@ -338,6 +529,35 @@ test("whole-candidate duplicates and contradictions fail atomically", () => {
   contradictory.liveApplicability.participants.splice(2, 0, { participantId: "npc-chika", participantClass: "npc", publicStatus: "alive" });
   refingerprint(contradictory);
   assertRejected(validateNpcReactionCandidate(contradictory), "authorization", "contradictory_proposals", "proposal");
+});
+
+test("proposal bounds, order, and exact duplicates cover all four proposal kinds", () => {
+  for (const proposal of [
+    { proposalType: "role_claim", claimedRole: "seer" },
+    { proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" },
+    { proposalType: "vote_declaration", targetId: "npc-beni" },
+    { proposalType: "suspicion", targetId: "npc-beni" }
+  ]) {
+    const input = inputFor({ schemaVersion: 1, proposals: [structuredClone(proposal), structuredClone(proposal)] });
+    assertRejected(validateNpcReactionCandidate(input), "authorization", "duplicate_proposal", "proposal");
+  }
+
+  const targetIds = ["npc-beni", ...Array.from({ length: 13 }, (_, index) => `npc-c${String(index + 1).padStart(2, "0")}`)];
+  const sixteen = inputFor({ schemaVersion: 1, proposals: [
+    { proposalType: "role_claim", claimedRole: "seer" },
+    { proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" },
+    ...targetIds.map((targetId) => ({ proposalType: "suspicion", targetId }))
+  ] });
+  for (const targetId of targetIds.slice(1)) addNpc(sixteen, targetId, {}, false);
+  refreshProjectionConstraints(sixteen);
+  refingerprint(sixteen);
+  const result = validateNpcReactionCandidate(sixteen);
+  assert.equal(result.status, "validated");
+  assert.equal(result.value.candidate.proposals.length, 16);
+  assert.deepEqual(result.value.candidate.proposals, sixteenCandidate(sixteen).proposals);
+
+  const seventeen = inputFor({ schemaVersion: 1, proposals: Array.from({ length: 17 }, () => ({ proposalType: "suspicion", targetId: "npc-beni" })) });
+  assertRejected(validateNpcReactionCandidate(seventeen), "structure", "invalid_candidate_schema", "candidate");
 });
 
 test("captured and current reference boundaries reject unknown and ineligible targets", () => {
@@ -418,6 +638,20 @@ test("rejections remain closed, bounded, redacted, immutable, and non-retryable"
   assert.equal(serialized.includes("private investigation"), false);
   assert.equal(serialized.includes("bodyBytes"), false);
   assert.deepEqual(Object.keys(result.rejection.diagnostics[0]).sort(), ["code", "location"]);
+});
+
+test("stage 17 reuses the immutable snapshot and deterministically reaches the same stage 18 success", () => {
+  const input = inputFor({ schemaVersion: 1, proposals: [
+    { proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" },
+    { proposalType: "suspicion", targetId: "npc-beni" }
+  ] });
+  const before = structuredClone(input);
+  const first = validateNpcReactionCandidate(input);
+  const second = validateNpcReactionCandidate(input);
+  assert.equal(first.status, "validated");
+  assert.deepEqual(second, first);
+  assert.deepEqual(input, before);
+  assert.equal(RESERVED_REJECTION_IDENTIFIERS.some((code) => JSON.stringify(first).includes(code)), false);
 });
 
 function requestFingerprint(request) {
