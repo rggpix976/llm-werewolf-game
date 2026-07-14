@@ -1328,8 +1328,8 @@ Targets must exist before the source or be created in the same atomic commit. Da
 | `NpcUtterancePublicationFinalized` | `source.rendererRequestId` | active `PendingRendererRequest` | exactly 1 in baseline | before pending terminal/removal | duplicate returns stored result | runtime target removed only after result persistence |
 | `NpcPublicationFinalizationResult` | `finalizationId` | `NpcUtterancePublicationFinalized` | exactly 1 | finalization appended first | exact mirror returned | append-only |
 | `PendingRendererRequest` | `reactionPlanId` | committed `ControlledCommentaryReactionPlan` | exactly 1 | after reaction commit | validate same plan/version | runtime record removable; target append-only |
-| `NpcReactionCandidateRequest` | complete immutable reaction binding | one active logical reaction, active attempt, triggering player result/input, and current engine snapshot | exactly 1 of each | before provider invocation | request fingerprint stable; attempt ID changes only on retry | runtime-only; no authoritative target created |
-| `NpcReactionCandidateProviderResult` | every binding echo | exact request plus active `PendingNpcReactionAttempt`/logical preparation binding | exactly 1 | response validation only | equal candidate may deduplicate only after all echoes match | provider object discarded after detached validation |
+| `NpcReactionCandidateRequest` | complete immutable reaction binding | one expected logical reaction/attempt, triggering player result/input, and captured engine snapshot | exactly 1 of each | before provider invocation | request fingerprint stable; attempt ID changes only on retry | runtime-only; no authoritative target created |
+| `NpcReactionCandidateProviderResult` | every binding echo | exact request plus expected active or retained-terminal `PendingNpcReactionAttempt`/logical preparation binding | exactly 1 | response validation only | equal candidate may deduplicate only after all echoes match | provider object discarded after detached validation |
 | `NpcReactionProposal.targetId` | captured public participant and current authoritative roster | exactly 1 in each; kind-specific allowlist also required | exactly 1 | validation only | no proposal replay creates authority | runtime-only candidate reference |
 | `PlayerConversationCommitResult` | `playerPublicationId` | `PlayerUtterancePublishedRecord.publicationId` | exactly 1 | same player commit | return original ID | append-only |
 | `ControlledNpcReactionCommitResult` | `reservationId` | `NpcUtterancePublicationReserved.reservationId` | exactly 1 | same NPC commit; never finalization | return original ID | append-only |
@@ -1537,7 +1537,7 @@ Semantic denial precedence is exact: stale session/turn/version/phase/actor or b
 
 `NpcReactionCandidateHttpResponse` requires exactly `schemaVersion: 1`, `operation: "generate_npc_reaction_candidate"`, `requestId: ID`, `correlationId: ClientCorrelationId`, `serverCorrelationId: ServerCorrelationId`, `reactionPlanId: ID`, `reactionAttemptId: ID`, and `result: NpcReactionCandidateProviderResult`. The top-level request, correlation, plan, and attempt fields must equal both the request and nested result; `serverCorrelationId` is transport-owned and has no nested copy.
 
-The nested provider result echoes every immutable binding field and the engine compares each echo byte-for-byte with both `NpcReactionCandidateRequest` and the active `PendingNpcReactionAttempt`/logical preparation binding. The pending NPC member stores the complete identity needed for this comparison, with `targetNpcId == request.npcId`. `knownInformation` and `limits` are not echoed: their exact values are held in the immutable request and covered by the recomputed `requestFingerprint`. An echo can correlate but never authorize; a mismatch is rejected before candidate semantic validation.
+The nested provider result echoes every immutable binding field and the engine compares each echo byte-for-byte with both `NpcReactionCandidateRequest` and the expected `PendingNpcReactionAttempt`/logical preparation binding. That pending snapshot may be active or a retained terminal attempt used only to classify a late response; terminal status does not weaken any echo comparison. The pending NPC member stores the complete identity needed for this comparison, with `targetNpcId == request.npcId`. `knownInformation` and `limits` are not echoed: their exact values are held in the immutable request and covered by the recomputed `requestFingerprint`. An echo can correlate but never authorize; a mismatch is rejected before candidate semantic validation.
 
 Normative conforming request example:
 
@@ -1726,9 +1726,9 @@ The input does not duplicate `knownInformation`, limits, binding echoes, or fing
 
 Malformed engine-owned input is a programmer/invariant failure, not a provider rejection. Before examining response semantics, the validator synchronously throws `NpcReactionCandidateValidationInvariantError`, a repository-local error with exactly `name: "NpcReactionCandidateValidationInvariantError"`, one closed `code`, and a redacted fixed message. The closed codes are `invalid_validation_input`, `invalid_expected_request`, `invalid_expected_pending_attempt`, `invalid_transport_evidence_shape`, `invalid_observed_candidate`, `invalid_live_applicability_snapshot`, and `validation_input_binding_mismatch`. It contains no raw body, provider value, private fact, free-form path, or nested cause. Invalid header **content**, oversize bytes, invalid UTF-8, malformed JSON, and malformed provider envelopes are well-shaped untrusted evidence and return the rejection union instead of throwing.
 
-At API entry, `request` and `pendingAttempt` must identify one expected session/logical reaction/attempt/request/trigger/turn/phase/version/actor graph. `pendingAttempt.targetNpcId == request.npcId`, `pendingAttempt.operation == request.operation`, and its complete immutable binding equals the request. `observedCandidate` may be `observed` only for that exact expected attempt. Failure of these caller-owned expected-context invariants throws `validation_input_binding_mismatch`.
+At API entry, `request` and `pendingAttempt` must identify one expected session/logical reaction/attempt/request/trigger/turn/phase/version/actor graph. `pendingAttempt.targetNpcId == request.npcId`, `pendingAttempt.operation == request.operation`, and its complete immutable binding (excluding runtime `status` and `startedAt`) equals the request. `observedCandidate` may be `observed` only for that exact expected attempt. These expected-context relations are the only cross-object equalities checked as stage-0 invariants. Failure throws `validation_input_binding_mismatch`.
 
-`liveApplicability` is different: it must be internally self-consistent, but it is an independent current-state projection and is **not** required to equal the expected binding at API entry. A well-formed difference in its session, logical/request graph, attempt, turn, phase, version, actor, or roster is the evidence used by steps 9, 10, and 17 to return `idempotency_conflict`, `stale_request`, or a more specific closed applicability/authorization rejection. Treating such a difference as an invariant exception would make stale validation unreachable and is prohibited. A well-formed provider echo that differs from the expected request/pending graph returns `binding_mismatch` before those live comparisons.
+`liveApplicability` is different: it must be internally self-consistent, but it is an independent current-state projection and is **not** required to equal either expected object at API entry. No live-to-request or live-to-pending equality for session, reaction, attempt, request, correlation, trigger/input, turn/order, phase, version, actor, roster, or status is a stage-0 invariant. A well-formed difference is evidence used by steps 9, 10, and 17 to return `idempotency_conflict`, `stale_request`, or a more specific closed applicability/authorization rejection. Treating such a difference as an invariant exception would make stale validation unreachable and is prohibited. A well-formed provider echo that differs from the expected request/pending graph returns `binding_mismatch` before those live comparisons.
 
 Normative validation-input construction, using the strict values defined in this section:
 
@@ -1757,7 +1757,7 @@ The uppercase names identify the normative strict objects defined by their respe
 
 The provider never supplies an observation or candidate fingerprint. After strict structural reconstruction of the current candidate, the engine computes `candidateFingerprint = sha256CanonicalJson(detachedCandidate)`. The session-local reaction coordinator owns the prior observation and passes a detached read-only snapshot to the pure validator. This contract defines no registry, insertion, transition, retry, tombstone, or persistence API; producing and retaining the snapshot belongs to the later coordinator implementation.
 
-The union is evaluated only after transport, envelope, binding, request-fingerprint, and candidate-structure checks have succeeded. `none` continues to authorization. For `observed`, exact attempt equality is an input invariant; session ownership comes from the containing validation input and is not redundantly stored in this minimum union. Engine-computed fingerprints then classify the current candidate: equal is `duplicate_response`; unequal is `attempt_response_conflict`. Both are terminal validation rejections with no state transition. A response cannot select the duplicate classification by echoing a fingerprint.
+The union is evaluated only after transport, envelope, binding, request-fingerprint, hard-stale/status routing, and candidate-structure checks have succeeded. For an ordinary active `candidate_received` route, `none` continues to authorization. For a terminal-repeat route, `none` produces `duplicate_response` because terminal ownership alone suppresses the late delivery without storing or asserting equality. For `observed`, exact attempt equality is an input invariant; session ownership comes from the containing validation input and is not redundantly stored in this minimum union. Engine-computed fingerprints then classify the current candidate: equal is `duplicate_response`; unequal is `attempt_response_conflict`. Both are validation rejections with no state transition. A response cannot select the duplicate classification by echoing a fingerprint.
 
 Normative members:
 
@@ -1785,29 +1785,68 @@ Normative members:
 | `gameSessionId` | `ID`; current session |
 | `turnId` | `ID`; current originating turn |
 | `turnOrder` | safe integer `>= 0` |
-| `phase` | literal `player_question` for initial Phase 6 validation |
-| `stateVersion` | safe integer `>= 0`; must equal request/pending `preconditionStateVersion` (`N+1`) |
+| `phase` | current authoritative `GamePhase`; stage 10 compares it with expected precondition phase or the exact same-reaction committed resulting phase |
+| `stateVersion` | current authoritative safe integer `>= 0` at snapshot generation; stage 10 compares it with request/pending precondition version or the exact same-reaction committed resulting version, never as a type or stage-0 cross-input invariant |
 | `reactionPlanId` | `ID`; current logical reaction |
 | `logicalReactionStatus` | `ReactionLogicalStatus` |
-| `reactionAttemptId` | `ID`; current attempt |
-| `reactionAttemptStatus` | `ReactionAttemptStatus` |
+| `reactionAttemptId` | `ID`; current retained lookup result for the expected attempt, whether active, winning, losing, or terminal |
+| `reactionAttemptStatus` | current `ReactionAttemptStatus` of that retained attempt |
 | `requestId` | `ID` |
 | `requestFingerprint` | `Sha256Fingerprint`; engine recomputation target |
 | `correlationId` | `ID` |
 | `causationId` | `ID`; triggering player commit request |
 | `originatingInputRecordId` | `ID` |
 | `npcId` | `ID`; expected actor |
+| `reactionCommit` | exact `NpcReactionCandidateLiveCommitSnapshot`; proves whether current phase/version are still the precondition or the result of this exact logical reaction |
 | `triggeringPlayerCommit` | exact `NpcReactionTriggeringPlayerCommitSnapshot` |
 | `triggeringInput` | exact `NpcReactionTriggeringInputSnapshot` |
 | `participants` | dense `NpcReactionLiveParticipantSnapshot[2..16]` |
 
 `NpcReactionTriggeringPlayerCommitSnapshot` requires exactly `requestId: ID`, `requestFingerprint: Sha256Fingerprint`, `correlationId: ID`, `inputRecordId: ID`, `turnId: ID`, and `resultingStateVersion: safe integer >= 1`. `NpcReactionTriggeringInputSnapshot` requires exactly `inputRecordId: ID`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `capturedStateVersion: safe integer >= 0`, and `actorId: "player"`. `NpcReactionLiveParticipantSnapshot` requires exactly `participantId: ID`, `participantClass: "player" | "npc"`, and `publicStatus: "alive" | "dead"`.
 
+`NpcReactionCandidateLiveCommitSnapshot` is the strict union below, discriminated by `commitStatus` and with `additionalProperties: false`:
+
+- `NpcReactionCandidateLiveUncommitted` has exactly `commitStatus: "uncommitted"`. It is required for logical `active`, `rejected`, `superseded`, `cancelled`, and `exhausted`.
+- `NpcReactionCandidateLiveCommitted` has exactly `commitStatus: "committed"`, `reactionPlanId: ID`, `requestId: ID`, `requestFingerprint: Sha256Fingerprint`, `successfulAttemptId: ID`, `turnId: ID`, `preconditionPhase: GamePhase`, `resultingPhase: GamePhase`, `preconditionStateVersion: safe integer >= 0`, and `resultingStateVersion: safe integer >= 1`; the versions differ by exactly one. It is required only for logical `committed` and is reconstructed from the exact authoritative `NpcReactionPlan`, `NpcReactionCommitResult`, and engine-owned committed-delta metadata. It is comparison evidence only and is not another commit record.
+
+Within an available snapshot, the commit member must match the snapshot's own logical reaction, request, fingerprint, and turn. For `uncommitted`, current `phase` and `stateVersion` are compared at stage 10 with the request/pending precondition. For `committed`, the commit member's precondition phase/version must equal the request/pending precondition, while current `phase` and `stateVersion` must equal its resulting phase/version. This exact same-logical-reaction transition is the only permitted terminal baseline and allows committed late responses to reach stage 14. Any missing/corrupt committed graph, a different commit identity, or a later unrelated phase/version transition is stale (or authoritative committed-graph corruption outside this pure validator), never silently treated as a duplicate.
+
 `NpcReactionCandidateLiveApplicabilityUnavailable` represents a current lookup that cannot produce the complete available member without fabrication. It has exactly `schemaVersion: 1`, `snapshotStatus: "unavailable"`, `currentGameSessionId: ID`, `engineLifecycleStatus: "active" | "destroyed"`, and `missingDimension: "session_replaced" | "turn" | "logical_reaction" | "reaction_attempt" | "trigger_graph" | "roster"`. It contains no expected/request IDs, private facts, or partial roster. Session replacement uses the new current session ID and `missingDimension: "session_replaced"`; destruction uses `engineLifecycleStatus: "destroyed"`. A well-formed unavailable member is valid input and returns `stale_request` at step 10. It is never an invariant exception and prevents a caller from fabricating old IDs after reset, terminal removal, or destruction.
 
-Participant entries are ordered by `participantId`, IDs are unique, exactly one entry has class `player`, and `npcId` resolves exactly once to an `npc` entry; whether that entry remains alive is evaluated as applicability. The exact participant ID/status set must equal the current authoritative roster projection for the snapshot's own `gameSessionId`; replacement/reset produces a current snapshot whose session or roster comparison invalidates the expected request. The snapshot's trigger subgraphs must internally resolve the same current player result and input: commit/request/turn/input identities match the snapshot's own `causationId`, `originatingInputRecordId`, and `turnId`; player result `resultingStateVersion == stateVersion`; and input identities match that current commit. Equality with the expected request and `request.knownInformation.public.triggeringInput` is a step-10 stale/identity comparison, not an input-shape invariant.
+Participant entries are ordered by `participantId`, IDs are unique, exactly one entry has class `player`, and `npcId` resolves exactly once to an `npc` entry; whether that entry remains alive is evaluated as applicability. The exact participant ID/status set must equal the current authoritative roster projection for the snapshot's own `gameSessionId`; replacement/reset produces a current snapshot whose session or roster comparison invalidates the expected request. The snapshot's trigger subgraphs must internally resolve the same current player result and input: commit/request/turn/input identities match the snapshot's own `causationId`, `originatingInputRecordId`, and `turnId`, and input identities match that player commit. The player result's `resultingStateVersion` is the reaction precondition `N+1`; it equals root `stateVersion` only while uncommitted and equals `reactionCommit.preconditionStateVersion` after the exact reaction commit advances root state to `N+2`. Equality with the expected request and `request.knownInformation.public.triggeringInput` is a step-10 stale/identity comparison, not an input-shape invariant.
 
-Initial applicability requires logical status `active`, attempt status `candidate_received`, and the current actor entry to be alive. It also requires the request/pending/live session, reaction, attempt, request, correlation, trigger/input, turn/order, phase, version, and actor dimensions to agree exactly. Candidate-sensitive final applicability additionally resolves every proposal target exactly once in `participants` and reapplies the kind-specific current-alive requirements. Reset/destroy, session or roster replacement, phase/version advance, logical terminalization, attempt replacement/terminalization, actor death/removal, or target removal/ineligibility returns `stale_request` or the more specific closed authorization code. The validator never refreshes or mutates the snapshot and never treats it as a later commit CAS.
+Initial applicability first checks the hard live dimensions: available snapshot; session; reaction/request/correlation; trigger/input graph; turn/order; status-aware phase/version baseline; actor identity/membership/alive status; roster continuity; and exact expected/live attempt identity. Any mismatch is `stale_request` before candidate parsing or fingerprint comparison. An uncommitted status uses request/pending precondition phase/version; a committed status uses only the exact same-reaction commit member described above. `logicalReactionStatus: "superseded"` is always stale. A terminal status by itself is **not** a hard stale dimension.
+
+After hard stale checks pass, stage 10 requires `pendingAttempt.status == liveApplicability.reactionAttemptStatus` and routes the exact status combination using the tables below. A status mismatch is a well-formed race and returns `stale_request`, not an invariant exception. An internally impossible logical/attempt combination in an `available` snapshot is `invalid_live_applicability_snapshot` at stage 0; an `unavailable` snapshot remains the normal stale representation when the current graph has been removed. Candidate-sensitive final applicability additionally resolves every proposal target exactly once in `participants` and reapplies the kind-specific current-alive requirements. The validator never refreshes or mutates the snapshot and never treats it as a later commit CAS.
+
+##### Pending-attempt status applicability
+
+Every `ReactionAttemptStatus` is schema-valid in `PendingNpcReactionAttempt`; status applicability is closed as follows:
+
+| `pendingAttempt.status` (equal live status) | Compatible logical status | Stage-10 route |
+| :--- | :--- | :--- |
+| `attempting` | `active` | `stale_request`; a response has not yet been captured as `candidate_received`, so validation does not transition it |
+| `candidate_received` | `active` | ordinary validation may continue; an existing observation instead reaches stage 14 |
+| `validated` | `active` | retained response reaches stage 14; `observedCandidate: "none"` is `invalid_observed_candidate` because validated status requires the prior engine-owned fingerprint |
+| `accepted` | `committed` | terminal repeat reaches stage 14; `observedCandidate: "none"` is `invalid_observed_candidate` because a winning accepted attempt necessarily has an engine-owned fingerprint; every other logical status is an internally invalid available snapshot |
+| `failed` | `active`, `rejected`, `exhausted`, or `committed` for a losing attempt | terminal repeat reaches stage 14 |
+| `timed_out` | `active`, `exhausted`, or `committed` for a losing attempt | terminal repeat reaches stage 14 |
+| `rejected` | `active`, `rejected`, or `committed` for a losing attempt | terminal repeat reaches stage 14 |
+| `aborted` | `active`, `superseded`, `cancelled`, `rejected`, or `committed` for a losing attempt | `superseded` is stale; every other listed status is a terminal repeat that reaches stage 14 |
+
+Logical-status constraints complete the matrix:
+
+| `logicalReactionStatus` | Compatible attempt state and classification after hard stale checks |
+| :--- | :--- |
+| `planned` | no attempt may exist; an available snapshot containing one is `invalid_live_applicability_snapshot`, while an unavailable current attempt is `stale_request` |
+| `active` | route by the complete pending-status table above |
+| `committed` | `accepted` winning attempt or terminal losing attempt; reach stage 14 and never alter the stored commit |
+| `rejected` | terminal `failed`, `rejected`, or `aborted`; reach stage 14 and retain rejection |
+| `superseded` | always `stale_request` before stage 14, including an `aborted` attempt |
+| `cancelled` | terminal `aborted`; reach stage 14 when hard live dimensions still match (reset/destroy normally fails the earlier unavailable/session check) |
+| `exhausted` | terminal `failed` or `timed_out`; reach stage 14 and retain exhaustion |
+
+For every terminal-repeat route, candidate strict structure/reconstruction and engine fingerprinting still run. If `observedCandidate` contains a fingerprint, equality is `duplicate_response` and inequality is `attempt_response_conflict`. If no prior candidate fingerprint exists because the attempt ended before observing a valid candidate, any structurally valid late delivery for that already terminal attempt is `duplicate_response`; no fingerprint is stored and no state changes. Thus status alone suppresses a terminal late delivery but never fabricates an equality claim. On an already terminal logical/attempt state, `attempt_response_conflict` is diagnostic only and retains that terminal state.
 
 Normative live snapshot example:
 
@@ -1831,6 +1870,7 @@ Normative live snapshot example:
   "causationId": "player-request-1",
   "originatingInputRecordId": "input-1",
   "npcId": "npc-aoi",
+  "reactionCommit": { "commitStatus": "uncommitted" },
   "triggeringPlayerCommit": {
     "requestId": "player-request-1",
     "requestFingerprint": "f474c5f4b65312fb30d0edb4a35b12e4406d3e2e112c5470af6ee8c2f508bc22",
@@ -1871,7 +1911,7 @@ Normative unavailable member after session replacement:
 
 The pure validator executes the following total order. The first failing step returns or throws as stated; no later step executes, and diagnostics cannot change precedence:
 
-0. Validate, strictly reconstruct, and cross-check the exact engine-owned `NpcReactionCandidateValidationInput`, request, pending attempt, observation, and live snapshot. Malformed or internally inconsistent expected context throws an invariant error.
+0. Validate and strictly reconstruct each engine-owned input member; cross-check only the expected request/pending/observation relations and the live snapshot's own internal status/commit graph. No expected-to-live equality is checked here. Malformed expected context or internally impossible live data throws an invariant error.
 1. Validate transport metadata: HTTP status evidence, `Content-Type`, charset, and `Content-Encoding`.
 2. Measure `bodyBytes.byteLength`; reject evidence proving more than 65,536 bytes.
 3. Decode fatal UTF-8.
@@ -1881,11 +1921,11 @@ The pure validator executes the following total order. The first failing step re
 7. Reconstruct the expected request fingerprint input and recompute `requestFingerprint`. A mismatch within the engine-owned request is `fingerprint_mismatch`; no provider echo is trusted during recomputation.
 8. Compare every provider binding echo, including its request-fingerprint echo, with the validated expected request and pending attempt.
 9. Apply logical/request identity-conflict checks, including plan/request aliasing represented in the supplied expected context; `idempotency_conflict` precedes stale and duplicate classification.
-10. Apply initial live applicability for session, trigger/input graph, turn/order, phase, version, logical/attempt status, and actor.
+10. Apply hard live applicability for session, trigger/input graph, turn/order, phase, version, actor/roster, and exact attempt identity; `superseded` is stale. Then compare pending/live attempt status and route the closed logical/attempt combination to ordinary validation, terminal-repeat comparison, or `stale_request`. Terminal status alone is not stale.
 11. Strictly validate the candidate/proposal union, bounds, nesting, nullability, and unknown fields.
 12. Reconstruct a detached normalized candidate.
 13. Compute the engine-owned `candidateFingerprint` from that reconstruction.
-14. Compare `candidateFingerprint` with `observedCandidate`: equal observed fingerprint is `duplicate_response`; different observed fingerprint is `attempt_response_conflict`.
+14. Apply the stage-10 route. For ordinary validation, `none` continues and an observation is compared. For terminal repeat, no observation is `duplicate_response`; with an observation, equal fingerprint is `duplicate_response` and different fingerprint is `attempt_response_conflict`.
 15. Strictly reconstruct the captured `knownInformation`, compute engine-owned `projectionFingerprint`, verify request/live graph relations, and apply per-proposal authorization in proposal order: candidate-kind allowlist, disclosure policy, actor/target/reference eligibility, and exact actor-owned result-fact checks.
 16. Apply whole-candidate duplicate and contradiction rules.
 17. Apply candidate-sensitive final applicability against the same immutable live snapshot, including current target eligibility and every step-10 dimension. This is a final logical validation boundary, not a second state read and not a commit CAS.
@@ -1897,7 +1937,7 @@ The exhaustive stage contract is:
 
 | Step | Accepted input / validation | Success output | Primary failure | Location | Later stages | Mutation / version |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 0 | unknown root; strict reconstruction and exact expected-context cross-check | detached expected context | closed invariant exception | none/public diagnostic forbidden | no on failure | `0 / 0` |
+| 0 | unknown root; strict reconstruction, expected request/pending/observation cross-check, and internal live-snapshot consistency only | detached expected context | closed invariant exception, including impossible available status combination or `validated`/`accepted` status without observation | none/public diagnostic forbidden | no on failure | `0 / 0` |
 | 1 | exact transport evidence; validate status/header grammar | accepted identity JSON metadata | `invalid_envelope` | `http_envelope` | no on failure | `0 / 0` |
 | 2 | accepted metadata; measure actual `Uint8Array` | complete body of at most 65,536 bytes | `body_too_large` | `http_envelope` | no on failure | `0 / 0` |
 | 3 | bounded bytes; fatal UTF-8 decode | decoded Unicode text | `malformed_json` | `http_envelope` | no on failure | `0 / 0` |
@@ -1907,11 +1947,11 @@ The exhaustive stage contract is:
 | 7 | validated expected request; engine request-fingerprint recomputation | trustworthy expected request fingerprint | `fingerprint_mismatch` | `fingerprint` | no on failure | `0 / 0` |
 | 8 | strict envelope and expected request/pending; all echo comparisons | correlated provider candidate | `binding_mismatch` | `binding` | no on failure | `0 / 0` |
 | 9 | correlated identities; logical/request alias checks | conflict-free logical identity | `idempotency_conflict` | `binding` | no on failure | `0 / 0` |
-| 10 | conflict-free identity; initial live binding/status check | initially applicable response | `stale_request` | `live_state` | no on failure | `0 / 0` |
+| 10 | conflict-free identity; hard live dimensions, superseded precedence, pending/live status equality, and closed lifecycle routing | ordinary-validation or terminal-repeat route | `stale_request`; impossible internal status combination was already stage 0 | `live_state` | no on stale; routed terminal repeats continue only through structure/fingerprint/stage 14 | `0 / 0` |
 | 11 | untrusted candidate; strict proposal shape/bounds | structurally valid candidate source | `invalid_candidate_schema` or `unsupported_in_phase6` | `candidate` or `proposal` | no on failure | `0 / 0` |
 | 12 | valid source; detached candidate reconstruction | normalized candidate | structural failure from step 11 only | `candidate` | yes | `0 / 0` |
 | 13 | normalized candidate; canonical hash | engine-owned candidate fingerprint | invariant exception only if canonical engine data is invalid | none/public diagnostic forbidden | yes | `0 / 0` |
-| 14 | normalized candidate and observation union; exact fingerprint comparison | unobserved candidate | `duplicate_response` or `attempt_response_conflict` | `provider_result` | no on failure | `0 / 0` |
+| 14 | normalized candidate, stage-10 route, and observation union | unobserved ordinary candidate | `duplicate_response` or `attempt_response_conflict`; unobserved terminal repeat is duplicate suppression | `provider_result` | no on duplicate/conflict | `0 / 0` |
 | 15 | unobserved candidate and captured projection; strict projection/hash/graph plus ordered authorization | normalized projection, projection fingerprint, individually authorized proposals | applicable closed authorization code | corresponding closed location | no on failure | `0 / 0` |
 | 16 | authorized proposals; whole-candidate duplicate/contradiction rules | coherent whole candidate | `duplicate_proposal` or `contradictory_proposals` | `proposal` | no on failure | `0 / 0` |
 | 17 | coherent candidate; candidate-sensitive check against the same snapshot | finally applicable candidate | `stale_request`, specific authorization code, or `final_live_validation_failure` | `live_state` or specific closed location | no on failure | `0 / 0` |
@@ -1926,8 +1966,9 @@ Reason ownership is exact and prevents a parsed-object harness from claiming evi
 | raw success-response transport evidence | `body_too_large`, `malformed_json`, `invalid_envelope` | size, fatal UTF-8/JSON, media type/charset/encoding respectively |
 | parsed HTTP/provider envelope | `invalid_envelope`, `unsupported_schema_version` | strict envelope/operation/echo shape and literal schema versions |
 | expected/provider binding | `binding_mismatch`, `idempotency_conflict`, `fingerprint_mismatch` | candidate fingerprint never produces `fingerprint_mismatch` |
-| observed-candidate comparison | `duplicate_response`, `attempt_response_conflict` | engine-computed candidate fingerprints only |
-| candidate structure/semantics/live snapshot | the existing closed structure, authorization, and applicability codes below | no transport code is copied into these layers |
+| observed-candidate / terminal-status comparison | `duplicate_response`, `attempt_response_conflict` | engine-computed candidate fingerprints when observed; an unobserved retained terminal attempt may only suppress as duplicate |
+| live snapshot and status route | `stale_request` | hard live mismatch, unavailable graph, superseded state, pending/live status race, or not-yet-captured `attempting`; terminal status alone is not stale |
+| candidate structure/semantics/final applicability | the existing closed structure, authorization, and applicability codes below | no transport code is copied into these layers |
 
 There is no exported parsed-object-only candidate validator. Internal helpers that receive an already parsed value may emit only envelope, binding, structure, fingerprint, duplicate, authorization, or applicability outcomes, never `body_too_large` or `malformed_json`. A future HTTP endpoint may translate invalid request media type to the existing HTTP `ErrorEnvelope` code `unsupported_media_type`, but this provider-success validator returns runtime `invalid_envelope`; neither code is mechanically copied into the other contract. Network errors, non-200 statuses, timeouts, aborts, and unavailable providers are coordinator/provider outcomes and cannot be synthesized as candidate-validation rejections.
 
@@ -1942,7 +1983,17 @@ Normative classification vectors:
 | recomputed request fingerprint differs | `fingerprint/fingerprint_mismatch/fingerprint` |
 | same attempt and same engine-computed observed candidate fingerprint | `duplicate/duplicate_response/provider_result` |
 | same attempt and different engine-computed observed candidate fingerprint | `duplicate/attempt_response_conflict/provider_result` |
-| valid candidate after the supplied live snapshot shows a phase/version/attempt mismatch | `applicability/stale_request/live_state`; candidate authorization does not execute |
+| terminal `timed_out` attempt, stable hard live dimensions, no observed fingerprint | structure/fingerprint proceeds, then `duplicate/duplicate_response/provider_result` |
+| terminal attempt, stable hard live dimensions, same observed fingerprint | `duplicate/duplicate_response/provider_result` |
+| terminal attempt, stable hard live dimensions, different observed fingerprint | `duplicate/attempt_response_conflict/provider_result`; terminal status is retained |
+| logical `committed`, `exhausted`, `rejected`, or explicit `cancelled`, stable hard live dimensions | compatible terminal attempt reaches the preceding terminal-repeat rules |
+| request precondition `N+1`, logical `committed`, current `N+2`, and exact same-reaction committed member proving `N+1 -> N+2` | the version is the compatible terminal baseline; stage 14 classifies duplicate/conflict |
+| logical `committed` but current phase/version is later than or differs from its exact committed member | `applicability/stale_request/live_state`; stage 14 does not execute |
+| logical `superseded`, even with matching candidate fingerprint | `applicability/stale_request/live_state`; stage 14 does not execute |
+| reset/session replacement, changed turn/phase/version/actor/trigger, or different current attempt | `applicability/stale_request/live_state`; status/fingerprint comparison does not execute |
+| request/pending `preconditionStateVersion: 2`, live current `stateVersion: 3` | valid input shape, then `applicability/stale_request/live_state` at stage 10 |
+| pending status `candidate_received`, live same-attempt status `timed_out` | well-formed status race, then `applicability/stale_request/live_state` at stage 10 |
+| pending/live status `candidate_received`, logical `active`, no observation | ordinary authorization continues |
 | structurally valid unobserved candidate denied by disclosure policy | `authorization/permission_denied/policy` |
 
 The byte-boundary and malformed-input vectors are constructed without embedding a large raw body in this document:
@@ -2054,8 +2105,8 @@ The rejection codes, stages, and normal diagnostic locations are exact:
 | `invalid_envelope` | `transport` | `http_envelope` or `provider_result` | media/charset/encoding, operation, required envelope, or strict provider-result shape is invalid |
 | `unsupported_schema_version` | `transport` | `http_envelope` or `provider_result` | any required schema version is not literal `1` |
 | `binding_mismatch` | `binding` | `binding` | an echo differs from the active request/pending binding |
-| `stale_request` | `applicability` | `live_state` | session, turn, phase, version, actor, target, or active attempt is no longer applicable |
-| `duplicate_response` | `duplicate` | `provider_result` | exact repeated response for an already observed/terminal attempt |
+| `stale_request` | `applicability` | `live_state` | a hard current session/turn/phase/version/actor/target/attempt dimension, status race, unavailable graph, or superseded logical reaction is no longer applicable |
+| `duplicate_response` | `duplicate` | `provider_result` | equal observed candidate, or a structurally valid late delivery for a retained terminal attempt that has no prior candidate fingerprint |
 | `attempt_response_conflict` | `duplicate` | `provider_result` | one attempt ID is reused with a different candidate fingerprint |
 | `idempotency_conflict` | `duplicate` | `binding` | logical/request identity is reused with a different fingerprint or graph |
 | `invalid_candidate_schema` | `structure` | `candidate` or `proposal` | candidate/proposal field, type, enum, nullability, bound, nesting, or strictness violation |
@@ -2209,16 +2260,20 @@ The reaction idempotency key is `(gameSessionId, reactionPlanId, requestId)` wit
 | same logical ID, different request ID | `identity conflict` | reject both attempted aliasing and replay; no new logical reaction |
 | different logical ID, same request ID | `identity conflict` | reject request-ID reuse; no new logical reaction |
 | different logical ID, same trigger identity | `identity conflict` in initial one-reaction-per-trigger Phase 6 | reject the second logical reaction; future multi-NPC design must introduce an explicit actor-order key before changing this rule |
-| multiple responses for one attempt ID, same candidate fingerprint | `duplicate` | first accepted response controls; later copies cause no transition |
-| multiple responses for one attempt ID, different candidate fingerprint | `invalid` response (`attempt_response_conflict`) | attempt becomes `rejected` and logical reaction becomes `rejected` unless already terminal |
-| late response from `timed_out`, `failed`, or `aborted` attempt | `duplicate` with diagnostic-only retention; `stale` takes precedence when live applicability also changed | retain terminal attempt/logical status |
-| late result from a losing attempt after logical `committed` | `duplicate` | return/suppress against stored commit; never publish again |
-| late result for logical `exhausted` | `duplicate` with diagnostic-only retention | retain `exhausted` |
-| late result for logical `superseded` | `stale` with diagnostic-only retention | retain `superseded` |
+| multiple responses for one attempt ID, same observed candidate fingerprint | `duplicate` (`duplicate_response`) | first accepted response controls; later copies cause no transition |
+| multiple responses for one attempt ID, different observed candidate fingerprint | `invalid` response (`attempt_response_conflict`) | attempt/logical reaction become `rejected` only when not already terminal; terminal state is retained otherwise |
+| late response from `timed_out`, `failed`, `rejected`, or `aborted` attempt with no prior candidate fingerprint | `duplicate` after strict candidate reconstruction/fingerprinting | suppress delivery and retain terminal attempt/logical status; do not store the newly computed fingerprint |
+| late response from a terminal attempt with a prior candidate fingerprint | same fingerprint is `duplicate_response`; different fingerprint is `attempt_response_conflict` | hard live stale dimensions take precedence; otherwise retain any existing terminal state |
+| late result from a winning or losing compatible terminal attempt after logical `committed` | terminal-repeat classification above | return/suppress against stored commit; never publish again |
+| late result for logical `exhausted`, `rejected`, or explicit `cancelled` with unchanged hard live dimensions | terminal-repeat classification above | retain the exact logical terminal status |
+| late result for logical `superseded`, or after reset/session/turn/phase/version/actor/trigger/current-attempt change | `stale` (`stale_request`) before fingerprint comparison | retain terminal/current state; stage 14 does not execute |
 | response whose actor ID alone differs | `invalid` | attempt `rejected`, logical `rejected`; no actor substitution |
-| response whose base version alone differs | `stale` | attempt `aborted` with `stale_result`, logical `superseded` |
+| provider response whose echoed base version alone differs from request/pending | `invalid` (`binding_mismatch`) | attempt/logical reaction reject under the non-retryable binding rule unless already terminal |
+| live current version differs from its status-aware uncommitted/committed baseline | `stale` | attempt `aborted` with `stale_result`, logical `superseded`, unless an existing terminal state must be retained |
 
-`rejected` in the table is a logical terminal transition caused by an `identity conflict` or `invalid` classification; those terms are not synonyms. `stale` means the once-valid applicability binding no longer matches. `duplicate` means an already observed/terminal operation is being delivered again. `idempotent replay` is reserved for an exact committed operation and returns its stored result. Every row has commit count `0` and version increment `0` for the repeated/conflicting input.
+`rejected` in the table is a logical terminal transition caused by an `identity conflict` or `invalid` classification; those terms are not synonyms. `stale` means a hard live applicability dimension no longer matches or the logical reaction is `superseded`; terminal status alone is not stale. `duplicate` means an already observed/terminal operation is being delivered again. `idempotent replay` is reserved for an exact committed operation and returns its stored result. Every row has commit count `0` and version increment `0` for the repeated/conflicting input.
+
+For a committed logical reaction, phase/version matching is status-aware: the authoritative plan/result plus committed-delta metadata must prove that the current values are the exact resulting phase and `N+2` of the same request whose precondition was the candidate request's phase and `N+1`. That transition is not an unrelated stale mutation. Any later or differently owned phase/version value remains stale and precedes duplicate comparison.
 
 #### Session-bounded tombstone registry
 
