@@ -8,7 +8,7 @@ import { canonicalJson, createId, sha256CanonicalJson } from "../src/conversatio
 
 const browserEntry = fileURLToPath(new URL("../public/browserApp.mjs", import.meta.url));
 
-test("browser entry import graph contains no Node builtin modules", async () => {
+test("browser entry import graph contains no node: module specifiers", async () => {
   const { visited, builtinImports } = await traceBrowserImports(browserEntry);
 
   assert.deepEqual(builtinImports, []);
@@ -32,6 +32,40 @@ test("platform-neutral SHA-256 preserves the canonical fingerprint contract", ()
     const expected = createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
     assert.equal(sha256CanonicalJson(value), expected);
   }
+
+  const paddingBoundaryByteLengths = [55, 56, 63, 64, 65, 127, 128, 129];
+  for (const expectedByteLength of paddingBoundaryByteLengths) {
+    assertCanonicalSha256Parity(
+      asciiStringWithCanonicalByteLength(expectedByteLength),
+      expectedByteLength,
+      `padding boundary at ${expectedByteLength} UTF-8 bytes`
+    );
+  }
+
+  assertCanonicalSha256Parity(
+    asciiStringWithCanonicalByteLength(1024),
+    1024,
+    "long multi-block ASCII input"
+  );
+
+  const blockBoundary = 64;
+  const multibyteCharacter = "\u65E5";
+  const asciiPrefix = "a".repeat(blockBoundary - 2);
+  const multibyteValue = `${asciiPrefix}${multibyteCharacter}`;
+  const multibyteCanonical = canonicalJson(multibyteValue);
+  const encoder = new TextEncoder();
+  const multibyteCanonicalBytes = encoder.encode(multibyteCanonical);
+  const multibyteStart = encoder.encode(`"${asciiPrefix}`).byteLength;
+  const multibyteBytes = encoder.encode(multibyteCharacter);
+
+  assert.equal(multibyteStart, blockBoundary - 1);
+  assert.equal(multibyteStart < blockBoundary, true);
+  assert.equal(multibyteStart + multibyteBytes.byteLength > blockBoundary, true);
+  assert.deepEqual(
+    multibyteCanonicalBytes.slice(multibyteStart, multibyteStart + multibyteBytes.byteLength),
+    multibyteBytes
+  );
+  assertCanonicalSha256Parity(multibyteValue, 67, "UTF-8 multibyte sequence crossing a 64-byte block boundary");
 });
 
 test("default identity generation uses secure Web Crypto UUIDs and produces unique IDs", () => {
@@ -116,4 +150,17 @@ function restoreGlobalCrypto(descriptor) {
 
 function normalize(file) {
   return file.replaceAll("\\", "/");
+}
+
+function asciiStringWithCanonicalByteLength(expectedByteLength) {
+  const jsonStringDelimiterBytes = 2;
+  assert.equal(Number.isSafeInteger(expectedByteLength) && expectedByteLength >= jsonStringDelimiterBytes, true);
+  return "a".repeat(expectedByteLength - jsonStringDelimiterBytes);
+}
+
+function assertCanonicalSha256Parity(value, expectedByteLength, label) {
+  const canonical = canonicalJson(value);
+  assert.equal(new TextEncoder().encode(canonical).byteLength, expectedByteLength, `${label}: UTF-8 byte length`);
+  const expected = createHash("sha256").update(canonical, "utf8").digest("hex");
+  assert.equal(sha256CanonicalJson(value), expected, `${label}: Node SHA-256 parity`);
 }
