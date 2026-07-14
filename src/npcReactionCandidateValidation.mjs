@@ -475,7 +475,7 @@ function authorizeCandidate(candidate, projection, live, request) {
     if (proposal.proposalType === "role_claim") {
       if (policy !== "claim_when_directly_asked_after_result" || !directQuestion || projection.actorPrivate.ownRole !== "seer" || projection.actorPrivate.investigationResults.length === 0 || projection.constraints.allowedClaimRoles.length !== 1 || projection.constraints.allowedClaimRoles[0] !== "seer" || proposal.claimedRole !== "seer") return { code: "permission_denied", location: "policy" };
     } else if (proposal.proposalType === "result_claim") {
-      if (policy !== "claim_when_directly_asked_after_result" || !directQuestion || projection.actorPrivate.ownRole !== "seer") return { code: "permission_denied", location: "policy" };
+      if (policy !== "claim_when_directly_asked_after_result" || !directQuestion || projection.actorPrivate.ownRole !== "seer" || projection.actorPrivate.investigationResults.length === 0) return { code: "permission_denied", location: "policy" };
       const targetFailure = validateCommonTarget(proposal.targetId, projection, live, request.npcId);
       if (targetFailure) return targetFailure;
       if (!projection.constraints.allowedResultTargetIds.includes(proposal.targetId)

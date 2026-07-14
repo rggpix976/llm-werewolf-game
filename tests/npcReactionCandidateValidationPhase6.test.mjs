@@ -475,6 +475,14 @@ test("authorization enforces policy, actor-owned result facts, and target eligib
 });
 
 test("result claims use permission, reference, common target, then exact actor-owned fact precedence", () => {
+  const noOwnedResults = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-unknown", result: "werewolf" }] });
+  noOwnedResults.request.knownInformation.actorPrivate.investigationResults = [];
+  noOwnedResults.request.knownInformation.constraints.allowedResultTargetIds = [];
+  noOwnedResults.request.knownInformation.constraints.allowedResultValues = [];
+  noOwnedResults.request.knownInformation.constraints.allowedClaimRoles = [];
+  refingerprint(noOwnedResults);
+  assertRejected(validateNpcReactionCandidate(noOwnedResults), "authorization", "permission_denied", "policy");
+
   const targetOnly = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-chika", result: "werewolf" }] });
   addNpc(targetOnly, "npc-chika");
   assertRejected(validateNpcReactionCandidate(targetOnly), "authorization", "result_fact_mismatch", "known_information");
