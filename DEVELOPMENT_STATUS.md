@@ -1,15 +1,15 @@
 # Development Status
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 ## Current State
 
-- Conversation pipeline migration Phases 1-4 are implemented from `master`: pure domain contracts/renderers, shadow transport, authoritative candidate validation, and atomic player conversation commit. Their feature flags remain default-off with strict dependencies.
-- Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. The session-scoped mapping registry, immutable strict lookup, and fail-closed replay validation are available on this branch.
-- Migration Phase 5 is complete on this Draft branch and remains unmerged pending review. It resolves the exact Phase 4 compatibility mapping and legacy location; position-, phase-, FIFO-, cursor-, and message-based replacement are prohibited and removed.
-- Requested and effective consumer modes are separate. The first OFF-to-ON request uses an explicit session-local `draining_pre_cutover` transition with a frozen watermark and required set; authoritative commands are gated until exact legacy evidence is drained and completion is explicitly applied or the transition is cancelled.
-- Session-local sink-success receipts, explicit acknowledgement, retry and acknowledgement-only retry, duplicate/stale acknowledgement handling, and executable browser/CLI sink tests are implemented without changing authoritative game state. Pre-cutover browser evidence requires actual attachment to the intended DOM container, while CLI evidence requires its configured write to fulfill; both support evidence-only retry without duplicate output.
-- With the default-off Phase 5 flag enabled, `PlayerUtterancePublishedRecord` is the sole active browser/CLI player display trigger. Legacy player entries remain stored and the NPC display remains on the provisional legacy path.
+- Conversation pipeline migration Phases 1-5 are merged on `master`: pure domain contracts/renderers, shadow transport, authoritative player-candidate validation, atomic player conversation commit, exact compatibility mapping, structured player history/delivery, explicit pre-cutover drain, and browser/CLI sink acknowledgement. Migration feature flags remain default-off with strict dependencies.
+- Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. Phase 5 resolves that identity without positional/text inference and keeps history, live delivery, and acknowledgement separate.
+- Phase 6 architecture is defined in `docs/conversation-pipeline-design.md`. The merged foundation provides the default-off flag, engine-owned logical/attempt identity domains, pure known-information projection, and no-op route compatibility; it does not call a candidate provider or perform an NPC structured commit.
+- The browser-safe engine identity/fingerprint implementation and SHA-256 boundary coverage are merged. No weak random fallback, Node-only browser import, dependency, polyfill, or bundler was added.
+- The Phase 6 Structured NPC Candidate Validation implementation remains BLOCKED. This docs-only branch closes its request/response envelope, proposal union, target authorization, role-disclosure policy, candidate fingerprint, and validation-only boundary before implementation resumes.
+- Validation-only success is explicitly nonauthoritative: no descriptor/claim/event/publication/commit ID, delta, `N+1 -> N+2`, display, acknowledgement, or legacy fallback is created by candidate validation.
 - Exact replay performs no redisplay or provider call, and all migration feature flags remain default-off.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
 - 5-player werewolf prototype is implemented.
@@ -30,17 +30,17 @@ Last updated: 2026-07-13
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 4 atomic mapping, Phase 5 explicit cutover/drain, cursor-independent pending delivery, actual browser/CLI sink evidence, session-terminal failures, rollback delivery, and exact acknowledgement lifecycle, response-provider invariants, diagnostics, configuration, request validation, and API endpoints are covered by 287 automated tests on this Draft branch.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 6 inert foundation/projection, browser-safe identity generation, response-provider invariants, diagnostics, configuration, request validation, and API endpoints have automated coverage. The current verified count is recorded below.
 
 ## Last Verified
 
-- Date: 2026-07-13
+- Date: 2026-07-14
 - Commands:
-  - `npm test`
-  - `npm run sample`
+  - `npm.cmd test`
+  - `npm.cmd run sample`
   - `git diff --check`
-  - `find . -name "*.mjs" -exec node --check {} \;`
-- Result: 287/287 tests passed. `npm run sample`, changed-module syntax checks, `git diff --check`, conflict-marker, privacy, and forbidden-Unicode scans passed.
+  - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
+- Result: 300/300 tests passed. `npm.cmd run sample`, `git diff --check`, all normative JSON examples, projection/echo/fingerprint checks, conflict-marker scan, privacy/secret scan, and forbidden-Unicode scan passed. No `.mjs` file changed in this docs-only work.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -57,8 +57,8 @@ Last updated: 2026-07-13
 
 ## Next Recommended Task
 
-1. Improve natural language intent parsing and NPC-response-driven suspicion updates.
-2. Improve suspicion score updates from nuanced player questions and NPC responses.
+1. Merge the closed Phase 6 candidate contract after review.
+2. Resume only the validation-only Phase 6 implementation sequence defined in section 25A; authoritative NPC commit remains a later review stage.
 
 ## Read This First Next Time
 
@@ -78,7 +78,7 @@ Last updated: 2026-07-13
 - GitHub private repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- The Phase 5 branch is pushed to `origin` and tracked by an open Draft pull request; it is not merged or ready for review completion.
+- The docs-only `docs/phase6-npc-candidate-contract` branch is based on current `origin/master`. It changes documentation only; the blocked Phase 6 implementation branch is not modified.
 - Game state is intentionally kept in memory only; save/load is not planned.
 
 ## Working Rule
