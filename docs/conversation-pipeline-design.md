@@ -983,7 +983,7 @@ Each participant projection requires exactly `participantId: ID` and `displayNam
 
 ## 15. Public Projections (Strict Schemas)
 
-All projection objects require `schemaVersion: 1`, use the closed `projectionType` discriminator below, have no optional or nullable fields, and set `additionalProperties: false`. Every String typed as ID uses the section 10 ID constraint. No projection may contain raw text, private memory, hidden role data, internal suspicion scores, provider diagnostics, or fields not listed in its row. String values other than IDs are limited by their referenced closed enum; no free-form projection text exists.
+All public projection objects in this section require `schemaVersion: 1`, use the closed `projectionType` discriminator below, have no optional or nullable fields, and set `additionalProperties: false`. Every String typed as ID uses the section 10 ID constraint. No public projection in this section may contain raw text, private memory, hidden role data, internal suspicion scores, provider diagnostics, or fields not listed in its row. String values other than IDs are limited by their referenced closed enum; no free-form public projection text exists. The Section 25A `NpcKnownInformationProjection` is a separate strict request projection with one explicitly allowlisted actor-private group; its public subobject still uses these public projection unions.
 
 | Projection | `projectionType` | Other required fields | Forbidden fields (in addition to every unlisted field) |
 | :--- | :--- | :--- | :--- |
@@ -1038,6 +1038,8 @@ Closed enum: `werewolf`, `not_werewolf`. Every candidate, accepted act, canonica
 - **PendingStatus**: `pending`, `aborting`, `completed`, `failed`
 - **LogicalReactionStatus**: `planned`, `active`, `committed`, `rejected`, `superseded`, `cancelled`, `exhausted`
 - **ReactionAttemptStatus**: `attempting`, `candidate_received`, `validated`, `accepted`, `failed`, `timed_out`, `rejected`, `aborted`
+- **NpcReactionProposalType**: `role_claim`, `result_claim`, `vote_declaration`, `suspicion`
+- **NpcRoleDisclosurePolicy**: `never_confess_werewolf`, `claim_when_directly_asked_after_result`, `avoid_unnecessary_claim`
 - **Sha256Fingerprint**: 64 lowercase ASCII hexadecimal characters matching `^[0-9a-f]{64}$`
 - **RFC3339Utc**: 20-35 ASCII characters, UTC timestamp ending in `Z`
 - **ClientCorrelationId**: ID supplied for browser-domain causality and validated as untrusted input
@@ -1137,7 +1139,7 @@ Both have no optional fields and `additionalProperties: false`. NPC result refer
 Provider waiting is runtime control state, not authoritative phase. From Phase 6, `PendingConversationRequest = PendingInterpreterRequest | PendingNpcReactionAttempt | PendingRendererRequest`, discriminated by `pendingType`; every member has no optional/null fields and `additionalProperties: false`.
 
 - `PendingInterpreterRequest` requires `schemaVersion: 1`, `pendingType: "interpreter"`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `inputRecordId: ID`, `targetNpcId: ID`, `operation: "interpret_player_input"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
-- `PendingNpcReactionAttempt` requires `schemaVersion: 1`, `pendingType: "npc_reaction"`, `requestId: ID`, `correlationId: ID`, `causationId: ID`, `reactionPlanId: ID`, `reactionAttemptId: ID`, `originatingInputRecordId: ID`, `turnId: ID`, `preconditionStateVersion: integer >= 0`, `preconditionPhase: GamePhase`, `targetNpcId: ID`, `operation: "generate_npc_reaction_candidate"`, `status: ReactionAttemptStatus`, and `startedAt: RFC3339Utc`.
+- `PendingNpcReactionAttempt` requires `schemaVersion: 1`, `pendingType: "npc_reaction"`, `gameSessionId: ID`, `requestId: ID`, `requestFingerprint: Sha256Fingerprint`, `correlationId: ID`, `causationId: ID`, `reactionPlanId: ID`, `reactionAttemptId: ID`, `originatingInputRecordId: ID`, `turnId: ID`, `turnOrder: safe integer >= 0`, `preconditionStateVersion: safe integer >= 0`, `preconditionPhase: GamePhase`, `targetNpcId: ID`, `operation: "generate_npc_reaction_candidate"`, `status: ReactionAttemptStatus`, and `startedAt: RFC3339Utc`.
 - `PendingRendererRequest` requires `schemaVersion: 1`, `pendingType: "renderer"`, a distinct `requestId: ID`, `correlationId: ID`, `causationId: ID`, `turnId: ID`, `resultingStateVersion: integer >= 1`, `reactionPlanId: ID`, `originatingInputRecordId: ID`, `locale: SupportedLocale`, `targetNpcId: ID`, `operation: "render_npc_utterance"`, `status: PendingStatus`, and `startedAt: RFC3339Utc`.
 
 The Interpreter member forbids `resultingStateVersion`, `reactionPlanId`, `reactionAttemptId`, `originatingInputRecordId`, and `causationId`. The NPC-reaction member forbids `resultingStateVersion`, `inputRecordId`, and Renderer selection/finalization fields. The Renderer member forbids `preconditionStateVersion`, `inputRecordId`, and `reactionAttemptId`. This exclusion prevents one version field or attempt identity from acquiring two meanings.
@@ -1248,7 +1250,7 @@ All endpoints accept only `Content-Type: application/json; charset=utf-8`, rejec
 | Endpoint | Request | 200 response |
 | :--- | :--- | :--- |
 | `POST /api/interpret-player-input` | `InterpreterRequest` | `InterpreterHttpResponse` |
-| `POST /api/generate-npc-reaction-candidate` (Phase 6) | strict Phase 6 candidate request | strict correlated candidate response |
+| `POST /api/generate-npc-reaction-candidate` (Phase 6) | `NpcReactionCandidateRequest` | `NpcReactionCandidateHttpResponse` |
 | `POST /api/render-npc-utterance` | `RendererRequest` | `RendererHttpResponse` |
 
 For all endpoints: malformed JSON returns 400 `malformed_json`; schema violations return 400 `invalid_schema`; unsupported `schemaVersion` returns 400 `unsupported_schema_version`; idempotency fingerprint conflict returns 409 `idempotency_conflict`; unsupported media type returns 415; oversized body returns 413; server rate limit returns 429; invalid provider output or provider authentication failure returns 502; unavailable provider returns 503; provider timeout returns 504. Client disconnect aborts body read, provider call, and backoff and sends no new response. The request `AbortSignal` is propagated through the entire chain.
@@ -1326,6 +1328,9 @@ Targets must exist before the source or be created in the same atomic commit. Da
 | `NpcUtterancePublicationFinalized` | `source.rendererRequestId` | active `PendingRendererRequest` | exactly 1 in baseline | before pending terminal/removal | duplicate returns stored result | runtime target removed only after result persistence |
 | `NpcPublicationFinalizationResult` | `finalizationId` | `NpcUtterancePublicationFinalized` | exactly 1 | finalization appended first | exact mirror returned | append-only |
 | `PendingRendererRequest` | `reactionPlanId` | committed `ControlledCommentaryReactionPlan` | exactly 1 | after reaction commit | validate same plan/version | runtime record removable; target append-only |
+| `NpcReactionCandidateRequest` | complete immutable reaction binding | one active logical reaction, active attempt, triggering player result/input, and current engine snapshot | exactly 1 of each | before provider invocation | request fingerprint stable; attempt ID changes only on retry | runtime-only; no authoritative target created |
+| `NpcReactionCandidateProviderResult` | every binding echo | exact request plus active `PendingNpcReactionAttempt`/logical preparation binding | exactly 1 | response validation only | equal candidate may deduplicate only after all echoes match | provider object discarded after detached validation |
+| `NpcReactionProposal.targetId` | captured public participant and current authoritative roster | exactly 1 in each; kind-specific allowlist also required | exactly 1 | validation only | no proposal replay creates authority | runtime-only candidate reference |
 | `PlayerConversationCommitResult` | `playerPublicationId` | `PlayerUtterancePublishedRecord.publicationId` | exactly 1 | same player commit | return original ID | append-only |
 | `ControlledNpcReactionCommitResult` | `reservationId` | `NpcUtterancePublicationReserved.reservationId` | exactly 1 | same NPC commit; never finalization | return original ID | append-only |
 | `CanonicalClaim` | `idempotencyKey` | provenance-specific canonical derivation | exactly 1 | computed before claim creation | same payload returns existing claim; mismatch conflicts | immutable |
@@ -1334,7 +1339,7 @@ Targets must exist before the source or be created in the same atomic commit. Da
 
 ## 25A. Phase 6 structured NPC reaction migration
 
-This section is normative for Phase 6. It specifies a future implementation; the design change itself does not implement a schema, endpoint, provider, feature flag, or runtime behavior.
+This section is normative for Phase 6. It defines the transport and validation schemas needed by a future implementation; the design change itself does not implement an endpoint, provider, feature flag, validator, commit, or runtime behavior. Section 25A is the single normative source for the Phase 6 candidate contract; status, roadmap, and changelog summaries must not restate or vary its schemas.
 
 ### Audited baseline and ownership
 
@@ -1369,11 +1374,11 @@ Phase 6 reuses repository-native identities:
 - `reactionPlanId` is both the **logical reaction ID** and the primary ID of the eventual authoritative `NpcReactionPlan`; there is no second authoritative reaction-record ID. `WerewolfGame` allocates it once after the player commit and before provider work. It is unique within `gameSessionId`, stable across retries, and commits at most once.
 - `reactionAttemptId` is the only new identity primitive. `WerewolfGame` allocates a new value for every engine-level provider attempt. It is runtime control/provenance until the winning value is copied into `NpcReactionPlan.successfulAttemptId`; an attempt ID is never reused.
 - `npcId`/`targetNpcId` is the engine-selected **actor ID**. A provider only echoes it; it cannot substitute another actor.
-- `causationId` is the exact **trigger identity**, equal to the triggering `PlayerConversationCommitResult.requestId`. `originatingInputRecordId` is that result's `inputRecordId`. The result, input, turn, correlation, actor, and player resulting version must form one exact committed graph.
+- `causationId` is the exact **trigger identity**, equal to the triggering `PlayerConversationCommitResult.requestId`. `originatingInputRecordId` is that result's `inputRecordId`. The result, input, turn, player correlation, actor, and player resulting version must form one exact committed graph. That originating player correlation remains in `knownInformation.public.triggeringInput`; it is distinct from the new reaction `correlationId` below.
 - `requestId` is the stable, session-unique reaction commit/idempotency operation ID. It remains unchanged across attempts so every retry addresses the same intended commit; reuse by another logical reaction is an identity conflict.
 - `correlationId` is the stable trace ID for all attempts, transport observations, commit, and publication of one logical reaction. It remains unchanged across attempts but never acts as an idempotency key or authorizes a commit. Its separate role from `requestId` is observability, not operation identity.
 - `requestFingerprint` is the engine-computed SHA-256 fingerprint of the immutable logical request/binding/projection and remains fixed across attempts.
-- `candidateFingerprint` is the engine-computed SHA-256 fingerprint of the strict normalized candidate response excluding provider diagnostics. It identifies exact repeated output within one attempt and is stored only in runtime idempotency/tombstone control; the provider neither supplies nor authorizes it.
+- `candidateFingerprint` is the engine-computed `sha256CanonicalJson()` value of the strict normalized `NpcReactionCandidate` object alone, under the exact algorithm below. It identifies exact repeated output within one attempt and is stored only in runtime idempotency/tombstone control; the provider neither supplies nor authorizes it.
 
 The preparation binding is exactly `(gameSessionId, reactionPlanId, requestId, correlationId, causationId, originatingInputRecordId, turnId, turnOrder, preconditionPhase, preconditionStateVersion, npcId, requestFingerprint)`. `preconditionStateVersion` is the player result's `N+1`. The final commit must re-read every live dimension; an immutable preparation snapshot alone is insufficient.
 
@@ -1409,7 +1414,7 @@ The session-local reaction coordinator owns two separate state machines. A logic
 | :--- | :--- | :--- | :--- |
 | `attempting` | one exact `reactionAttemptId` has an active provider invocation | `candidate_received`, `failed`, `timed_out`, `aborted` | no |
 | `candidate_received` | one correlated candidate exists but has no authority | `validated`, `rejected`, `aborted` | no |
-| `validated` | candidate and prepared delta passed pre-commit checks | `accepted`, `rejected`, `aborted` | no |
+| `validated` | the detached candidate passed correlation, strict structure, fingerprint, and semantic authorization; no authoritative delta or object exists yet | `accepted`, `rejected`, `aborted` | no |
 | `accepted` | this attempt supplied the candidate committed by the logical reaction | none | yes |
 | `failed` | transport/provider operation failed | none | yes |
 | `timed_out` | the attempt deadline expired and its signal was aborted | none | yes |
@@ -1440,19 +1445,432 @@ attempting/candidate_received/validated -> aborted
 
 ### Structured candidate transport and validation
 
-The future Phase 6 transport operation is `generate_npc_reaction_candidate`. Its strict request carries the complete binding, one `reactionAttemptId`, the known-information projection, allowed candidate kinds, allowed target IDs, and bounded limits. Its strict success response echoes `requestId`, `correlationId`, `reactionPlanId`, `reactionAttemptId`, `preconditionStateVersion`, and `npcId`. `additionalProperties: false` applies at every object level; the decoded request and response each remain within 64 KiB and existing nesting limits.
+The Phase 6 transport operation is the literal `generate_npc_reaction_candidate`. The provider receives one strict request for one engine-issued attempt and returns one strict semantic candidate. No request or response object has optional or nullable fields. Every object has `additionalProperties: false`; forbidden and unknown fields are rejected rather than stripped. IDs use the section 10 `ID` pattern, fingerprints use `Sha256Fingerprint`, and every integer is a nonnegative JavaScript safe integer unless a smaller bound is stated. Decoded request and response bodies are each at most 65,536 bytes. The section 28 nesting limits remain request 8, candidate/model 5, and HTTP 10.
 
-The candidate contains only closed, bounded semantic proposals. It contains no authoritative descriptor/claim/event/publication IDs, no version chosen by the provider, no arbitrary state patch, and no display prose. During initial Phase 6, only proposals that the engine can convert to a `CanonicalOnlyReactionPlan` are eligible. A non-state-changing commentary proposal is `unsupported_in_phase6`, leaves state at `N+1`, and does not create a reservation; Phase 7 owns controlled Renderer integration.
+#### `NpcReactionCandidateRequest`
+
+`NpcReactionCandidateRequest` has exactly these fields:
+
+| Field | Required type and rule |
+| :--- | :--- |
+| `schemaVersion` | literal `1` |
+| `operation` | literal `generate_npc_reaction_candidate` |
+| `gameSessionId` | `ID`; active engine session |
+| `reactionPlanId` | `ID`; stable logical reaction ID |
+| `reactionAttemptId` | `ID`; unique to this provider invocation |
+| `requestId` | `ID`; stable logical operation ID |
+| `requestFingerprint` | `Sha256Fingerprint`; stable across attempts |
+| `correlationId` | `ID`; stable trace ID |
+| `causationId` | `ID`; triggering player commit request ID |
+| `originatingInputRecordId` | `ID`; exact committed player input |
+| `turnId` | `ID`; originating logical command |
+| `turnOrder` | safe integer `>= 0` |
+| `preconditionPhase` | literal `player_question` in initial Phase 6 |
+| `preconditionStateVersion` | safe integer `>= 0`; the player commit's `N+1` |
+| `npcId` | `ID`; engine-selected alive NPC actor |
+| `knownInformation` | strict `NpcKnownInformationProjection` from the next subsection |
+| `limits` | exact `NpcReactionCandidateLimits` |
+
+`NpcReactionCandidateLimits` is exactly `{ "maxProposals": 16, "maxNestingDepth": 5 }`. The candidate constraints are exactly `knownInformation.constraints`; they are not duplicated as another request field. The request validator requires `knownInformation.public.phase == preconditionPhase`, `knownInformation.actorPrivate.actorId == npcId`, and the triggering result/input/turn/version graph to match `causationId`, `originatingInputRecordId`, `turnId`, and `preconditionStateVersion`. The player result/input correlation must match within that originating graph; it is not required to equal the separately allocated reaction `correlationId`.
+
+The engine computes `requestFingerprint` with `sha256CanonicalJson()` over a new plain object reconstructed from every request field except `reactionAttemptId` and `requestFingerprint`. The reconstruction preserves the field values and array order, and includes `schemaVersion`, `operation`, the remaining complete binding, `knownInformation`, and `limits`. Excluding only the per-attempt ID and the fingerprint itself makes the value stable across retries without weakening any attempt echo check. The provider never computes or replaces it.
+
+#### Candidate and proposal union
+
+`NpcReactionCandidate` has exactly `schemaVersion: 1` and `proposals: NpcReactionProposal[1..16]`. Proposal order is semantic and is preserved through validation and later descriptor construction. The provider-facing union uses discriminator `proposalType` and is separate from the authoritative `CanonicalSpeechActDescriptor` union:
+
+| Member | Exact required fields | All other fields |
+| :--- | :--- | :--- |
+| `NpcRoleClaimProposal` | `proposalType: "role_claim"`, `claimedRole: ClaimableRole` | forbidden, including `targetId` and `result` |
+| `NpcResultClaimProposal` | `proposalType: "result_claim"`, `targetId: ID`, `result: ClaimResult` | forbidden, including `claimedRole` |
+| `NpcVoteDeclarationProposal` | `proposalType: "vote_declaration"`, `targetId: ID` | forbidden, including `claimedRole` and `result` |
+| `NpcSuspicionProposal` | `proposalType: "suspicion"`, `targetId: ID` | forbidden, including `claimedRole` and `result` |
+
+Every proposal is a strict non-null object. No member may carry `descriptorId`, `claimId`, `eventId`, `segmentId`, `publicationId`, any authoritative or resulting version, an effect, a state patch, a policy/disclosure boolean, a confidence, an explanation, or display prose. Initial Phase 6 has no arbitrary proposal reference field: `targetId` is the only proposal-level reference. `knownInformation.constraints.allowedReferenceIds` bounds projected context and prompt use, but the provider cannot return one of those IDs as a proposal field. Trigger identity remains in the request binding.
+
+Exact proposal duplicates are determined by canonical JSON equality after strict reconstruction and reject the whole candidate as `duplicate_proposal`. Contradiction rules are also whole-candidate atomic:
+
+- at most one role claim is allowed; a second identical one is a duplicate and a different role is `contradictory_proposals`;
+- one result claim is allowed per target; an identical target/result pair is a duplicate and two results for one target are contradictory; different result targets are allowed;
+- at most one vote declaration is allowed; an identical second vote is a duplicate and a different second target is contradictory;
+- one suspicion is allowed per target; an identical target is a duplicate and different targets are allowed;
+- different proposal kinds may coexist and retain their original order, but each is authorized independently from pre-candidate state.
+
+Any invalid member rejects the complete candidate; no valid subset is retained. The reserved future discriminator literals `commentary`, `answer`, `acknowledgement`, `decline`, and `clarification` are rejected as `unsupported_in_phase6`. Every other unrecognized discriminator, unknown field, missing field, null, wrong enum, wrong type, bound violation, or nesting violation is `invalid_candidate_schema`. The provider cannot create a controlled-commentary reservation; Phase 7 owns that design.
+
+After parsing, the engine validates the source object, reconstructs a new plain `NpcReactionCandidate` containing only the exact fields above, recursively freezes the detached reconstruction, and never reuses or shares provider-owned objects. Structural reconstruction is not semantic authorization.
+
+#### Target and proposal authorization matrix
+
+All proposal kinds must appear in `knownInformation.constraints.allowedCandidateKinds`. A proposal with a target must satisfy every common rule: its ID occurs exactly once in captured `public.participants`, belongs to `allowedTargetIds`, is neither `npcId` nor the player-class participant, resolves exactly once in the current authoritative roster for the same active session, and has not disappeared through reset or roster replacement. The final live check repeats the kind-specific eligibility; “live check” means checking current state, not requiring `publicStatus: "alive"` for kinds whose row does not require it.
+
+| Proposal kind | Target rule |
+| :--- | :--- |
+| `role_claim` | `targetId` is forbidden |
+| `result_claim` | target is in `allowedResultTargetIds`; current roster membership is required, but the target need not be alive |
+| `vote_declaration` | target is in `allowedLivingTargetIds` and remains alive at final validation |
+| `suspicion` | target is in `allowedLivingTargetIds` and remains alive at final validation |
+
+For `result_claim`, membership of `targetId` in `allowedResultTargetIds` and membership of `result` in `allowedResultValues` are necessary but not sufficient. `knownInformation.actorPrivate.investigationResults` must contain an exact actor-owned fact with the same `targetId` and `result`; changing the target or result independently is rejected as `result_fact_mismatch`. Public hearsay, provider assertion, the target's hidden role, another actor's fact, and a same-candidate role claim never substitute for that exact fact. Initial Phase 6 deliberately permits no NPC result bluff.
+
+#### Closed role-disclosure policy
+
+`NpcRoleDisclosurePolicy` is the closed enum projected from the current engine policy. Its meanings are:
+
+| Policy | Authoritative meaning | `role_claim` | `result_claim` |
+| :--- | :--- | :--- | :--- |
+| `never_confess_werewolf` | werewolf policy; never reveal the actor's werewolf role or fabricate investigation authority | denied | denied |
+| `claim_when_directly_asked_after_result` | seer policy; disclosure is permitted only after the actor owns at least one investigation result and the triggering player question directly targets that actor about role or result | allowed only by the rules below | allowed only by the rules below |
+| `avoid_unnecessary_claim` | citizen policy; the initial structured route does not create a role or result claim | denied | denied |
+
+“Directly asked” is not inferred from raw-text keywords or provider output. It requires a captured `PublicQuestionEventProjection` with `actorId: "player"`, `targetId == npcId`, `turnId == request.turnId`, `occurredPhase: "day_discussion"`, `topic` equal to `role` or `result`, and `eventId` in `allowedReferenceIds`. Candidate validation itself runs with captured and current `preconditionPhase == "player_question"`.
+
+A role claim is allowed only when all of the following hold: the kind is allowlisted; the policy is `claim_when_directly_asked_after_result`; the direct-question event exists; the authoritative actor role is `seer`; the actor owns at least one investigation result; `allowedClaimRoles` is exactly `["seer"]`; and `claimedRole` is both in that list and equal to the actor's own role. Otherwise `allowedClaimRoles` is exactly `[]` and a role claim is denied. A citizen claim, werewolf confession, and false role claim are therefore impossible in the initial provider contract.
+
+A result claim is allowed only when the same seer policy, phase, and direct-question conditions hold and the exact target/result fact passes the preceding matrix. A role claim earlier in the same candidate cannot create or broaden result permission; all proposals are authorized against the captured pre-candidate policy and facts. Prior public disclosure neither grants permission nor blocks a currently permitted repeat. Repeat/contradiction relations with committed claims are derived later by the authoritative preparation/commit phase; they are not provider fields and do not alter validation permission.
+
+Semantic denial precedence is exact: stale session/turn/version/phase/actor or broken trigger binding; candidate-kind allowlist; unknown or mismatched disclosure policy; role conditions; target and result-fact conditions; then within-candidate duplicate/contradiction checks. Structural validation always precedes these semantic checks. An unknown policy value fails closed as `role_disclosure_policy_unknown`. Public diagnostics expose only the normalized reason code, never the actor's hidden role, team, fact, or policy text.
+
+#### Provider result and HTTP success envelope
+
+`NpcReactionCandidateProviderResult` requires exactly `schemaVersion: 1`, `operation: "generate_npc_reaction_candidate"`, every immutable binding echo (`gameSessionId`, `reactionPlanId`, `reactionAttemptId`, `requestId`, `requestFingerprint`, `correlationId`, `causationId`, `originatingInputRecordId`, `turnId`, `turnOrder`, `preconditionPhase`, `preconditionStateVersion`, and `npcId`), `candidate: NpcReactionCandidate`, and `diagnostics: ProviderDiagnostics`. It has no optional/null fields. For Phase 6, the existing strict `ProviderDiagnostics` schema applies and `attemptCount` must be literal `1`, because one engine attempt maps to one provider invocation. Diagnostics are untrusted transport observations, excluded from all candidate fingerprints, projections, authority, public errors, and commit decisions.
+
+`NpcReactionCandidateHttpResponse` requires exactly `schemaVersion: 1`, `operation: "generate_npc_reaction_candidate"`, `requestId: ID`, `correlationId: ClientCorrelationId`, `serverCorrelationId: ServerCorrelationId`, `reactionPlanId: ID`, `reactionAttemptId: ID`, and `result: NpcReactionCandidateProviderResult`. The top-level request, correlation, plan, and attempt fields must equal both the request and nested result; `serverCorrelationId` is transport-owned and has no nested copy.
+
+The nested provider result echoes every immutable binding field and the engine compares each echo byte-for-byte with both `NpcReactionCandidateRequest` and the active `PendingNpcReactionAttempt`/logical preparation binding. The pending NPC member stores the complete identity needed for this comparison, with `targetNpcId == request.npcId`. `knownInformation` and `limits` are not echoed: their exact values are held in the immutable request and covered by the recomputed `requestFingerprint`. An echo can correlate but never authorize; a mismatch is rejected before candidate semantic validation.
+
+Normative conforming request example:
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "generate_npc_reaction_candidate",
+  "gameSessionId": "game-session-1",
+  "reactionPlanId": "reaction-plan-1",
+  "reactionAttemptId": "reaction-attempt-1",
+  "requestId": "reaction-request-1",
+  "requestFingerprint": "ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6",
+  "correlationId": "correlation-1",
+  "causationId": "player-request-1",
+  "originatingInputRecordId": "input-1",
+  "turnId": "turn-1",
+  "turnOrder": 1,
+  "preconditionPhase": "player_question",
+  "preconditionStateVersion": 2,
+  "npcId": "npc-aoi",
+  "knownInformation": {
+    "schemaVersion": 1,
+    "projectionType": "npc_known_information",
+    "public": {
+      "day": 1,
+      "phase": "player_question",
+      "participants": [
+        { "participantId": "npc-aoi", "displayName": "Aoi", "publicStatus": "alive" },
+        { "participantId": "npc-beni", "displayName": "Beni", "publicStatus": "alive" },
+        { "participantId": "player", "displayName": "Player", "publicStatus": "alive" }
+      ],
+      "events": [
+        {
+          "schemaVersion": 1,
+          "projectionType": "public_question_event",
+          "eventId": "event-question-1",
+          "actorId": "player",
+          "turnId": "turn-1",
+          "occurredPhase": "day_discussion",
+          "targetId": "npc-aoi",
+          "topic": "result"
+        }
+      ],
+      "claims": [],
+      "votes": [],
+      "executions": [],
+      "attackDeaths": [],
+      "triggeringInput": {
+        "schemaVersion": 1,
+        "inputRecordId": "input-1",
+        "requestId": "player-request-1",
+        "correlationId": "player-correlation-1",
+        "turnId": "turn-1",
+        "capturedStateVersion": 1,
+        "actorId": "player",
+        "rawText": "Aoi, what is your role and result?",
+        "locale": "en"
+      }
+    },
+    "actorPrivate": {
+      "actorId": "npc-aoi",
+      "ownRole": "seer",
+      "ownTeam": "village",
+      "investigationResults": [
+        { "day": 1, "targetId": "npc-beni", "result": "werewolf", "disclosurePolicy": "engine_policy_required" }
+      ],
+      "voteHistory": [],
+      "suspicionScores": [{ "targetId": "npc-beni", "score": 2 }]
+    },
+    "constraints": {
+      "allowedTargetIds": ["npc-beni"],
+      "allowedLivingTargetIds": ["npc-beni"],
+      "allowedResultTargetIds": ["npc-beni"],
+      "allowedCandidateKinds": ["role_claim", "result_claim", "vote_declaration", "suspicion"],
+      "allowedClaimRoles": ["seer"],
+      "allowedResultValues": ["werewolf"],
+      "allowedReferenceIds": ["event-question-1", "input-1"],
+      "roleDisclosurePolicy": "claim_when_directly_asked_after_result"
+    },
+    "presentation": { "speechStyleId": "brief" }
+  },
+  "limits": { "maxProposals": 16, "maxNestingDepth": 5 }
+}
+```
+
+Normative conforming HTTP success example for that request:
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "generate_npc_reaction_candidate",
+  "requestId": "reaction-request-1",
+  "correlationId": "correlation-1",
+  "serverCorrelationId": "server-correlation-1",
+  "reactionPlanId": "reaction-plan-1",
+  "reactionAttemptId": "reaction-attempt-1",
+  "result": {
+    "schemaVersion": 1,
+    "operation": "generate_npc_reaction_candidate",
+    "gameSessionId": "game-session-1",
+    "reactionPlanId": "reaction-plan-1",
+    "reactionAttemptId": "reaction-attempt-1",
+    "requestId": "reaction-request-1",
+    "requestFingerprint": "ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6",
+    "correlationId": "correlation-1",
+    "causationId": "player-request-1",
+    "originatingInputRecordId": "input-1",
+    "turnId": "turn-1",
+    "turnOrder": 1,
+    "preconditionPhase": "player_question",
+    "preconditionStateVersion": 2,
+    "npcId": "npc-aoi",
+    "candidate": {
+      "schemaVersion": 1,
+      "proposals": [
+        { "proposalType": "role_claim", "claimedRole": "seer" },
+        { "proposalType": "result_claim", "targetId": "npc-beni", "result": "werewolf" }
+      ]
+    },
+    "diagnostics": {
+      "providerName": "example-provider",
+      "model": "example-model",
+      "attemptCount": 1,
+      "elapsedMs": 125
+    }
+  }
+}
+```
+
+The examples' `requestFingerprint` is the exact `sha256CanonicalJson()` value over the request-fingerprint input defined above; both copies must be byte-equal.
+
+#### Candidate fingerprint
+
+After the complete response and proposal shapes pass strict structural validation, the engine reconstructs the detached normalized `NpcReactionCandidate` and computes:
+
+```text
+candidateFingerprint = lowercaseHex(SHA-256(UTF-8(canonicalJson(normalizedCandidate))))
+```
+
+This is exactly repository `sha256CanonicalJson(normalizedCandidate)`, producing 64 lowercase hexadecimal characters. It does not use the variadic `sha256Fingerprint()` wrapper, because the fingerprint input is the candidate object itself rather than an array of parts. Canonical JSON sorts object keys lexicographically, preserves array/proposal order, rejects sparse arrays, non-finite numbers, cycles, symbol keys, and non-plain objects, and JSON-encodes strings exactly. The engine does not sort proposals and does not trim, case-fold, or Unicode-normalize enum, ID, or string values.
+
+The complete fingerprint input for the response example is exactly:
+
+```json
+{
+  "schemaVersion": 1,
+  "proposals": [
+    { "proposalType": "role_claim", "claimedRole": "seer" },
+    { "proposalType": "result_claim", "targetId": "npc-beni", "result": "werewolf" }
+  ]
+}
+```
+
+Its canonical JSON is `{"proposals":[{"claimedRole":"seer","proposalType":"role_claim"},{"proposalType":"result_claim","result":"werewolf","targetId":"npc-beni"}],"schemaVersion":1}` and its `candidateFingerprint` is `64a82470787c3492e03bca709c779088957fa0b451481c3386aa5c494af7b481`.
+
+Excluded from the input are the request and HTTP envelopes; every binding/echo field; `reactionAttemptId`; `serverCorrelationId`; provider/transport diagnostics; provider name, model, latency, attempt count, usage, notes, headers, and status metadata; and any later engine-created descriptor, claim, event, segment, publication, or commit ID. Unknown fields are not excluded and hashed: they reject the response before fingerprint calculation. Reordering proposals changes the fingerprint. Changing only a response echo does not change a candidate fingerprint, but the separate identity/correlation layer rejects the response before candidate use.
+
+#### Validated candidate runtime contract
+
+`ValidatedNpcReactionCandidate` is the one exact success value produced by candidate validation. It is a strict non-null object with exactly `schemaVersion`, `binding`, `candidate`, `candidateFingerprint`, and `validationContext`; it has no optional or nullable fields and sets `additionalProperties: false` at every level. The binding is nested and is never also expanded at the top level.
+
+`ValidatedNpcReactionCandidateBinding` has exactly these required fields:
+
+| Field | Required type and rule |
+| :--- | :--- |
+| `gameSessionId` | `ID`; copied from the active engine-owned preparation binding |
+| `reactionPlanId` | `ID`; stable logical reaction ID |
+| `reactionAttemptId` | `ID`; exact engine-issued attempt that supplied the candidate |
+| `requestId` | `ID`; stable logical operation ID |
+| `requestFingerprint` | `Sha256Fingerprint`; recomputed by the engine and equal to the active request fingerprint |
+| `correlationId` | `ID`; stable reaction trace ID |
+| `causationId` | `ID`; triggering player commit request ID |
+| `originatingInputRecordId` | `ID`; exact committed player input record |
+| `turnId` | `ID`; originating logical command |
+| `turnOrder` | safe integer `>= 0` |
+| `preconditionPhase` | literal `player_question` in initial Phase 6 |
+| `preconditionStateVersion` | safe integer `>= 0`; the player commit's `N+1` |
+| `npcId` | `ID`; engine-selected actor |
+
+`ValidatedNpcReactionCandidateValidationContext` is also strict and has exactly:
+
+| Field | Required type and rule |
+| :--- | :--- |
+| `projectionFingerprint` | `Sha256Fingerprint`; engine-computed `sha256CanonicalJson()` of the detached strict `NpcKnownInformationProjection` used for validation |
+| `roleDisclosurePolicy` | `NpcRoleDisclosurePolicy`; copied from that captured projection after strict validation |
+| `permissionResult` | literal `allowed`; engine semantic-authorization result at validation time |
+| `finalApplicabilityResult` | literal `applicable`; engine live applicability result at validation time |
+
+The root `schemaVersion` is literal `1`. `candidate` is one detached strict `NpcReactionCandidate`, and `candidateFingerprint` is the engine-computed `Sha256Fingerprint` defined above. Arrays retain the exact bounds, uniqueness, and order of their referenced candidate/projection schemas. Every `ID` is a nonempty ASCII identifier of 1-64 characters matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`; the runtime value introduces no other free-form string or array.
+
+The engine constructs every binding and validation-context field from its active request, pending attempt, captured projection, and live state. Provider echoes are comparison input only and are never copied into the runtime value. Candidate proposal semantics originate with the provider, but `candidate` is a newly reconstructed plain object containing only allowed fields. `candidate`, its fingerprint, the validation outcome, `permissionResult`, and `finalApplicabilityResult` are therefore engine-owned results. No object or nested array is shared with the provider result, request decoder, or caller input. The complete value is recursively frozen before return.
+
+A later engine-owned authoritative preparation stage may trust only that the returned binding, normalized candidate, fingerprints, and validation-time results were produced together by this validator. They are provenance for one validation instant, not authority to commit. Preparation must re-read and compare the active session, logical reaction, attempt, request, correlation, trigger/input graph, turn/order, phase, version, actor, targets, projection/policy, and final applicability before deriving any authoritative object. In particular, `permissionResult: "allowed"` and `finalApplicabilityResult: "applicable"` cannot bypass a later live check.
+
+#### Validation result union
+
+`NpcReactionCandidateValidationResult` is the closed union `NpcReactionCandidateValidatedResult | NpcReactionCandidateRejectedResult`, discriminated by `status`. Both members are strict non-null objects with `schemaVersion: 1`, no optional fields, and `additionalProperties: false`.
+
+- `NpcReactionCandidateValidatedResult` has exactly `schemaVersion: 1`, `status: "validated"`, and `value: ValidatedNpcReactionCandidate`.
+- `NpcReactionCandidateRejectedResult` has exactly `schemaVersion: 1`, `status: "rejected"`, `binding: ValidatedNpcReactionCandidateBinding`, and `rejection: NpcReactionCandidateRejection`. The binding always comes from the engine's expected active preparation/attempt, never from a malformed or mismatched provider echo, so none of its fields is nullable even when JSON or envelopes are rejected.
+
+`NpcReactionCandidateRejection` has exactly `stage`, `reasonCode`, `retryable`, and `diagnostics`, with `additionalProperties: false`:
+
+- `stage` is the closed enum `transport | binding | structure | fingerprint | authorization | applicability | duplicate`.
+- `reasonCode` is one closed `NpcReactionCandidateRejectionCode` from the table below.
+- `retryable` is literal `false`. Candidate validation never decides that another provider attempt is safe. Only the later reaction coordinator may retry separately classified transient network/unavailable failures or timeouts under section 25A policy; those coordinator failures are not converted to a validation rejection.
+- `diagnostics` is a dense `NpcReactionCandidateValidationDiagnostic[0..8]`. Each diagnostic has exactly `code: NpcReactionCandidateRejectionCode` and `location: NpcReactionCandidateValidationLocation`, with no optional/null fields and `additionalProperties: false`. `location` is the closed enum `http_envelope | provider_result | binding | candidate | proposal | reference | actor | target | policy | known_information | fingerprint | live_state`. No diagnostic message, path string, provider value, raw body, raw candidate, private fact, policy text, display text, or hidden-information value is permitted.
+
+The rejection codes, stages, and normal diagnostic locations are exact:
+
+| `reasonCode` | `stage` | Normal `location` | Covered classification |
+| :--- | :--- | :--- | :--- |
+| `body_too_large` | `transport` | `http_envelope` | decoded body exceeds 65,536 bytes |
+| `malformed_json` | `transport` | `http_envelope` | body is not valid JSON |
+| `invalid_envelope` | `transport` | `http_envelope` or `provider_result` | media/encoding, operation, required envelope, or strict provider-result shape is invalid |
+| `unsupported_schema_version` | `transport` | `http_envelope` or `provider_result` | any required schema version is not literal `1` |
+| `binding_mismatch` | `binding` | `binding` | an echo differs from the active request/pending binding |
+| `stale_request` | `applicability` | `live_state` | session, turn, phase, version, actor, target, or active attempt is no longer applicable |
+| `duplicate_response` | `duplicate` | `provider_result` | exact repeated response for an already observed/terminal attempt |
+| `attempt_response_conflict` | `duplicate` | `provider_result` | one attempt ID is reused with a different candidate fingerprint |
+| `idempotency_conflict` | `duplicate` | `binding` | logical/request identity is reused with a different fingerprint or graph |
+| `invalid_candidate_schema` | `structure` | `candidate` or `proposal` | candidate/proposal field, type, enum, nullability, bound, nesting, or strictness violation |
+| `unsupported_in_phase6` | `structure` | `proposal` | a reserved but unsupported proposal discriminator is supplied |
+| `duplicate_proposal` | `authorization` | `proposal` | exact duplicate proposal in one candidate |
+| `contradictory_proposals` | `authorization` | `proposal` | the candidate violates a whole-candidate contradiction rule |
+| `unknown_reference` | `authorization` | `reference` | a referenced identity is absent, duplicated, or outside the captured reference graph |
+| `actor_ineligible` | `authorization` | `actor` | selected actor no longer satisfies the captured/current actor rules |
+| `target_ineligible` | `authorization` | `target` | proposal target fails an allowlist or current eligibility rule |
+| `permission_denied` | `authorization` | `policy` | a proposal kind or disclosure is not permitted by captured policy |
+| `result_fact_mismatch` | `authorization` | `known_information` | result target/value lacks the exact actor-owned projected fact |
+| `role_disclosure_policy_unknown` | `authorization` | `policy` | disclosure policy is outside the closed enum |
+| `known_information_boundary_violation` | `authorization` | `known_information` | candidate use would cross the captured actor/public information boundary |
+| `fingerprint_mismatch` | `fingerprint` | `fingerprint` | request or candidate fingerprint does not equal engine recomputation |
+| `final_live_validation_failure` | `applicability` | `live_state` | final live semantic/applicability recheck fails without a more specific stale code |
+
+The first failing layer controls `reasonCode`; later layers are not executed. A diagnostic may repeat that reason and may add only other codes already observed in the same executed layer, up to eight total. It cannot expose which hidden role, team, investigation fact, private score, or policy payload caused a denial. The exact `reasonCode`, but never the diagnostics array, may be copied into the existing redacted lifecycle observation. HTTP outcomes remain the coarser `ErrorEnvelope`; this runtime result is never returned to the provider or copied into public history.
+
+Constructing or returning either union member allocates no authoritative ID, mutates no registry or game state, invokes no sink, and increments `stateVersion` by `0`; the authoritative graph remains exactly the player-committed `N+1` graph.
+
+Normative validation success example for the request/response above:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "validated",
+  "value": {
+    "schemaVersion": 1,
+    "binding": {
+      "gameSessionId": "game-session-1",
+      "reactionPlanId": "reaction-plan-1",
+      "reactionAttemptId": "reaction-attempt-1",
+      "requestId": "reaction-request-1",
+      "requestFingerprint": "ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6",
+      "correlationId": "correlation-1",
+      "causationId": "player-request-1",
+      "originatingInputRecordId": "input-1",
+      "turnId": "turn-1",
+      "turnOrder": 1,
+      "preconditionPhase": "player_question",
+      "preconditionStateVersion": 2,
+      "npcId": "npc-aoi"
+    },
+    "candidate": {
+      "schemaVersion": 1,
+      "proposals": [
+        { "proposalType": "role_claim", "claimedRole": "seer" },
+        { "proposalType": "result_claim", "targetId": "npc-beni", "result": "werewolf" }
+      ]
+    },
+    "candidateFingerprint": "64a82470787c3492e03bca709c779088957fa0b451481c3386aa5c494af7b481",
+    "validationContext": {
+      "projectionFingerprint": "12b85c8ef13ca8b42101fb15df59e9c3a1918b33402aaf0ef786138a746a13b6",
+      "roleDisclosurePolicy": "claim_when_directly_asked_after_result",
+      "permissionResult": "allowed",
+      "finalApplicabilityResult": "applicable"
+    }
+  }
+}
+```
+
+Normative validation rejection example against the same expected binding:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "rejected",
+  "binding": {
+    "gameSessionId": "game-session-1",
+    "reactionPlanId": "reaction-plan-1",
+    "reactionAttemptId": "reaction-attempt-1",
+    "requestId": "reaction-request-1",
+    "requestFingerprint": "ac741b97386d4f344cfc4f6139d90089bce90f612122599bafd3af860057b1a6",
+    "correlationId": "correlation-1",
+    "causationId": "player-request-1",
+    "originatingInputRecordId": "input-1",
+    "turnId": "turn-1",
+    "turnOrder": 1,
+    "preconditionPhase": "player_question",
+    "preconditionStateVersion": 2,
+    "npcId": "npc-aoi"
+  },
+  "rejection": {
+    "stage": "authorization",
+    "reasonCode": "permission_denied",
+    "retryable": false,
+    "diagnostics": [
+      { "code": "permission_denied", "location": "policy" }
+    ]
+  }
+}
+```
+
+#### Validation-only boundary
+
+The first implementation enabled by this contract ends at a validated candidate. Its successful value is session-local, runtime-only, nonauthoritative, detached from provider objects, recursively immutable, and bound to the exact preparation/attempt identity plus the engine-computed candidate fingerprint. It is not stored in an authoritative registry, does not allocate descriptor/claim/event/segment/publication/commit IDs, does not prepare or apply an authoritative delta, does not increment `stateVersion`, does not publish or display content, does not acknowledge a commit, does not call the provider/retry/timeout coordinator, and does not invoke either structured or legacy fallback. The authoritative state remains `N+1`; validation never performs `N+1 -> N+2`.
+
+Validation success means only that one untrusted response was correlated, structurally normalized, semantically authorized, and made eligible for a later pure preparation step. Authoritative ID allocation, delta preparation, `NpcReactionPlan` creation, `N+1 -> N+2`, canonical publication, delivery, and replayable commit results require separately reviewed implementation stages. No code may infer those later effects from validation success.
+
+The session-local reaction coordinator owns a validated value only while its exact attempt remains in `validated`; a pure validation harness owns it only for the duration of that call/test. It is never placed in an authoritative registry, tombstone, history, diagnostic record, publication log, browser state, CLI state, or provider cache. Reset/destroy, session replacement, turn/phase/version replacement, logical cancellation/rejection/supersession/exhaustion/commit, or activation of a newer attempt immediately expires and discards it. Attempt supersession cannot transfer the value to a new `reactionAttemptId`. Garbage collection after expiry has no externally visible effect.
+
+The future engine-owned authoritative preparation stage is responsible for the repeated live applicability and policy check immediately before it derives any authoritative delta. This contract defines that responsibility and the validation-only input boundary; it does not define a new commit/coordinator API. Until that later stage is approved, validated values cannot be routed into production commands.
+
+While only the validation stage exists, it is exercised through pure contract/validator APIs and an explicit non-routing integration harness. `NPC_STRUCTURED_REACTION_MODE` must not route an ordinary top-level command into a live provider workflow that can stop with logical `active` or attempt `validated`; the current inert route remains unchanged until a later reviewed coordinator stage can either continue through preparation/commit or reach an existing legal terminal status. Validation-only code must not invent a terminal “success”, mark an attempt `accepted`, or hold a player command open.
 
 Validation is ordered and fail-closed:
 
-1. **Transport:** validate content type/encoding/size/schema; exact request, correlation, logical reaction, active attempt, actor, turn, and base-version echoes; reject unknown/late attempt IDs.
-2. **Structure:** require every field, closed enum, ID format, code-point text bound, array bound, nesting bound, uniqueness, and `additionalProperties: false`. Unsupported fields are rejected, not ignored.
-3. **Semantic authorization:** re-resolve actor and targets; require actor alive and eligible; require targets to exist and be allowed by the captured projection; validate phase permission, trigger relation, known-information/disclosure rules, claim rules, descriptor coverage, and absence of contradictions with authoritative state. A provider assertion is never accepted as truth.
-4. **Preparation:** allocate all authoritative descriptor, claim, event, segment, publication, and result IDs in the engine; derive effects through closed engine operations; construct a copy-on-write delta; validate referential integrity and the idempotency fingerprint without mutation.
-5. **Final compare-and-commit:** immediately before publication, compare session, destruction/reset state, request/correlation/input/turn/order/phase/version/actor/target/fingerprint, active attempt, logical terminal state, player result, and all referenced registries. Game end, actor invalidation, target invalidation, prior commit, or any superseding transition rejects the delta. Apply and append atomically or restore the exact `N+1` snapshot.
+1. **Transport:** validate content type/encoding/size/schema; exact top-level and nested echoes; active pending/logical/attempt identity; and abort/late-attempt state.
+2. **Structure:** require exact fields, enums, IDs, safe integers, array/nesting bounds, non-null values, and `additionalProperties: false`; reconstruct the detached candidate and compute its fingerprint.
+3. **Semantic authorization:** re-resolve actor, trigger, policy, targets, and exact result facts using the captured projection and matching live state, then apply the whole-candidate duplicate/contradiction rules above.
+4. **Validation-only result:** retain only the immutable runtime candidate/binding/fingerprint and a redacted outcome; perform zero authoritative writes or external display effects.
+5. **Later preparation and commit:** outside the validation-only implementation, allocate authoritative IDs, derive a closed copy-on-write delta, repeat final session/turn/order/phase/version/actor/target/identity/policy/CAS checks, and atomically publish or restore the exact `N+1` snapshot.
 
-Validation never degrades on retry. Raw provider text, a legacy text field, display output, or a server/sink acknowledgement cannot bypass a failed layer. The provider cannot select state effects directly; accepted proposals are inputs to engine rule functions that construct the closed delta.
+Validation never degrades on retry. Raw provider text, a legacy text field, display output, a server response, or sink acknowledgement cannot bypass a failed layer. The provider selects semantic proposals only; later engine rule functions alone may construct closed authoritative effects.
 
 ### Engine-owned known-information projection
 
@@ -1467,7 +1885,23 @@ The strict projection contains four allowlisted groups:
 | Engine-derived constraints | `allowedTargetIds`, allowed candidate kinds, legal claim/result values, disclosure permissions, and bounded reference IDs | computed by engine rules; provider cannot expand them |
 | Presentation hints | allowlisted personality/speech-style identifiers needed by a later renderer | may affect presentation intent only and cannot create effects |
 
+`NpcKnownInformationProjection` requires exactly `schemaVersion: 1`, `projectionType: "npc_known_information"`, `public`, `actorPrivate`, `constraints`, and `presentation`. Its nested objects are exact:
+
+- `public` requires `day: safe integer >= 0`, `phase: GamePhase`, `participants: NpcPublicParticipantProjection[2..16]`, `events: PublicEventProjection[0..64]`, `claims: ClaimProjection[0..64]`, `votes: PublicVoteProjection[0..32]`, `executions: ExecutionProjection[0..16]`, `attackDeaths: AttackDeathProjection[0..16]`, and one strict `triggeringInput`.
+- `triggeringInput` requires `schemaVersion: 1`, `inputRecordId: ID`, `requestId: ID`, `correlationId: ID`, `turnId: ID`, `capturedStateVersion: safe integer >= 0`, `actorId: "player"`, `rawText: string[1..2000 Unicode code points]`, and `locale: SupportedLocale`.
+- `NpcPublicParticipantProjection` requires exactly `participantId: ID`, `displayName: string[1..80 Unicode code points]`, and `publicStatus: "alive" | "dead"`.
+- `actorPrivate` requires `actorId: ID`, `ownRole: GameRole`, `ownTeam: "village" | "werewolf"`, `investigationResults: NpcInvestigationResultProjection[0..16]`, `voteHistory: NpcVoteHistoryProjection[0..32]`, and `suspicionScores: NpcSuspicionScoreProjection[0..16]`.
+- `NpcInvestigationResultProjection` requires exactly `day: safe integer >= 0`, `targetId: ID`, `result: ClaimResult`, and `disclosurePolicy: "engine_policy_required"`. `NpcVoteHistoryProjection` requires exactly `day: safe integer >= 0` and `targetId: ID`. `NpcSuspicionScoreProjection` requires exactly `targetId: ID` and finite `score: number`.
+- `constraints` requires exactly unique `allowedTargetIds: ID[0..16]`, unique `allowedLivingTargetIds: ID[0..16]`, unique `allowedResultTargetIds: ID[0..16]`, `allowedCandidateKinds` equal in order to `["role_claim", "result_claim", "vote_declaration", "suspicion"]`, unique `allowedClaimRoles: ClaimableRole[0..1]`, unique `allowedResultValues: ClaimResult[0..2]`, unique `allowedReferenceIds: ID[0..161]`, and `roleDisclosurePolicy: NpcRoleDisclosurePolicy`.
+- `presentation` requires exactly `speechStyleId: string[1..32 Unicode code points]`.
+
+Every nested object has `additionalProperties: false`, no value is optional or nullable, and all arrays are dense. Participant, event, claim, vote, execution, and attack-death primary IDs are unique. Investigation results are unique by `(targetId, day)`, suspicion scores by target, and every constraint array is duplicate-free. `allowedTargetIds` equals all non-actor, non-player public participant IDs; `allowedLivingTargetIds` equals the alive subset; and `allowedResultTargetIds` equals the unique targets projected from actor-owned investigation facts. For a seer with at least one such fact, `allowedResultValues` equals the unique projected result values; for every other actor it is `[]`. `allowedReferenceIds` equals, without omission or addition, the union of projected event, claim, vote, execution, attack-death, and triggering-input IDs. Claim-event and vote-event references obey section 15 integrity rules.
+
+The engine builds participants in participant-ID order, public structured records in authoritative order, actor-private facts in their documented deterministic order, and constraint arrays from those ordered sources. A validator preserves those arrays; it never sorts provider-facing input after construction. The root must contain both the player participant and the alive actor participant, `public.phase` is `player_question`, and the exact trigger/result/input/version graph is revalidated before request construction.
+
 Never exposed are another participant's hidden role/team/result, another actor's private memory or suspicion, secret actions, unrestricted game-state objects, pending/idempotency registries, validation internals, prompts, credentials, provider bodies/diagnostics, or developer logs. The full state is never sent with an instruction to ignore private fields. Free-form legacy `publicInfo` without authoritative structured provenance is not promoted into the Phase 6 projection.
+
+The projection's `roleDisclosurePolicy` is `NpcRoleDisclosurePolicy`, not an arbitrary string. Initial Phase 6 always emits all four `NpcReactionProposalType` values in the order above. `allowedClaimRoles` is exactly `["seer"]` only for a seer actor with at least one actor-owned investigation result and is otherwise exactly `[]`. These projection lists are necessary allowlists, never standalone permission or truth proofs.
 
 A candidate referencing hidden information must be authorized against the captured actor-private projection and disclosure policy. Unauthorized result claims or targets are rejected. Authorized private information may justify an engine-created structured claim only under the applicable game rule; otherwise it may influence a future prose variant but cannot mutate state or be represented as public fact.
 
@@ -1626,16 +2060,17 @@ Required comparison observability includes route selected, logical outcome, atte
 
 ### Migration sequence and rollback gates
 
-1. **Documentation:** merge this contract only; keep the PR Draft during architectural review.
-2. **Inert contracts:** add strict candidate/pending/projection validators and default-off flag plumbing; disabled behavior and the 287-test reference remain unchanged.
-3. **Identity and projection:** implement engine-owned logical/attempt identities, actor selection, pure projection, redacted lifecycle observation, abort, and deterministic retry without authoritative commit.
-4. **Candidate validation:** add the stateless candidate endpoint/provider adapter and all transport/structural/semantic/final-CAS preparation checks; enabled-route rejection has no legacy fallback.
-5. **Authoritative commit:** replace, never follow, the compatibility `N+1 -> N+2` transition with atomic `NpcReactionPlan`/effects/result/canonical-publication commit and idempotent replay.
-6. **Browser publication:** consume only committed canonical NPC records; keep DOM failure independent from commit and player delivery.
-7. **CLI publication:** use the same engine flow and validation; add CLI-specific sink evidence only.
-8. **Observer/history:** expose non-consuming committed history, replay, delivery status, and redacted diagnostics.
-9. **Controlled enablement:** opt in, compare normalized outcomes, test disable rollback, and retain the compatibility route while default-off.
-10. **Later phases:** Phase 7 enables controlled Renderer/finalization; Phase 8 migrates suspicion/memory effects without an extra version; Phase 9 may physically remove legacy paths after separate approval.
+1. **Documentation:** merge this closed contract through a normal reviewed docs-only PR before resuming candidate implementation.
+2. **Inert contract validators:** implement exact request, pending, response, proposal-union, policy-enum, and canonical-fingerprint validators while the structured route remains default-off; no endpoint or provider call is required by this step.
+3. **Identity and projection foundation:** retain engine-owned logical/attempt identities, actor selection, pure known-information projection, redacted lifecycle observation, abort, and deterministic retry without authoritative commit.
+4. **Validation-only transport:** add the stateless candidate endpoint/provider adapter and exact transport, echo, structural, semantic, target, policy, and fingerprint checks behind pure/non-routing integration coverage. The successful result is only the detached runtime candidate defined above; it allocates no authoritative content ID, performs no delta/commit/publication/display, increments zero, never falls back, and does not activate the live feature route.
+5. **Pure authoritative preparation:** in a later separately reviewed change, convert a validated runtime candidate to engine-owned descriptors/effects and a copy-on-write delta, without publishing it; repeat live authorization and referential-integrity checks.
+6. **Authoritative commit:** only after preparation review, replace, never follow, the compatibility `N+1 -> N+2` transition with atomic `NpcReactionPlan`/effects/result/canonical-publication commit and idempotent replay.
+7. **Browser publication:** consume only committed canonical NPC records; keep DOM failure independent from commit and player delivery.
+8. **CLI publication:** use the same engine flow and validation; add CLI-specific sink evidence only.
+9. **Observer/history:** expose non-consuming committed history, replay, delivery status, and redacted diagnostics.
+10. **Controlled enablement:** opt in, compare normalized outcomes, test disable rollback, and retain the compatibility route while default-off.
+11. **Later phases:** Phase 7 enables controlled Renderer/finalization; Phase 8 migrates suspicion/memory effects without an extra version; Phase 9 may physically remove legacy paths after separate approval.
 
 Each implementation stage is independently reviewable and may be rolled back by disabling/removing only that stage before structured route selection. No stage deletes or rewrites Phase 4/5 records. Once a structured reaction commits, rollback changes future routing only and never compensates or deletes its `N+2` state.
 
@@ -1647,6 +2082,11 @@ The implementation PR must add tests; this docs-only PR adds none. Passing requi
 - **Identity/unit:** logical/request/correlation/trigger identities remain byte-equal across retries; every attempt ID is unique; provider-chosen/replaced IDs are rejected; exact trigger/result/input/turn/version graph is required; every required conflict-matrix case, including the split exact/conflicting-response subcases, produces its specified classification and version increment `0`.
 - **Projection/unit:** deterministic deep-equal output for equal snapshots; public, actor-private, derived, and presentation groups are allowlisted; every other participant private role/team/memory/result, raw legacy info, prompt, diagnostic, and credential field is absent; input is not mutated.
 - **Validation/unit:** strict fields, enums, IDs, bounds, array uniqueness, payload/nesting/code-point limits, actor/target eligibility, claim/disclosure permission, illegal effects, arbitrary patches, and syntactically valid but semantically invalid candidates fail closed with state deeply equal to `N+1`.
+- **Candidate envelope/unit:** validate every exact request/provider-result/HTTP field and echo, both normative JSON examples, `requestFingerprint` reconstruction across changed attempt IDs, 64 KiB and 8/5/10 nesting boundaries, null/unknown/missing fields, safe-integer exhaustion, and the complete pending-binding comparison.
+- **Proposal union/unit:** cover all four strict members, 1/16/17 proposal bounds, preserved order, every forbidden authoritative/effect/prose field, unsupported commentary/answer/acknowledgement, unknown kind, exact duplicates, each contradiction rule, mixed legal kinds, whole-candidate rejection, detached reconstruction, deep immutability, and provider-input nonmutation.
+- **Target and disclosure/unit:** cover each allowlist intersection, captured/current unknown or duplicate participant, actor/player target, dead vote/suspicion target, roster replacement/reset, dead-but-still-rostered result target, exact and mismatched actor-owned result pairs, public hearsay, all three role policies, direct role/result question matching, wrong phase/trigger, `allowedClaimRoles` `["seer"]`/`[]`, false/werewolf/citizen claim denial, prior disclosure neutrality, same-candidate permission independence, unknown policy, and deny precedence.
+- **Candidate fingerprint/unit:** prove the exact canonical JSON and digest example, lower-hex form, object-key-order independence, proposal-order dependence, no trim/case/Unicode normalization, echo/attempt/diagnostic exclusion, malformed-extra-field rejection before hashing, and separate correlation rejection when equal candidate fingerprints arrive under different echoes.
+- **Validation-only boundary/integration:** browser and CLI reach the same validator and may retain only the exact immutable `ValidatedNpcReactionCandidate`/closed `NpcReactionCandidateValidationResult`. Cover every required binding/context field, nested-only binding, null/unknown/missing rejection, provider detachment and nonmutation, candidate/projection fingerprint recomputation, both normative result examples, every closed rejection code/stage/location, the eight-diagnostic bound, retryability ownership, and expiry on reset/turn/attempt/logical-terminal changes. Success, rejection, retry, timeout, abort, duplicate, stale, and reset create no authoritative object/ID/delta/publication/display/fallback and leave the complete state/version graph equal to `N+1`.
 - **Lifecycle/state machines:** logical and attempt machines are tested separately; terminal attempts never reopen; retry creates a new attempt under the same logical ID; retry exhaustion produces logical `exhausted`; committed/rejected/superseded/cancelled/exhausted reactions never reopen; timeout late result, racing attempts, post-commit result, superseded base, reset/destroy, and emergency cancellation cannot commit.
 - **Version/atomicity:** player success is exactly `N -> N+1`; reaction success is exactly `N+1 -> N+2`; provider failure, timeout, reject, stale, duplicate, abort, and preparation/publication exception increment zero; commit exception restores the exact `N+1` graph; sink failure retains exact `N+2`.
 - **Idempotency/tombstones:** one logical reaction commits at most once; exact replay returns the stored result with no provider/sink/version effect; changed fingerprint conflicts; duplicate transport and concurrent late responses create no second claim/event/publication; coordinator cleanup retains bounded tombstones for every logical terminal status; committed IDs cross-check stored records; capacity fails closed; reset clears tombstones; late old-session results remain rejected.
@@ -1654,7 +2094,7 @@ The implementation PR must add tests; this docs-only PR adds none. Passing requi
 - **Initial retry policy:** separately assert initial `maxAttempts = 3`, 1-second/2-second backoff, and 15-second logical deadline; a test with different finite policy values must preserve all authority/identity/validation/version invariants.
 - **Browser integration:** actual dispatch through `WerewolfGame`, stateless proxy adapter, commit, canonical record, DOM sink, acknowledgement, failure/retry, history-only read, and replay are exercised. Only committed canonical content is visible; sink failure never rolls back.
 - **CLI integration:** the same engine/projection/validator path reaches the configured writer; throw/rejection is retryable delivery only; history read emits no live output; no legacy bypass exists.
-- **Compatibility/flag:** route is snapshotted when the logical reaction starts; mid-flight flag changes do not reroute/cancel; disabled future routes preserve legacy behavior; enabled routes require Phase 4 and do not change Phase 4/5; every mid-flight failure has no fallback; explicit emergency cancellation produces logical `cancelled`/attempt `aborted`, zero increment, retained player `N+1`, late-result rejection, and no runtime route switch. All existing Phase 4 and Phase 5 tests remain unchanged and pass; 287/287 is the pre-implementation baseline, not a Phase 6 completion claim.
+- **Compatibility/flag:** route is snapshotted when the logical reaction starts; mid-flight flag changes do not reroute/cancel; disabled future routes preserve legacy behavior; enabled routes require Phase 4 and do not change Phase 4/5; every mid-flight failure has no fallback; explicit emergency cancellation produces logical `cancelled`/attempt `aborted`, zero increment, retained player `N+1`, late-result rejection, and no runtime route switch. All existing Phase 4 and Phase 5 tests remain unchanged and pass; 300/300 is the current docs-only baseline after the inert Phase 6 foundation and browser-compatibility fixes, not a candidate-validation completion claim.
 - **Adversarial:** actor/logical/attempt/version substitution, hidden-information request or response, illegal/unknown target, oversized/malformed/extra-field payload, arbitrary patch, stale base, duplicate delivery, mismatched attempt, valid syntax/invalid semantics, and concurrent late output all produce zero unauthorized display, mutation, or increment.
 - **Single-actor policy:** exactly one target reaction may derive from `ask_npc`; provider cannot add/reorder actors; no parallel commit occurs. A future multi-NPC fixture is rejected until a separately approved serialized policy exists.
 - **Observers/privacy:** only redacted lifecycle outcomes and committed records are observed; observer throw cannot change stored results; observer/history count changes no version; raw candidate/projection/private fields never reach logs, history, browser diagnostics, CLI diagnostics, or HTTP errors.
@@ -1671,7 +2111,7 @@ The review-fix scan found `0` matching code points in all three scopes. Because 
 
 ### Deferred and out of scope
 
-Production/test/runtime/schema/provider/endpoint implementation is outside this docs-only change, including the runtime state machines, tombstone registry, flag plumbing, emergency-cancellation API/UI/CLI command, and candidate transport. Phase 6 also excludes persistence, reload/crash/offline recovery, durable queues, multi-tab/cross-tab ownership, account sync, server authority or transactions, distributed locking, remote observer guarantees, broad UI redesign, unrelated prompt tuning/game-rule redesign, controlled Renderer implementation, suspicion/memory migration, and physical legacy deletion. These require later phases or separate reviewed designs; none may be inferred from this section.
+Production, test, runtime schema-validator, provider, endpoint, and candidate-transport implementation are outside this docs-only change, including the runtime state machines, tombstone registry, flag plumbing, and emergency-cancellation API/UI/CLI command. Phase 6 also excludes persistence, reload/crash/offline recovery, durable queues, multi-tab/cross-tab ownership, account sync, server authority or transactions, distributed locking, remote observer guarantees, broad UI redesign, unrelated prompt tuning/game-rule redesign, controlled Renderer implementation, suspicion/memory migration, and physical legacy deletion. These require later phases or separate reviewed designs; none may be inferred from this section.
 
 ### Phase 6 invariants
 
@@ -1693,6 +2133,13 @@ Production/test/runtime/schema/provider/endpoint implementation is outside this 
 16. Emergency cancellation is explicit and separate from flag changes; it aborts/cancels without NPC commit, version increment, player rollback, or legacy fallback.
 17. Persistence, reload, multi-tab, and server authority remain out of scope; legacy physical deletion remains Phase 9.
 18. If a future design permits multiple NPCs, commits are deterministically ordered, serialized, and individually versioned.
+19. Candidate request and success envelopes are exact and fully correlated; every immutable binding echo matches request, pending attempt, and logical preparation state before candidate use.
+20. Initial provider proposals are only role claim, result claim, vote declaration, and suspicion; they contain no authoritative ID, effect, patch, policy boolean, version, or prose.
+21. Target permission is the exact intersection of proposal-kind allowlists, captured public identity, and matching current roster eligibility. Result claims additionally require one exact actor-owned target/result fact and never permit bluff.
+22. Role and result disclosure uses only the closed `NpcRoleDisclosurePolicy`; unknown values and same-candidate permission escalation fail closed.
+23. `candidateFingerprint` is engine-computed `sha256CanonicalJson()` over the detached strict candidate alone, preserving proposal order and excluding every envelope/diagnostic field.
+24. Candidate validation success is runtime-only and nonauthoritative; it cannot allocate later artifact IDs, prepare or publish a delta, increment version, display, acknowledge commit, or invoke legacy fallback.
+25. Validation returns only the closed `NpcReactionCandidateValidationResult`; a success owns one detached immutable `ValidatedNpcReactionCandidate`, and a rejection owns only the engine-expected binding plus bounded redacted non-retryable diagnostics. Neither result survives its session/turn/attempt applicability domain or authorizes later preparation.
 
 ## 26. Migration plan
 
@@ -1859,6 +2306,12 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Phase 6 retry policy layers** | FINITE ATTEMPTS/DEADLINE ARE INVARIANTS; 3 ATTEMPTS, 1/2 SECOND BACKOFF, 15 SECOND DEADLINE ARE TUNABLE INITIAL VALUES |
 | **Phase 6 initial actor policy** | EXACTLY ONE ENGINE-SELECTED TARGET NPC PER COMMITTED `ask_npc`; NO PARALLEL COMMIT |
 | **Phase 6 known-information projection** | PURE ENGINE ALLOWLIST; FULL STATE AND OTHER-ACTOR PRIVATE DATA PROHIBITED |
+| **Phase 6 candidate transport** | EXACT REQUEST + COMPLETE NESTED BINDING ECHO + STRICT HTTP ENVELOPE; PENDING/REQUEST/RESPONSE EQUALITY REQUIRED |
+| **Phase 6 provider proposal domain** | ONLY `role_claim`, `result_claim`, `vote_declaration`, `suspicion`; AUTHORITATIVE IDS/EFFECTS/PATCHES/VERSIONS/PROSE PROHIBITED |
+| **Phase 6 target authorization** | KIND-SPECIFIC ALLOWLIST + CAPTURED PUBLIC IDENTITY + CURRENT ROSTER ELIGIBILITY; RESULT REQUIRES EXACT ACTOR-OWNED FACT |
+| **Phase 6 role disclosure policy** | CLOSED ENUM; UNKNOWN VALUE, FALSE ROLE, WEREWOLF CONFESSION, CITIZEN CLAIM, AND SAME-CANDIDATE PERMISSION ESCALATION REJECTED |
+| **Phase 6 candidate fingerprint** | ENGINE `sha256CanonicalJson(STRICT DETACHED CANDIDATE)`; PROPOSAL ORDER PRESERVED; ENVELOPES/ATTEMPT/DIAGNOSTICS EXCLUDED |
+| **Phase 6 validation-only success** | SESSION-LOCAL IMMUTABLE RUNTIME VALUE; NO AUTHORITATIVE ID/DELTA/COMMIT/VERSION/PUBLICATION/DISPLAY/FALLBACK |
 | **Phase 6 validation failure fallback** | RAW/LEGACY AUTHORITATIVE FALLBACK FOR SAME LOGICAL REACTION PROHIBITED |
 | **Phase 6 flag** | `NPC_STRUCTURED_REACTION_MODE`; DEFAULT OFF; ROUTE SNAPSHOTTED AT REACTION START; PHASE 4 COMMIT MODE REQUIRED |
 | **Phase 6 mid-flight flag change** | DOES NOT REROUTE OR CANCEL ACTIVE REACTION; APPLIES TO NEXT TRIGGER |
