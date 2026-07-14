@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Defined the docs-only Phase 6 NPC candidate-validation contract: exact correlated request/success envelopes, a strict four-member proposal union, kind-specific target authorization, a closed role-disclosure policy, reproducible candidate fingerprints, and a nonauthoritative validation-only boundary. Runtime/provider/commit behavior is unchanged.
+- Defined the docs-only Phase 6 NPC candidate-validation contract: exact correlated request/success envelopes, a strict four-member proposal union, kind-specific target authorization, a closed role-disclosure policy, reproducible candidate fingerprints, an immutable detached `ValidatedNpcReactionCandidate`, a closed redacted validation-result union, and a nonauthoritative validation-only lifecycle boundary. Runtime/provider/commit behavior is unchanged.
 - Added the Phase 4 `PlayerLegacyDisplayCompatibilityRecord` writer and session-scoped registry. Each Phase 4 player publication now atomically records one engine-owned mapping to its unchanged legacy player-log location using the canonical-entry SHA-256 fingerprint in the existing `N -> N+1` transaction.
 - Added strict mapping schema and committed-graph validation, one-to-one identity/cardinality checks, final-CAS append-location protection, replay corruption rejection without backfill, complete working-copy rollback, and immutable read-only lookup by publication or mapping ID.
 - Completed the default-off Migration Phase 5 implementation for browser/CLI structured display and history using exact `PlayerLegacyDisplayCompatibilityRecord` resolution; position-, phase-, FIFO-, and message-based legacy replacement were removed. The pull request remains Draft pending review.
