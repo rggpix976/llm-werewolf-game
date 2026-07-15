@@ -3186,6 +3186,191 @@ The later implementation must cover pre-provider exact replay including later cu
 
 Tests also prove exact input/result/invariant schemas, diagnostic bounds/privacy, registry/index set equality, three-way preparation fingerprint verification, full rejection reachability, stage 0 through 23 continuity, final-CAS checklist completeness, created plus the two existing shared publication-counter arithmetic, atomic graph completeness, terminal-only attempt-summary status, committed tombstone accepted-count exactly one, non-commit accepted-count zero, strict coordinator/allocation/tombstone unions and 1024 capacity, observer exception isolation, and zero authoritative effects for every non-commit outcome.
 
+### Successful-attempt reference contract
+
+This subsection is normative for Runtime Contract Alignment after this documentation is merged. It resolves successful-attempt references without extending any existing schema. In particular, `NpcReactionPlan` does not own `requestFingerprint` or `turnOrder`; `NpcReactionPreparationBinding` does not own `resultingStateVersion`; and `CanonicalNpcReactionCommitResult` does not own `successfulAttemptId` or `turnOrder`. Validators must not synthesize, alias, or silently add any of those fields.
+
+`NpcReactionPlan.successfulAttemptId` is the engine-owned `reactionAttemptId` of the winning provider attempt that produced the validated candidate adopted by that plan. It is not provider-generated and is not a request, plan, correlation, retry-group, terminal-order, tombstone, publication, or other artifact ID. One committed reaction plan owns exactly one successful attempt, the value is immutable for the plan lifetime, and two different committed plans in one game session may not share it.
+
+#### Exact field ownership
+
+The table records actual strict-schema ownership. For `NpcReactionCommitDelta`, "binding" means the existing nested `binding: NpcReactionPreparationBinding`; only the fingerprint and version fields identified as top-level are owned directly by the delta. "No" forbids direct equality against that object.
+
+| Field | Plan | Preparation binding | Commit delta | Idempotency record | Commit result |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `reactionPlanId` | yes | yes | binding and `plan` | yes | yes |
+| `requestId` | yes | yes | binding and `plan` | yes | yes |
+| `requestFingerprint` | no | yes | binding plus top-level | yes | yes |
+| `correlationId` | yes | yes | binding and `plan` | yes | yes |
+| `causationId` | yes | yes | binding and `plan` | yes | no |
+| `originatingInputRecordId` | yes | yes | binding and `plan` | yes | no |
+| `turnId` | yes | yes | binding and `plan` | yes | no |
+| `turnOrder` | no | yes | binding only | yes | no |
+| `npcId` | yes | yes | binding and `plan` | yes | no |
+| `successfulAttemptId` | yes | yes | binding and `plan` | yes | no |
+| `preconditionStateVersion` | yes | yes | binding plus top-level and `plan` | yes | yes |
+| `resultingStateVersion` | yes | no | top-level and `plan` | yes | yes |
+
+The corresponding comparison matrix is closed:
+
+| Field | Exact existing owner | Pre-commit comparison | Post-commit rule |
+| :--- | :--- | :--- | :--- |
+| `successfulAttemptId` | plan, preparation binding, delta binding/plan, idempotency record; candidate binding names it `reactionAttemptId` | candidate `reactionAttemptId` equals preparation/delta/plan `successfulAttemptId` | plan equals idempotency record; unique across committed plans in the session |
+| `requestFingerprint` | validated-candidate binding, preparation binding, delta binding/top-level, idempotency record, commit result | all candidate/binding/delta owners are equal | idempotency value is authoritative; equality with the existing commit-result value is required |
+| `turnOrder` | validated-candidate binding, preparation binding, delta binding; post-commit idempotency record | all candidate/binding/delta owners are equal | idempotency record is the sole persisted authoritative owner; no cross-record equality is invented |
+| `preconditionStateVersion` | plan, candidate binding, preparation binding, delta binding/top-level, idempotency record, commit result | candidate/binding/delta/plan owners are equal | plan, idempotency record, and result are equal |
+| `resultingStateVersion` | plan, delta top-level, idempotency record, commit result, publication provenance | plan equals delta; both are precondition plus one | plan, idempotency record, result, and publication provenance are equal |
+
+#### Three validation layers
+
+1. **Schema-only plan validation.** `validateNpcReactionPlan(plan)` accepts only the plan. It checks the required strict field set, ID and safe-integer syntax, member constraints, mandatory `successfulAttemptId`, and `preconditionStateVersion + 1 === resultingStateVersion`. It does not look up an attempt, fingerprint, turn order, binding, delta, idempotency record, coordinator, or committed graph.
+2. **Pre-commit prepared-graph reference validation.** This checks one strict runtime-private context containing the exact preparation binding, complete commit delta, and validated-candidate binding. It compares plan-owned identity, binding-owned fingerprint/order, delta-owned resulting version, and the successful-attempt chain. It is not authoritative committed-graph validation.
+3. **Post-commit authoritative-graph validation.** This checks the stored plan, NPC idempotency record, commit result, publication, claims, events, and segments. It proves successful-attempt ownership and graph completeness without coordinator, tombstone, reservation, delivery, history, provider, or observer state.
+
+`NpcReactionPlanPreCommitReferenceContext` is a strict runtime-only object requiring exactly `schemaVersion: 1`, discriminator `contextType: "pre_commit"`, `preparationBinding: NpcReactionPreparationBinding`, `commitDelta: NpcReactionCommitDelta`, and `validatedCandidateBinding: ValidatedNpcReactionCandidateBinding`. It has no optional/null/extra fields. It is engine-owned, detached, recursively immutable, never provider/server/sink-visible, and contains neither a mutable coordinator object nor callback/metadata bag.
+
+`NpcReactionCommittedGraphReferenceContext` is a strict detached authoritative projection requiring exactly `schemaVersion: 1`, discriminator `contextType: "committed_graph"`, `reactionPlan`, `idempotencyRecord`, `commitResult`, `publication`, `claims`, `events`, and `segments`. It has no optional/null/extra fields. `claims`, `events`, and `segments` are the exact bounded transaction-owned arrays in authoritative order. It contains no preparation binding, fabricated triggering binding, coordinator, tombstone, reservation, delivery state, provider value, callback, or generic record bag.
+
+`NpcReactionPlanReferenceContext` is the strict union of those two members. Context members may not be mixed. Missing or malformed engine-owned context is an invariant rather than a provider-facing rejection.
+
+#### Pre-commit comparison rules
+
+The complete `commitDelta.binding` must be canonical-equal to `preparationBinding`, and `commitDelta.plan` must be canonical-equal to the plan being checked. Plan-owned fields are then compared only where they actually exist:
+
+```text
+plan.reactionPlanId           == preparationBinding.reactionPlanId           == commitDelta.binding.reactionPlanId
+plan.requestId                == preparationBinding.requestId                == commitDelta.binding.requestId
+plan.correlationId            == preparationBinding.correlationId            == commitDelta.binding.correlationId
+plan.causationId              == preparationBinding.causationId              == commitDelta.binding.causationId
+plan.originatingInputRecordId == preparationBinding.originatingInputRecordId == commitDelta.binding.originatingInputRecordId
+plan.turnId                   == preparationBinding.turnId                   == commitDelta.binding.turnId
+plan.npcId                    == preparationBinding.npcId                    == commitDelta.binding.npcId
+plan.successfulAttemptId      == preparationBinding.successfulAttemptId      == commitDelta.binding.successfulAttemptId
+plan.preconditionStateVersion == preparationBinding.preconditionStateVersion == commitDelta.preconditionStateVersion
+plan.resultingStateVersion    == commitDelta.resultingStateVersion
+```
+
+The winning-attempt chain uses the existing candidate field name:
+
+```text
+validatedCandidateBinding.reactionAttemptId
+  == preparationBinding.successfulAttemptId
+  == commitDelta.binding.successfulAttemptId
+  == plan.successfulAttemptId
+```
+
+The winning attempt object, its mutable status, provider response, and raw candidate are not reference authority.
+
+Plan-nonowned fields compare only between their real owners:
+
+```text
+validatedCandidateBinding.requestFingerprint
+  == preparationBinding.requestFingerprint
+  == commitDelta.binding.requestFingerprint
+  == commitDelta.requestFingerprint
+
+validatedCandidateBinding.turnOrder
+  == preparationBinding.turnOrder
+  == commitDelta.binding.turnOrder
+```
+
+There is no top-level `commitDelta.turnOrder`. There is no `plan.requestFingerprint` or `plan.turnOrder`.
+
+The exact version chain is:
+
+```text
+validatedCandidateBinding.preconditionStateVersion
+  == preparationBinding.preconditionStateVersion
+  == commitDelta.binding.preconditionStateVersion
+  == commitDelta.preconditionStateVersion
+  == plan.preconditionStateVersion
+
+plan.resultingStateVersion
+  == commitDelta.resultingStateVersion
+  == commitDelta.preconditionStateVersion + 1
+  == plan.preconditionStateVersion + 1
+```
+
+`plan.resultingStateVersion == preparationBinding.resultingStateVersion` is forbidden because the binding has no such field. No validator may add or infer it.
+
+#### Post-commit comparison rules
+
+`NpcReactionCommitIdempotencyRecord.successfulAttemptId` is the primary authoritative reference target after commit. It must equal `plan.successfulAttemptId`. Plan and idempotency record also compare their common plan, request, correlation, causation, origin, turn, actor, precondition-version, and resulting-version fields. The commit result is not extended with successful-attempt identity.
+
+The version graph requires:
+
+```text
+plan.preconditionStateVersion
+  == idempotencyRecord.preconditionStateVersion
+  == commitResult.preconditionStateVersion
+
+plan.resultingStateVersion
+  == idempotencyRecord.resultingStateVersion
+  == commitResult.resultingStateVersion
+  == publication.reactionResultingStateVersion
+
+resultingStateVersion == preconditionStateVersion + 1
+```
+
+The idempotency record's `requestFingerprint` is required, strict lower-case SHA-256 hex, immutable, and authoritative after commit. It equals the existing commit-result fingerprint. Same reaction primary identity with a different incoming fingerprint is `idempotency_conflict`; two stored records for the same identity with different fingerprints are a corrupt authoritative graph. The plan is never given this field.
+
+The idempotency record is the sole persisted authoritative owner of post-commit `turnOrder`. It must be a required non-negative safe integer, immutable under the reaction primary key, retained unchanged on replay, and unique for that stored identity. Graph validation checks the record's strict shape, primary/index uniqueness, absence of duplicate/alias records, and stored replay equality. It does not compare turn order to the plan, commit result, preparation binding, coordinator, or tombstone, and it does not create a second persisted owner. Two records for the same reaction identity with different turn orders are a corrupt graph.
+
+`validateReactionPlanReferences(plan, context)` is the future strict reference entrypoint. It validates the context discriminator, plan-owned equality, binding-owned equality, delta-owned version equality, successful-attempt identity, and missing/malformed evidence. The existing array/graph reference helper does not yet implement this signature; Runtime Contract Alignment must migrate it explicitly rather than treating the current helper as conforming.
+
+`validateCommittedConversationGraph(graph)` remains responsible for complete authoritative graph integrity: plan/idempotency successful-attempt equality, plan/idempotency/result/publication version equality, idempotency fingerprint and turn-order strictness, uniqueness, and dangling/alias conflicts. It does not require coordinator attempts, tombstones, delivery receipts, preparation bindings, or provider state.
+
+#### Cleanup independence and lifetime
+
+Post-commit validation produces the same result before cleanup, during `commit_cleanup_pending`, after cleanup, and after tombstone eviction. Coordinator and tombstone data are nonauthoritative and removable; exact replay and reference validation reconstruct authority from the persisted conversation graph.
+
+| Stage | Successful-attempt owner | Request-fingerprint owner | Turn-order owner | Resulting-version owner | Authoritative |
+| :--- | :--- | :--- | :--- | :--- | :---: |
+| attempt active | coordinator attempt | logical/preparation binding | logical/preparation binding | none | no |
+| candidate validated | candidate binding | candidate/preparation binding | candidate/preparation binding | none | no |
+| preparation | preparation binding | preparation binding and delta | preparation binding/delta binding | commit delta | no |
+| commit CAS | binding and delta | binding and delta | binding and delta | delta | mixed |
+| commit success | plan and idempotency record | idempotency record | idempotency record only | plan, idempotency record, result | yes |
+| cleanup pending | same authoritative graph | idempotency record | idempotency record only | same graph | yes |
+| cleanup complete | same authoritative graph | idempotency record | idempotency record only | same graph | yes |
+| tombstone evicted | same authoritative graph | idempotency record | idempotency record only | same graph | yes |
+| replay | same authoritative graph | idempotency record | idempotency record only | same graph | yes |
+
+#### Error and identity classification
+
+Schema-only failures are missing/invalid `successfulAttemptId`, any unknown field, and invalid version arithmetic. Pre-commit missing or malformed context/binding/delta is an engine invariant; successful-attempt, plan-owned, fingerprint, turn-order, or version-chain mismatch is a reference failure. Post-commit missing idempotency is an incomplete graph; duplicate idempotency, malformed fingerprint/order, attempt mismatch, or version mismatch is a corrupt graph; same key with another fingerprint/turn order or the same attempt owned by another plan/request/trigger is an authoritative identity conflict; and dangling plan/result/publication/artifact references are dangling authoritative references. None maps to candidate validation's provider-facing rejection union, whose active 18 codes remain unchanged.
+
+Within one game session, one `successfulAttemptId` maps to exactly one committed plan and one matching idempotency record. The inverse also holds. Same attempt with a different plan, request, or trigger is forbidden. Exact replay reads the same stored graph and is not duplicate ownership.
+
+#### Normative reference vectors
+
+The complete valid plan, preparation binding, and commit delta are the parseable canonical preparation examples above; the complete idempotency record, result, publication, claims, events, and segments are the parseable commit examples above. This contract does not duplicate or extend their strict fields. The following parseable vectors specify assembly and outcomes without replacing those complete object examples:
+
+```json
+[
+  {"case":"valid_pre_commit","contextType":"pre_commit","candidateAttempt":"reaction-attempt-1","planAttempt":"reaction-attempt-1","bindingAttempt":"reaction-attempt-1","requestFingerprintEqual":true,"turnOrderEqual":true,"resultingVersionEqual":true,"outcome":"valid"},
+  {"case":"successful_attempt_mismatch","contextType":"pre_commit","candidateAttempt":"reaction-attempt-2","planAttempt":"reaction-attempt-1","bindingAttempt":"reaction-attempt-1","outcome":"reference_failure"},
+  {"case":"request_fingerprint_mismatch","contextType":"pre_commit","requestFingerprintEqual":false,"outcome":"reference_failure"},
+  {"case":"turn_order_mismatch","contextType":"pre_commit","turnOrderEqual":false,"outcome":"reference_failure"},
+  {"case":"resulting_version_mismatch","contextType":"pre_commit","resultingVersionEqual":false,"outcome":"reference_failure"},
+  {"case":"valid_committed_graph","contextType":"committed_graph","planAttempt":"reaction-attempt-1","idempotencyAttempt":"reaction-attempt-1","storedTurnOrder":1,"coordinatorPresent":false,"tombstonePresent":false,"outcome":"valid"},
+  {"case":"missing_idempotency","contextType":"committed_graph","idempotencyCount":0,"outcome":"incomplete_authoritative_graph"},
+  {"case":"duplicate_turn_order_conflict","contextType":"committed_graph","idempotencyCount":2,"storedTurnOrders":[1,2],"outcome":"corrupt_authoritative_graph"},
+  {"case":"attempt_owned_by_two_plans","contextType":"committed_graph","successfulAttemptId":"reaction-attempt-1","planIds":["reaction-plan-1","reaction-plan-2"],"outcome":"authoritative_identity_conflict"},
+  {"case":"cleanup_pending","contextType":"committed_graph","coordinatorPresent":true,"tombstonePresent":false,"outcome":"valid"},
+  {"case":"cleanup_complete","contextType":"committed_graph","coordinatorPresent":false,"tombstonePresent":true,"outcome":"valid"},
+  {"case":"tombstone_evicted","contextType":"committed_graph","coordinatorPresent":false,"tombstonePresent":false,"outcome":"valid"}
+]
+```
+
+The `coordinatorPresent` and `tombstonePresent` members above describe the scenario harness only; they are not members of `NpcReactionCommittedGraphReferenceContext` and cannot affect its result.
+
+#### Runtime Alignment handoff and future tests
+
+Runtime Contract Alignment must preserve the plan, preparation-binding, delta, and commit-result schemas; make `successfulAttemptId` required in schema-only plan validation; reject extra plan `requestFingerprint`/`turnOrder`; reject extra binding `resultingStateVersion`; compare pre-commit resulting version only through plan/delta; compare pre-commit fingerprint/order through candidate/binding/delta owners; compare post-commit successful attempt through plan/idempotency; treat post-commit fingerprint and turn order as idempotency-owned, with turn order having no second owner; validate post-commit versions through plan/idempotency/result/publication; and keep committed validation coordinator/tombstone independent. It must not alter candidate validation's active rejection set.
+
+Future tests cover schema-only valid/missing/invalid attempt, exact `+1`, no-context use, and forbidden extra plan fields; pre-commit exact equality plus missing/malformed/mixed context, binding/delta absence, wrong attempt/fingerprint/order/version, and the real `reactionAttemptId` name; and post-commit attempt/fingerprint/order/version integrity, missing/duplicate idempotency, same-key differing fingerprint/order, duplicate attempt ownership, cleanup-pending/complete/tombstone-evicted validity, and validity without a coordinator root. Retrieval and validation never supplement an old fixture or infer a missing field.
+
 ### Engine-owned known-information projection
 
 `buildNpcKnownInformationProjection(actorId, triggerId, snapshot)` is a pure browser-engine function used by both browser and CLI flows before provider invocation. For one immutable snapshot it is deterministic, ordered, bounded, non-mutating, and independently testable. It lives with engine/domain projection code, not in the server or display adapters.
