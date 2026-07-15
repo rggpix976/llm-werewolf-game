@@ -97,7 +97,7 @@ export function validateCanonicalClaim(value, path = "canonicalClaim") {
   const extra = value?.type === "role_claim" ? ["claimedRole"] : value?.type === "result_claim" ? ["targetId", "result"] : fail(path, "unknown type");
   exact(value, ["schemaVersion", "claimId", "claimRevision", "actorId", "source", "idempotencyKey", "createdTurnId", "createdStateVersion", "repeatsClaimId", "contradictsClaimIds", "status", "type", ...extra], [], path); schema(value, path);
   for (const k of ["claimId", "actorId", "createdTurnId"]) id(value[k], `${path}.${k}`); literal(value.claimRevision, 1, `${path}.claimRevision`); integer(value.createdStateVersion, 0, `${path}.createdStateVersion`); if (!SHA256_PATTERN.test(value.idempotencyKey)) fail(`${path}.idempotencyKey`, "must be SHA-256");
-  if (value.repeatsClaimId !== null) id(value.repeatsClaimId, `${path}.repeatsClaimId`); ids(value.contradictsClaimIds, 0, 64, `${path}.contradictsClaimIds`); if (value.repeatsClaimId && value.contradictsClaimIds.length) fail(path, "repeat and contradiction are mutually exclusive"); literal(value.status, "asserted", `${path}.status`); validateClaimSource(value.source, `${path}.source`); validateTypedFields(value, extra, path); return value;
+  if (value.repeatsClaimId !== null) id(value.repeatsClaimId, `${path}.repeatsClaimId`); ids(value.contradictsClaimIds, 0, 4096, `${path}.contradictsClaimIds`); if (value.repeatsClaimId && value.contradictsClaimIds.length) fail(path, "repeat and contradiction are mutually exclusive"); literal(value.status, "asserted", `${path}.status`); validateClaimSource(value.source, `${path}.source`); validateTypedFields(value, extra, path); return value;
 }
 
 export function validateSemanticEventSource(value, path = "source") {
