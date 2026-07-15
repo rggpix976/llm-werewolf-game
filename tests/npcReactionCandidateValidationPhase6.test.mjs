@@ -568,6 +568,37 @@ test("proposal bounds, order, and exact duplicates cover all four proposal kinds
   assertRejected(validateNpcReactionCandidate(seventeen), "structure", "invalid_candidate_schema", "candidate");
 });
 
+test("claim-producing proposals enforce the combined four-claim structural bound", () => {
+  const role = { proposalType: "role_claim", claimedRole: "seer" };
+  const fourRoles = inputFor({ schemaVersion: 1, proposals: Array.from({ length: 4 }, () => structuredClone(role)) });
+  assertRejected(validateNpcReactionCandidate(fourRoles), "authorization", "duplicate_proposal", "proposal");
+  const fiveRoles = inputFor({ schemaVersion: 1, proposals: Array.from({ length: 5 }, () => structuredClone(role)) });
+  assertRejected(validateNpcReactionCandidate(fiveRoles), "structure", "invalid_candidate_schema", "proposal");
+
+  const resultProposals = [
+    { proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" },
+    { proposalType: "result_claim", targetId: "npc-chika", result: "not_werewolf" },
+    { proposalType: "result_claim", targetId: "npc-dora", result: "werewolf" },
+    { proposalType: "result_claim", targetId: "npc-emi", result: "not_werewolf" },
+    { proposalType: "result_claim", targetId: "npc-fumi", result: "werewolf" }
+  ];
+  const withResultFacts = (proposals) => {
+    const input = inputFor({ schemaVersion: 1, proposals });
+    addNpc(input, "npc-chika", { result: "not_werewolf" }, false); addNpc(input, "npc-dora", { result: "werewolf" }, false); addNpc(input, "npc-emi", { result: "not_werewolf" }, false); addNpc(input, "npc-fumi", { result: "werewolf" }, false); refreshProjectionConstraints(input); refingerprint(input); return input;
+  };
+  assert.equal(validateNpcReactionCandidate(withResultFacts(resultProposals.slice(0, 4))).status, "validated");
+  assertRejected(validateNpcReactionCandidate(withResultFacts(resultProposals)), "structure", "invalid_candidate_schema", "proposal");
+
+  const mixedFour = [role, ...resultProposals.slice(0, 3)], mixedFive = [role, ...resultProposals.slice(0, 4)];
+  assert.equal(validateNpcReactionCandidate(withResultFacts(mixedFour)).status, "validated");
+  assertRejected(validateNpcReactionCandidate(withResultFacts(mixedFive)), "structure", "invalid_candidate_schema", "proposal");
+
+  const extended = withResultFacts([...mixedFour, { proposalType: "suspicion", targetId: "npc-fumi" }]);
+  assert.equal(validateNpcReactionCandidate(extended).status, "validated");
+  const contradictory = withResultFacts([...mixedFour, { proposalType: "vote_declaration", targetId: "npc-chika" }, { proposalType: "vote_declaration", targetId: "npc-dora" }]);
+  assertRejected(validateNpcReactionCandidate(contradictory), "authorization", "contradictory_proposals", "proposal");
+});
+
 test("captured and current reference boundaries reject unknown and ineligible targets", () => {
   const unknown = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "suspicion", targetId: "npc-unknown" }] });
   assertRejected(validateNpcReactionCandidate(unknown), "authorization", "unknown_reference", "reference");

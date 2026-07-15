@@ -450,19 +450,23 @@ function reconstructCandidate(value) {
     return { ok: false, code: "invalid_candidate_schema", location: "candidate" };
   }
   const proposals = [];
+  let claimProducingProposalCount = 0;
   for (const proposal of value.proposals) {
     if (!isPlainObject(proposal) || typeof proposal.proposalType !== "string") return { ok: false, code: "invalid_candidate_schema", location: "proposal" };
     if (RESERVED_KINDS.has(proposal.proposalType)) return { ok: false, code: "unsupported_in_phase6", location: "proposal" };
     if (proposal.proposalType === "role_claim") {
       if (!isExactObject(proposal, ["proposalType", "claimedRole"]) || !enums.claimableRole.includes(proposal.claimedRole)) return { ok: false, code: "invalid_candidate_schema", location: "proposal" };
+      claimProducingProposalCount += 1;
       proposals.push({ proposalType: "role_claim", claimedRole: proposal.claimedRole });
     } else if (proposal.proposalType === "result_claim") {
       if (!isExactObject(proposal, ["proposalType", "targetId", "result"]) || !isId(proposal.targetId) || !enums.claimResult.includes(proposal.result)) return { ok: false, code: "invalid_candidate_schema", location: "proposal" };
+      claimProducingProposalCount += 1;
       proposals.push({ proposalType: "result_claim", targetId: proposal.targetId, result: proposal.result });
     } else if (["vote_declaration", "suspicion"].includes(proposal.proposalType)) {
       if (!isExactObject(proposal, ["proposalType", "targetId"]) || !isId(proposal.targetId)) return { ok: false, code: "invalid_candidate_schema", location: "proposal" };
       proposals.push({ proposalType: proposal.proposalType, targetId: proposal.targetId });
     } else return { ok: false, code: "invalid_candidate_schema", location: "proposal" };
+    if (claimProducingProposalCount > 4) return { ok: false, code: "invalid_candidate_schema", location: "proposal" };
   }
   return { ok: true, value: { schemaVersion: SCHEMA_VERSION, proposals } };
 }
