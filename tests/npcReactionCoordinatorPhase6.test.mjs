@@ -245,9 +245,22 @@ test("committed cleanup transfers maxAttempts and every fingerprint exactly, the
   });
   assert.deepEqual(repeat.result, { schemaVersion: 1, status: "already_cleaned", reactionPlanId: "plan-1", terminalOrder: 0 });
   assert.equal(repeat.root, result.root);
+  for (const conflicting of [
+    { successfulAttemptId: "attempt-other" },
+    { preparationFingerprint: FP_A },
+    { npcPublicationId: "publication-other" },
+    { commitResultRequestId: "request-other" }
+  ]) {
+    assert.throws(() => cleanupCommittedNpcReaction(result.root, {
+      gameSessionId: "session-1", reactionPlanId: "plan-1", successfulAttemptId: "attempt-1",
+      preparationFingerprint: FP_B, npcPublicationId: "publication-1", commitResultRequestId: "request-1",
+      ...conflicting
+    }), invariant());
+  }
+  assert.deepEqual(result.root.reactionTombstones["plan-1"], tombstone);
 });
 
-test("non-commit cleanup creates self-contained tombstone and rejects invalid already-cleaned evidence", () => {
+test("non-commit cleanup supports exact retry and rejects conflicting terminal evidence", () => {
   const result = terminalizeNpcReaction(activeRoot("failed"), {
     gameSessionId: "session-1", reactionPlanId: "plan-1", terminalStatus: "exhausted", reason: "retry_exhausted"
   });
@@ -258,6 +271,42 @@ test("non-commit cleanup creates self-contained tombstone and rejects invalid al
   const corrupt = structuredClone(tombstone);
   corrupt.maxAttempts = 0;
   assert.throws(() => validateReactionTombstone(corrupt), invariant());
+  const repeat = terminalizeNpcReaction(result.root, {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", terminalStatus: "exhausted", reason: "retry_exhausted"
+  });
+  assert.deepEqual(repeat.result, {
+    schemaVersion: 1, status: "already_cleaned", reactionPlanId: "plan-1", terminalOrder: 0
+  });
+  assert.equal(repeat.root, result.root);
+  assert.throws(() => terminalizeNpcReaction(result.root, {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", terminalStatus: "cancelled", reason: "cancelled"
+  }), invariant());
+  assert.throws(() => terminalizeNpcReactionIdentityConflict(result.root, {
+    gameSessionId: "session-1", reactionPlanId: "plan-1"
+  }), invariant());
+  assert.deepEqual(result.root.reactionTombstones["plan-1"], tombstone);
+});
+
+test("identity-conflict cleanup supports exact retry and rejects other non-commit evidence", () => {
+  const result = terminalizeNpcReactionIdentityConflict(activeRoot("validated", FP_A), {
+    gameSessionId: "session-1", reactionPlanId: "plan-1"
+  });
+  const tombstone = structuredClone(result.root.reactionTombstones["plan-1"]);
+  const repeat = terminalizeNpcReactionIdentityConflict(result.root, {
+    gameSessionId: "session-1", reactionPlanId: "plan-1"
+  });
+  assert.deepEqual(repeat.result, {
+    schemaVersion: 1, status: "already_cleaned", reactionPlanId: "plan-1", terminalOrder: 0
+  });
+  assert.equal(repeat.root, result.root);
+  assert.throws(() => terminalizeNpcReaction(result.root, {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", terminalStatus: "rejected", reason: "authorization_failure"
+  }), invariant());
+  assert.throws(() => cleanupCommittedNpcReaction(result.root, {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", successfulAttemptId: "attempt-1",
+    preparationFingerprint: FP_B, npcPublicationId: "publication-1", commitResultRequestId: "request-1"
+  }), invariant());
+  assert.deepEqual(result.root.reactionTombstones["plan-1"], tombstone);
 });
 
 test("tombstone schemas reject missing maxAttempts, fake fingerprints, duplicates, and excess attempts", () => {

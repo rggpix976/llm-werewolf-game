@@ -205,6 +205,14 @@ export function observeNpcReactionCandidate(root, { gameSessionId, reactionPlanI
 export function terminalizeNpcReactionIdentityConflict(root, { gameSessionId, reactionPlanId }) {
   validateNpcReactionCoordinatorRoot(root);
   assertSession(root, gameSessionId);
+  const existing = root.reactionTombstones[reactionPlanId];
+  if (existing) {
+    return alreadyCleanedNonCommit(root, existing, {
+      reactionPlanId,
+      terminalStatus: "rejected",
+      reason: "identity_conflict"
+    });
+  }
   const logical = root.logicalReactions[reactionPlanId];
   if (!logical || logical.status !== "active") fail("invalid_coordinator_state");
   const copy = clone(root);
@@ -227,6 +235,12 @@ export function cleanupCommittedNpcReaction(root, {
   if (existing) {
     if (existing.tombstoneType !== "committed") fail("invalid_coordinator_state");
     validateReactionTombstone(existing);
+    if (existing.successfulAttemptId !== successfulAttemptId ||
+        existing.preparationFingerprint !== preparationFingerprint ||
+        existing.npcPublicationId !== npcPublicationId ||
+        existing.commitResultRequestId !== commitResultRequestId) {
+      fail("invalid_coordinator_state");
+    }
     return freeze({
       root,
       result: { schemaVersion: SCHEMA_VERSION, status: "already_cleaned", reactionPlanId, terminalOrder: existing.terminalOrder }
@@ -260,6 +274,10 @@ export function terminalizeNpcReaction(root, { gameSessionId, reactionPlanId, te
   validateNpcReactionCoordinatorRoot(root);
   assertSession(root, gameSessionId);
   if (!NON_COMMIT_STATUSES.has(terminalStatus) || !NON_COMMIT_REASONS.has(reason)) fail("invalid_coordinator_state");
+  const existing = root.reactionTombstones[reactionPlanId];
+  if (existing) {
+    return alreadyCleanedNonCommit(root, existing, { reactionPlanId, terminalStatus, reason });
+  }
   const logical = root.logicalReactions[reactionPlanId];
   if (!logical || !["planned", "active"].includes(logical.status)) fail("invalid_coordinator_state");
   const copy = clone(root);
@@ -330,6 +348,25 @@ function installTombstone(copy, tombstone, status) {
   return freeze({
     root: copy,
     result: { schemaVersion: SCHEMA_VERSION, status, reactionPlanId, terminalOrder: tombstone.terminalOrder }
+  });
+}
+
+function alreadyCleanedNonCommit(root, existing, { reactionPlanId, terminalStatus, reason }) {
+  if (existing.tombstoneType !== "non_commit") fail("invalid_coordinator_state");
+  validateReactionTombstone(existing);
+  if (existing.reactionPlanId !== reactionPlanId ||
+      existing.terminalStatus !== terminalStatus ||
+      existing.reason !== reason) {
+    fail("invalid_coordinator_state");
+  }
+  return freeze({
+    root,
+    result: {
+      schemaVersion: SCHEMA_VERSION,
+      status: "already_cleaned",
+      reactionPlanId,
+      terminalOrder: existing.terminalOrder
+    }
   });
 }
 
