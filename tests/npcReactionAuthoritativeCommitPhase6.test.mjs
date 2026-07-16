@@ -220,17 +220,30 @@ test("authoritative commit actor eligibility precedes policy and uses actor_inel
       input.currentState.players = input.currentState.players.filter(
         (player) => player.participantId !== "npc-aoi"
       );
+      input.liveValidationContext.actorApplicability = {
+        schemaVersion: 1,
+        presence: "absent",
+        actorId: "npc-aoi",
+        absenceReason: "removed_from_roster"
+      };
+      input.liveValidationContext.currentAuthorization = {
+        schemaVersion: 1,
+        availability: "unavailable",
+        actorId: "npc-aoi",
+        reason: "actor_absent"
+      };
     },
     (input) => {
       input.currentState.players.find((player) => player.participantId === "npc-aoi").alive = false;
+      input.liveValidationContext.actorApplicability.alive = false;
     },
     (input) => {
       input.currentState.players.find((player) => player.participantId === "npc-aoi").maySpeak = false;
+      input.liveValidationContext.actorApplicability.maySpeak = false;
     }
   ];
   for (const change of vectors) {
     const input = claimCommitInput();
-    input.liveValidationContext.currentAuthorization.roleDisclosurePolicy = "avoid_unnecessary_claim";
     const beforeState = canonicalJson(input.currentState);
     change(input);
     const changedState = canonicalJson(input.currentState);
@@ -244,6 +257,62 @@ test("authoritative commit actor eligibility precedes policy and uses actor_inel
     });
     assert.notEqual(changedState, beforeState);
     assert.equal(canonicalJson(input.currentState), changedState);
+    assert.equal(input.currentState.conversation.npcReactionCommitIdempotencyRecords.length, 0);
+  }
+});
+
+test("reference and target integrity precede policy and disclosure denial", () => {
+  const invalidReference = claimCommitInput();
+  invalidReference.preparedReaction.delta.plan.causationEventIds = ["missing-event"];
+  refreshPrepared(invalidReference);
+  invalidReference.liveValidationContext.currentAuthorization.roleDisclosurePolicy = "avoid_unnecessary_claim";
+  const referenceState = canonicalJson(invalidReference.currentState);
+  const referenceResult = commitNpcReactionAuthoritatively(invalidReference);
+  assert.equal(referenceResult.rejection.reasonCode, "invalid_reference");
+  assert.equal(referenceResult.rejection.stage, "authorization");
+  assert.deepEqual(referenceResult.rejection.diagnostics, [
+    { code: "invalid_reference", location: "reference" }
+  ]);
+  assert.equal(canonicalJson(invalidReference.currentState), referenceState);
+
+  const targetIneligible = claimCommitInput();
+  targetIneligible.currentState.players = targetIneligible.currentState.players.filter(
+    (player) => player.participantId !== "npc-beni"
+  );
+  targetIneligible.liveValidationContext.currentAuthorization.roleDisclosurePolicy = "avoid_unnecessary_claim";
+  const targetState = canonicalJson(targetIneligible.currentState);
+  const targetResult = commitNpcReactionAuthoritatively(targetIneligible);
+  assert.equal(targetResult.rejection.reasonCode, "target_ineligible");
+  assert.equal(targetResult.rejection.stage, "authorization");
+  assert.deepEqual(targetResult.rejection.diagnostics, [
+    { code: "target_ineligible", location: "target" }
+  ]);
+  assert.equal(canonicalJson(targetIneligible.currentState), targetState);
+});
+
+test("contradictory actor and authorization evidence is an invariant", () => {
+  const vectors = [
+    (input) => {
+      input.liveValidationContext.currentAuthorization.actorId = "npc-beni";
+    },
+    (input) => {
+      input.liveValidationContext.currentAuthorization = {
+        schemaVersion: 1,
+        availability: "unavailable",
+        actorId: "npc-aoi",
+        reason: "actor_absent"
+      };
+    }
+  ];
+  for (const change of vectors) {
+    const input = commitInput();
+    change(input);
+    const before = canonicalJson(input.currentState);
+    assert.throws(
+      () => commitNpcReactionAuthoritatively(input),
+      invariant("invalid_commit_input")
+    );
+    assert.equal(canonicalJson(input.currentState), before);
     assert.equal(input.currentState.conversation.npcReactionCommitIdempotencyRecords.length, 0);
   }
 });

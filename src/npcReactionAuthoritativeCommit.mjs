@@ -313,28 +313,24 @@ function validateApplicability({ currentState: state, delta, coordinatorRoot, li
 function validateFinalAuthorization(state, delta, live, binding) {
   const actor = state.players.find((item) => item.participantId === delta.binding.npcId);
   const actorEvidence = live.actorApplicability;
-  if (!actor || actor.participantClass !== "npc" || !actor.alive || !actor.maySpeak
-    || actorEvidence.presence !== "present" || !actorEvidence.alive || !actorEvidence.maySpeak
-    || actorEvidence.actorId !== actor.participantId) {
-    return rejected(binding, "authorization", "actor_ineligible", "actor");
+  const authorization = live.currentAuthorization;
+  if (actorEvidence.actorId !== delta.binding.npcId
+    || authorization.actorId !== delta.binding.npcId
+    || (actorEvidence.presence === "present" && authorization.availability !== "available")
+    || (actorEvidence.presence === "absent" && authorization.availability !== "unavailable")
+    || (actor && actorEvidence.presence !== "present")
+    || (!actor && actorEvidence.presence !== "absent")
+    || (actor && (actorEvidence.alive !== actor.alive || actorEvidence.maySpeak !== actor.maySpeak))) {
+    throw invariant("invalid_commit_input");
   }
-  if (live.currentAuthorization.availability !== "available"
-    || live.currentAuthorization.actorId !== actor.participantId) {
-    return rejected(binding, "authorization", "permission_denied", "policy");
+  if (!actor || actor.participantClass !== "npc" || !actor.alive || !actor.maySpeak) {
+    return rejected(binding, "authorization", "actor_ineligible", "actor");
   }
   if (!currentReferencesResolve(state.conversation, delta)) {
     return rejected(binding, "authorization", "invalid_reference", "reference");
   }
   const descriptors = delta.plan.intendedSpeechActs;
-  const hasClaims = descriptors.some((item) => ["role_claim", "result_claim"].includes(item.descriptorType));
-  if (hasClaims && live.currentAuthorization.roleDisclosurePolicy !== "claim_when_directly_asked_after_result") {
-    return rejected(binding, "authorization", "permission_denied", "policy");
-  }
   for (const descriptor of descriptors) {
-    if (descriptor.descriptorType === "role_claim"
-      && !live.currentAuthorization.allowedClaimRoles.includes(descriptor.claimedRole)) {
-      return rejected(binding, "authorization", "permission_denied", "policy");
-    }
     if (!Object.hasOwn(descriptor, "targetId")) continue;
     const target = state.players.find((item) => item.participantId === descriptor.targetId);
     const aliveRequired = ["vote_declaration", "suspicion"].includes(descriptor.descriptorType);
@@ -344,8 +340,20 @@ function validateFinalAuthorization(state, delta, live, binding) {
       || (aliveRequired && !target.alive)) {
       return rejected(binding, "authorization", "target_ineligible", "target");
     }
+  }
+  const hasClaims = descriptors.some((item) => ["role_claim", "result_claim"].includes(item.descriptorType));
+  if (hasClaims && authorization.roleDisclosurePolicy !== "claim_when_directly_asked_after_result") {
+    return rejected(binding, "authorization", "permission_denied", "policy");
+  }
+  for (const descriptor of descriptors) {
+    if (descriptor.descriptorType === "role_claim"
+      && !authorization.allowedClaimRoles.includes(descriptor.claimedRole)) {
+      return rejected(binding, "authorization", "permission_denied", "policy");
+    }
+  }
+  for (const descriptor of descriptors) {
     if (descriptor.descriptorType === "result_claim"
-      && !live.currentAuthorization.authorizedResultFacts.some((fact) =>
+      && !authorization.authorizedResultFacts.some((fact) =>
         fact.targetId === descriptor.targetId && fact.result === descriptor.result)) {
       return rejected(binding, "authorization", "result_fact_mismatch", "known_information");
     }
