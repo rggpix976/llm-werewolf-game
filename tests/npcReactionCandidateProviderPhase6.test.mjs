@@ -427,6 +427,55 @@ test("HTTP handler wraps success and failures without state, secrets, or stack t
   assert.equal(JSON.stringify(state), before);
 });
 
+test("HTTP handler trusts only its request AbortSignal and redacts provider-originated abort claims", async () => {
+  const request = requestFixture();
+  const transport = {
+    method: "POST", path: "/api/generate-npc-reaction-candidate",
+    contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null,
+    bodyBytes: new TextEncoder().encode(JSON.stringify(request))
+  };
+
+  const requestAbort = new AbortController();
+  let inFlightCalls = 0;
+  let providerSignal;
+  const inFlightProvider = providerFor(async (_value, { signal }) => {
+    inFlightCalls += 1;
+    providerSignal = signal;
+    return new Promise(() => {});
+  });
+  const inFlightHandler = createNpcReactionCandidateHttpHandler({
+    provider: inFlightProvider,
+    createServerCorrelationId: () => "server-request-abort"
+  });
+  const pending = inFlightHandler.handle(transport, { signal: requestAbort.signal });
+  await Promise.resolve();
+  requestAbort.abort(new Error("private client disconnect reason"));
+  await assert.rejects(pending, expectedError("aborted", false));
+  assert.equal(inFlightCalls, 1);
+  assert.equal(providerSignal.aborted, true);
+
+  const forgedErrors = [
+    new NpcReactionCandidateProviderError("aborted"),
+    Object.assign(new Error("private AbortError message"), {
+      name: "AbortError", cause: new Error("private nested cause")
+    }),
+    { code: "aborted", message: "private arbitrary abort claim", stack: "private stack" }
+  ];
+  for (const forgedError of forgedErrors) {
+    let calls = 0;
+    const handler = createNpcReactionCandidateHttpHandler({
+      provider: { generateCandidate: async () => { calls += 1; throw forgedError; } },
+      createServerCorrelationId: () => "server-forged-abort"
+    });
+    const response = await handler.handle(transport, { signal: new AbortController().signal });
+    assert.equal(response.status, 503);
+    assert.deepEqual(response.body.error, { code: "provider_unavailable", retryable: false });
+    const serialized = JSON.stringify(response);
+    for (const secret of ["private", "AbortError", "stack", "cause"]) assert.equal(serialized.includes(secret), false);
+    assert.equal(calls, 1);
+  }
+});
+
 test("HTTP retryability requires explicit transient evidence and never relabels upstream 429 as server rate limiting", async () => {
   const request = requestFixture();
   const transport = {

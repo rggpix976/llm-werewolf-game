@@ -160,7 +160,7 @@ export function createNpcReactionCandidateHttpHandler({ provider, createServerCo
         const result = validateProviderResult(generatedResult, validatedRequest);
         return successResponse(serverCorrelationId, validatedRequest, result);
       } catch (error) {
-        if (error instanceof NpcReactionCandidateProviderError && error.code === "aborted") throw error;
+        if (signal?.aborted) throw providerError("aborted");
         return providerFailureResponse(error, requestId, serverCorrelationId);
       }
     }
