@@ -266,6 +266,7 @@ test("malformed engine-owned inputs throw each active invariant category", () =>
 test("closed constants are exact, immutable, and no provider or state API is exported", () => {
   assert.deepEqual(NPC_REACTION_PREPARATION_REJECTION_CODES, ["stale_validated_binding", "stale_session", "stale_turn", "stale_phase", "stale_state_version", "logical_reaction_mismatch", "attempt_mismatch", "actor_ineligible", "target_ineligible", "invalid_reference", "permission_denied", "result_fact_mismatch", "state_version_exhausted", "order_exhausted", "artifact_id_collision", "causation_event_overflow"]);
   assert.deepEqual(NPC_REACTION_PREPARATION_STAGES, ["binding", "applicability", "authorization", "allocation", "ordering", "construction"]);
+  assert.equal(NPC_REACTION_PREPARATION_REJECTION_CODES.includes("authorization"), false);
   assert.equal(NPC_REACTION_PREPARATION_INVARIANT_CODES.length, 10); assert.ok(Object.isFrozen(NPC_REACTION_PREPARATION_REJECTION_CODES));
 });
 
