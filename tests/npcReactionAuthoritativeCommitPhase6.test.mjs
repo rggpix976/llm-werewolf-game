@@ -179,12 +179,11 @@ test("successful-attempt ownership rejects unknown, stale, foreign, and wrong fi
   }
 });
 
-test("final live session, turn, phase, actor, target, reference, policy and facts fail closed", () => {
+test("final live session, turn, phase, target, reference, policy and facts fail closed", () => {
   const vectors = [
     ["stale_session", (input) => { input.currentState.gameSessionId = "other-session"; }],
     ["stale_turn", (input) => { input.currentState.turnId = "other-turn"; }],
     ["stale_phase", (input) => { input.currentState.phase = "day_discussion"; }],
-    ["actor_ineligible", (input) => { input.currentState.players.find((p) => p.participantId === "npc-aoi").alive = false; }],
     ["target_ineligible", (input) => { input.currentState.players = input.currentState.players.filter((p) => p.participantId !== "npc-beni"); }],
     ["invalid_reference", (input) => {
       input.preparedReaction.delta.plan.causationEventIds = ["missing-event"];
@@ -213,6 +212,60 @@ test("final live session, turn, phase, actor, target, reference, policy and fact
     assert.equal(input.currentState.stateVersion, 2);
     assert.equal(input.currentState.conversation.npcReactionCommitIdempotencyRecords.length, 0);
   }
+});
+
+test("authoritative commit actor eligibility precedes policy and uses actor_ineligible", () => {
+  const vectors = [
+    (input) => {
+      input.currentState.players = input.currentState.players.filter(
+        (player) => player.participantId !== "npc-aoi"
+      );
+    },
+    (input) => {
+      input.currentState.players.find((player) => player.participantId === "npc-aoi").alive = false;
+    },
+    (input) => {
+      input.currentState.players.find((player) => player.participantId === "npc-aoi").maySpeak = false;
+    }
+  ];
+  for (const change of vectors) {
+    const input = claimCommitInput();
+    input.liveValidationContext.currentAuthorization.roleDisclosurePolicy = "avoid_unnecessary_claim";
+    const beforeState = canonicalJson(input.currentState);
+    change(input);
+    const changedState = canonicalJson(input.currentState);
+    const result = commitNpcReactionAuthoritatively(input);
+    assert.equal(result.status, "rejected");
+    assert.deepEqual(result.rejection, {
+      stage: "authorization",
+      reasonCode: "actor_ineligible",
+      retryable: false,
+      diagnostics: [{ code: "actor_ineligible", location: "actor" }]
+    });
+    assert.notEqual(changedState, beforeState);
+    assert.equal(canonicalJson(input.currentState), changedState);
+    assert.equal(input.currentState.conversation.npcReactionCommitIdempotencyRecords.length, 0);
+  }
+});
+
+test("eligible actor policy and disclosure denials use permission_denied", () => {
+  const policy = claimCommitInput();
+  policy.liveValidationContext.currentAuthorization.roleDisclosurePolicy = "avoid_unnecessary_claim";
+  const policyResult = commitNpcReactionAuthoritatively(policy);
+  assert.equal(policyResult.rejection.reasonCode, "permission_denied");
+  assert.equal(policyResult.rejection.stage, "authorization");
+  assert.deepEqual(policyResult.rejection.diagnostics, [
+    { code: "permission_denied", location: "policy" }
+  ]);
+
+  const disclosure = roleClaimCommitInput();
+  disclosure.liveValidationContext.currentAuthorization.allowedClaimRoles = [];
+  const disclosureResult = commitNpcReactionAuthoritatively(disclosure);
+  assert.equal(disclosureResult.rejection.reasonCode, "permission_denied");
+  assert.equal(disclosureResult.rejection.stage, "authorization");
+  assert.deepEqual(disclosureResult.rejection.diagnostics, [
+    { code: "permission_denied", location: "policy" }
+  ]);
 });
 
 test("order mismatches, exhaustion, artifact collisions, and corrupt registries leave no partial effects", () => {
@@ -249,7 +302,20 @@ test("committed graph validation requires no coordinator or tombstone after comm
 });
 
 test("closed constants and browser-safe production isolation remain exact", async () => {
-  assert.equal(new Set(NPC_REACTION_COMMIT_REJECTION_CODES).size, 17);
+  assert.deepEqual(NPC_REACTION_COMMIT_REJECTION_CODES, [
+    "idempotency_conflict", "identity_conflict", "stale_session", "stale_turn",
+    "stale_phase", "stale_state_version", "logical_reaction_mismatch",
+    "attempt_mismatch", "actor_ineligible", "target_ineligible",
+    "invalid_reference", "permission_denied", "result_fact_mismatch",
+    "artifact_id_collision", "order_precondition_mismatch",
+    "state_version_exhausted", "order_exhausted"
+  ]);
+  assert.equal(NPC_REACTION_COMMIT_REJECTION_CODES.includes("authorization"), false);
+  for (const candidateOnlyReserved of [
+    "known_information_boundary_violation",
+    "final_live_validation_failure",
+    "role_disclosure_policy_unknown"
+  ]) assert.equal(NPC_REACTION_COMMIT_REJECTION_CODES.includes(candidateOnlyReserved), false);
   assert.equal(new Set(NPC_REACTION_COMMIT_INVARIANT_CODES).size, 15);
   assert.ok(Object.isFrozen(NPC_REACTION_COMMIT_REJECTION_CODES));
   assert.ok(Object.isFrozen(NPC_REACTION_COMMIT_INVARIANT_CODES));
@@ -284,6 +350,10 @@ function commitInput(proposals = [{ proposalType: "suspicion", targetId: "npc-be
 
 function claimCommitInput() {
   return commitInput([{ proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" }]);
+}
+
+function roleClaimCommitInput() {
+  return commitInput([{ proposalType: "role_claim", claimedRole: "seer" }]);
 }
 
 function preparationFixture(proposals) {

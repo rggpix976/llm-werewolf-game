@@ -657,6 +657,17 @@ test("hard stale dimensions and status races precede duplicate comparison", () =
   assertRejected(validateNpcReactionCandidate(committedLater), "applicability", "stale_request", "live_state");
 });
 
+test("candidate actor applicability changes are stale and never actor_ineligible", () => {
+  const input = inputFor();
+  input.liveApplicability.participants.find(
+    (participant) => participant.participantId === input.request.npcId
+  ).publicStatus = "dead";
+  const result = validateNpcReactionCandidate(input);
+  assertRejected(result, "applicability", "stale_request", "live_state");
+  assert.equal(JSON.stringify(result).includes("actor_ineligible"), false);
+  assert.equal(NPC_REACTION_CANDIDATE_REJECTION_CODES.includes("actor_ineligible"), false);
+});
+
 test("logical/request aliasing is classified before stale applicability", () => {
   const samePlanDifferentRequest = inputFor(); samePlanDifferentRequest.liveApplicability.requestId = "reaction-request-2";
   assertRejected(validateNpcReactionCandidate(samePlanDifferentRequest), "duplicate", "idempotency_conflict", "binding");
