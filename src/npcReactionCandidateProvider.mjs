@@ -31,9 +31,16 @@ const HTTP_REQUEST_FIELDS = Object.freeze([
   "method", "path", "contentTypeHeader", "contentEncodingHeader", "bodyBytes"
 ]);
 const CANDIDATE_KINDS = Object.freeze(["role_claim", "result_claim", "vote_declaration", "suspicion"]);
+const RESERVED_CANDIDATE_KINDS = Object.freeze([
+  "commentary", "answer", "acknowledgement", "decline", "clarification"
+]);
 const PROVIDER_MESSAGE = "NPC reaction candidate provider failed.";
 const REQUEST_LIMIT = 65_536;
 const ATTEMPT_TIMEOUT_MS = 5_000;
+const MAXIMUM_RETRY_AFTER_MS = 2_000;
+const MINIMUM_ATTEMPT_BUDGET_MS = 1_000;
+const RESPONSE_VALIDATION_BUDGET_MS = 500;
+const INTERNAL_PROVIDER_ERRORS = new WeakSet();
 
 export class NpcReactionCandidateProviderError extends Error {
   constructor(code, retryable = false) {
@@ -74,8 +81,7 @@ export function createNpcReactionCandidateProvider({
       let rejectAbort;
       const aborted = new Promise((_, reject) => { rejectAbort = reject; });
       const rejectOnAbort = () => rejectAbort(providerError(
-        controller.signal.reason === timeoutReason ? "timeout" : "aborted",
-        controller.signal.reason === timeoutReason
+        controller.signal.reason === timeoutReason ? "timeout" : "aborted"
       ));
       controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
       let timer;
@@ -90,11 +96,12 @@ export function createNpcReactionCandidateProvider({
         if (!Number.isFinite(now() - startedAt)) throw providerError("invalid_transport_response");
         return result;
       } catch (error) {
-        if (error instanceof NpcReactionCandidateProviderError) throw error;
+        if (error instanceof NpcReactionCandidateProviderError && INTERNAL_PROVIDER_ERRORS.has(error)) throw error;
         if (controller.signal.aborted) {
-          throw providerError(controller.signal.reason === timeoutReason ? "timeout" : "aborted", controller.signal.reason === timeoutReason);
+          throw providerError(controller.signal.reason === timeoutReason ? "timeout" : "aborted");
         }
-        throw normalizeProviderError(error);
+        const remainingDeadlineMs = Math.max(0, timeoutMs - Math.max(0, now() - startedAt));
+        throw normalizeProviderError(error, remainingDeadlineMs);
       } finally {
         if (timer !== undefined) clearTimer(timer);
         controller.signal.removeEventListener("abort", rejectOnAbort);
@@ -119,7 +126,7 @@ export function createNpcReactionCandidateHttpHandler({ provider, createServerCo
       }
       if (signal !== undefined && !isAbortSignal(signal)) throw new TypeError("Invalid NPC reaction candidate HTTP abort signal.");
       if (signal?.aborted) throw providerError("aborted");
-      if (!validContentType(request.contentTypeHeader) || !validContentEncoding(request.contentEncodingHeader)) {
+      if (!validContentType(request.contentTypeHeader) || request.contentEncodingHeader !== null) {
         return errorResponse(415, null, serverCorrelationId, "unsupported_media_type", false);
       }
       if (request.bodyBytes.byteLength > REQUEST_LIMIT) {
@@ -218,6 +225,10 @@ function validateCandidate(value) {
     || measureNesting(value, 5) > 5) fail();
   let claimCount = 0;
   const proposals = value.proposals.map((proposal) => {
+    if (RESERVED_CANDIDATE_KINDS.includes(proposal?.proposalType)) {
+      if (!isExactObject(proposal, ["proposalType"])) fail();
+      return { proposalType: proposal.proposalType };
+    }
     const fields = {
       role_claim: ["proposalType", "claimedRole"],
       result_claim: ["proposalType", "targetId", "result"],
@@ -241,41 +252,47 @@ function validateDiagnostics(value) {
   return deepFreeze(clonePlain(value));
 }
 
-function normalizeProviderError(error) {
+function normalizeProviderError(error, remainingDeadlineMs = 0) {
   const status = Number(error?.status ?? error?.upstreamStatus);
   if (status === 401 || status === 403 || ["provider_auth_failure", "authentication_failure"].includes(error?.code)) return providerError("authentication_failure");
-  if (status === 429 || ["server_rate_limited", "rate_limited"].includes(error?.code)) return providerError("rate_limited", true);
-  if (status >= 500 || error?.code === "provider_unavailable") return providerError("provider_unavailable", true);
+  if (status === 429 || ["server_rate_limited", "rate_limited"].includes(error?.code)) {
+    return providerError("rate_limited", usableRetryAfter(error?.retryAfterMs, remainingDeadlineMs));
+  }
+  if (status >= 500 || error?.code === "provider_unavailable") {
+    return providerError("provider_unavailable", explicitlyTransient(error, remainingDeadlineMs));
+  }
   if (status >= 400 && status < 500) return providerError("invalid_transport_response");
   const mapping = {
-    provider_timeout: ["timeout", true], timeout: ["timeout", true], aborted: ["aborted", false],
-    network_failure: ["network_failure", true], invalid_provider_response: ["malformed_provider_output", false],
+    provider_timeout: ["timeout", explicitlyTransient(error, remainingDeadlineMs)],
+    timeout: ["timeout", explicitlyTransient(error, remainingDeadlineMs)], aborted: ["aborted", false],
+    network_failure: ["network_failure", explicitlyTransient(error, remainingDeadlineMs)], invalid_provider_response: ["malformed_provider_output", false],
     malformed_provider_output: ["malformed_provider_output", false], invalid_schema: ["schema_mismatch", false],
     schema_mismatch: ["schema_mismatch", false], invalid_transport_response: ["invalid_transport_response", false]
   }[error?.code];
   if (mapping) return providerError(mapping[0], mapping[1]);
   if (error?.name === "AbortError") return providerError("aborted");
-  if (error instanceof TypeError) return providerError("network_failure", true);
-  return providerError("provider_unavailable", true);
+  if (error instanceof TypeError) return providerError("network_failure", explicitlyTransient(error, remainingDeadlineMs));
+  return providerError("provider_unavailable", false);
 }
 
 function providerFailureResponse(error, requestId, serverCorrelationId) {
-  const normalized = error instanceof NpcReactionCandidateProviderError ? error : normalizeProviderError(error);
+  const normalized = error instanceof NpcReactionCandidateProviderError && INTERNAL_PROVIDER_ERRORS.has(error)
+    ? error : normalizeProviderError(error);
   const mapping = {
-    timeout: [504, "provider_timeout", true],
-    network_failure: [503, "provider_unavailable", true],
-    provider_unavailable: [503, "provider_unavailable", true],
-    rate_limited: [429, "server_rate_limited", true],
+    timeout: [504, "provider_timeout", normalized.retryable],
+    network_failure: [503, "provider_unavailable", normalized.retryable],
+    provider_unavailable: [503, "provider_unavailable", normalized.retryable],
+    rate_limited: [503, "provider_unavailable", normalized.retryable],
     authentication_failure: [502, "provider_auth_failure", false],
     malformed_provider_output: [502, "invalid_provider_response", false],
     schema_mismatch: [502, "invalid_provider_response", false],
     invalid_transport_response: [502, "invalid_provider_response", false]
-  }[normalized.code] ?? [503, "provider_unavailable", true];
+  }[normalized.code] ?? [503, "provider_unavailable", false];
   return errorResponse(mapping[0], requestId, serverCorrelationId, mapping[1], mapping[2]);
 }
 
 function successResponse(serverCorrelationId, request, result) {
-  return deepFreeze({
+  const response = {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8", "content-encoding": "identity" },
     body: {
@@ -288,7 +305,9 @@ function successResponse(serverCorrelationId, request, result) {
       reactionAttemptId: request.reactionAttemptId,
       result
     }
-  });
+  };
+  if (utf8Length(JSON.stringify(response.body)) > REQUEST_LIMIT) throw providerError("invalid_transport_response");
+  return deepFreeze(response);
 }
 
 function errorResponse(status, requestId, correlationId, code, retryable) {
@@ -309,8 +328,14 @@ function validContentType(value) {
   return typeof value === "string" && /^[\t ]*application\/json[\t ]*;[\t ]*charset[\t ]*=[\t ]*utf-8[\t ]*$/i.test(value);
 }
 
-function validContentEncoding(value) {
-  return value === null || (typeof value === "string" && /^[\t ]*identity[\t ]*$/i.test(value));
+function usableRetryAfter(retryAfterMs, remainingDeadlineMs) {
+  return Number.isFinite(retryAfterMs) && retryAfterMs >= 0 && retryAfterMs <= MAXIMUM_RETRY_AFTER_MS
+    && retryAfterMs + MINIMUM_ATTEMPT_BUDGET_MS + RESPONSE_VALIDATION_BUDGET_MS <= remainingDeadlineMs;
+}
+
+function explicitlyTransient(error, remainingDeadlineMs) {
+  return error?.retryable === true
+    && remainingDeadlineMs >= MINIMUM_ATTEMPT_BUDGET_MS + RESPONSE_VALIDATION_BUDGET_MS;
 }
 
 function isAbortSignal(value) {
@@ -380,7 +405,9 @@ function utf8Length(value) {
 }
 
 function providerError(code, retryable = false) {
-  return new NpcReactionCandidateProviderError(code, retryable);
+  const error = new NpcReactionCandidateProviderError(code, retryable);
+  INTERNAL_PROVIDER_ERRORS.add(error);
+  return error;
 }
 
 function fail() {

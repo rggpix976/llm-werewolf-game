@@ -227,7 +227,8 @@ test("provider result candidate and diagnostics use strict closed shapes", async
     null,
     { ...resultFixture(request), extra: true },
     resultFixture(request, { candidate: { schemaVersion: 1, proposals: [] } }),
-    resultFixture(request, { candidate: { schemaVersion: 1, proposals: [{ proposalType: "commentary" }] } }),
+    resultFixture(request, { candidate: { schemaVersion: 1, proposals: [{ proposalType: "unknown" }] } }),
+    resultFixture(request, { candidate: { schemaVersion: 1, proposals: [{ proposalType: "commentary", extra: true }] } }),
     resultFixture(request, { diagnostics: { providerName: "test", model: "model", attemptCount: 0, elapsedMs: 1 } }),
     resultFixture(request, { diagnostics: { providerName: "test", model: "model", attemptCount: 2, elapsedMs: 1 } }),
     resultFixture(request, { diagnostics: { providerName: "test", model: "model", attemptCount: 1, elapsedMs: 1, extra: true } })
@@ -246,16 +247,58 @@ test("provider result candidate and diagnostics use strict closed shapes", async
   assert.equal(sha256CanonicalJson(accepted.candidate), candidateFingerprint);
 });
 
-test("provider performs no hidden retry or fallback for classified failures", async () => {
+test("reserved candidate kinds remain candidate-validation ownership without authoritative mutation", async () => {
+  const state = { stateVersion: 7, publicationCount: 2, deliveryCount: 1 };
+  for (const proposalType of ["commentary", "answer", "acknowledgement", "decline", "clarification"]) {
+    const request = requestFixture();
+    const before = structuredClone(state);
+    const provider = providerFor(async () => resultFixture(request, {
+      candidate: { schemaVersion: 1, proposals: [{ proposalType }] }
+    }));
+    const handler = createNpcReactionCandidateHttpHandler({
+      provider,
+      createServerCorrelationId: () => `server-${proposalType}`
+    });
+    const response = await handler.handle({
+      method: "POST", path: "/api/generate-npc-reaction-candidate",
+      contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null,
+      bodyBytes: new TextEncoder().encode(JSON.stringify(request))
+    });
+    assert.equal(response.status, 200);
+    const context = validationContext(request);
+    const validation = validateNpcReactionCandidate({
+      schemaVersion: 1,
+      request,
+      ...context,
+      transportEvidence: {
+        schemaVersion: 1, evidenceType: "npc_reaction_candidate_http_success", httpStatus: 200,
+        contentTypeHeader: response.headers["content-type"], contentEncodingHeader: response.headers["content-encoding"],
+        bodyBytes: new TextEncoder().encode(JSON.stringify(response.body))
+      }
+    });
+    assert.equal(validation.status, "rejected");
+    assert.equal(validation.rejection.reasonCode, "unsupported_in_phase6");
+    assert.equal(validation.rejection.stage, "structure");
+    assert.deepEqual(state, before);
+  }
+});
+
+test("provider performs no hidden retry or fallback and requires explicit retryability evidence", async () => {
   const vectors = [
-    [Object.assign(new Error("private network detail"), { code: "network_failure" }), "network_failure", true],
-    [Object.assign(new Error("private unavailable detail"), { code: "provider_unavailable" }), "provider_unavailable", true],
-    [Object.assign(new Error("private rate detail"), { status: 429 }), "rate_limited", true],
+    [Object.assign(new Error("private network detail"), { code: "network_failure" }), "network_failure", false],
+    [Object.assign(new Error("private transient network detail"), { code: "network_failure", retryable: true }), "network_failure", true],
+    [Object.assign(new Error("private unavailable detail"), { code: "provider_unavailable" }), "provider_unavailable", false],
+    [Object.assign(new Error("private transient unavailable detail"), { code: "provider_unavailable", retryable: true }), "provider_unavailable", true],
+    [Object.assign(new Error("private rate detail"), { status: 429 }), "rate_limited", false],
+    [Object.assign(new Error("private rate detail"), { status: 429, retryAfterMs: 1000 }), "rate_limited", true],
+    [Object.assign(new Error("private invalid rate detail"), { status: 429, retryAfterMs: 2500 }), "rate_limited", false],
+    [new NpcReactionCandidateProviderError("rate_limited", true), "rate_limited", false],
     [Object.assign(new Error("private auth detail"), { status: 401 }), "authentication_failure", false],
     [Object.assign(new Error("private body detail"), { code: "invalid_provider_response" }), "malformed_provider_output", false],
     [Object.assign(new Error("private schema detail"), { code: "invalid_schema" }), "schema_mismatch", false],
     [Object.assign(new Error("private transport detail"), { code: "invalid_transport_response" }), "invalid_transport_response", false],
-    [Object.assign(new Error("private server detail"), { status: 503 }), "provider_unavailable", true]
+    [Object.assign(new Error("private server detail"), { status: 503 }), "provider_unavailable", false],
+    [Object.assign(new Error("private transient server detail"), { status: 503, retryable: true }), "provider_unavailable", true]
   ];
   for (const [failure, code, retryable] of vectors) {
     let calls = 0;
@@ -266,6 +309,14 @@ test("provider performs no hidden retry or fallback for classified failures", as
     });
     assert.equal(calls, 1);
   }
+  let clockRead = 0;
+  const insufficientDeadline = providerFor(async () => {
+    throw Object.assign(new Error("private rate detail"), { status: 429, retryAfterMs: 1_000 });
+  }, { now: () => [0, 4_000][Math.min(clockRead++, 1)] });
+  await assert.rejects(
+    insufficientDeadline.generateCandidate(requestFixture()),
+    expectedError("rate_limited", false)
+  );
 });
 
 test("pre-abort invokes zero times and in-flight abort invokes once with cleanup", async () => {
@@ -290,7 +341,7 @@ test("pre-abort invokes zero times and in-flight abort invokes once with cleanup
   assert.equal(providerSignal.aborted, true);
 });
 
-test("attempt timeout aborts one invocation and clears its timer", async () => {
+test("attempt timeout aborts one invocation, remains client-nonretryable without budget evidence, and clears its timer", async () => {
   let timerCallback;
   let clearCount = 0;
   let calls = 0;
@@ -307,7 +358,7 @@ test("attempt timeout aborts one invocation and clears its timer", async () => {
   const pending = provider.generateCandidate(requestFixture());
   await Promise.resolve();
   timerCallback();
-  await assert.rejects(pending, expectedError("timeout", true));
+  await assert.rejects(pending, expectedError("timeout", false));
   assert.equal(calls, 1);
   assert.equal(providerSignal.aborted, true);
   assert.equal(clearCount, 1);
@@ -336,6 +387,9 @@ test("non-routing HTTP handler enforces exact byte, media, and envelope boundari
   const wrongMedia = await handler.handle({ ...base, contentTypeHeader: "text/plain", bodyBytes: encoded });
   assert.equal(wrongMedia.status, 415);
   assert.equal(wrongMedia.body.error.code, "unsupported_media_type");
+  const encodedIdentity = await handler.handle({ ...base, contentEncodingHeader: "identity", bodyBytes: encoded });
+  assert.equal(encodedIdentity.status, 415);
+  assert.equal(encodedIdentity.body.error.code, "unsupported_media_type");
   const malformed = await handler.handle({ ...base, bodyBytes: new Uint8Array([0xff]) });
   assert.equal(malformed.status, 400);
   assert.equal(malformed.body.error.code, "malformed_json");
@@ -357,7 +411,7 @@ test("HTTP handler wraps success and failures without state, secrets, or stack t
   const before = JSON.stringify(state);
   const successProvider = providerFor(async () => resultFixture(request));
   const successHandler = createNpcReactionCandidateHttpHandler({ provider: successProvider, createServerCorrelationId: () => "server-success" });
-  const transport = { method: "POST", path: "/api/generate-npc-reaction-candidate", contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: "identity", bodyBytes: new TextEncoder().encode(JSON.stringify(request)) };
+  const transport = { method: "POST", path: "/api/generate-npc-reaction-candidate", contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null, bodyBytes: new TextEncoder().encode(JSON.stringify(request)) };
   const success = await successHandler.handle(transport);
   assert.equal(success.status, 200);
   assert.equal(success.body.serverCorrelationId, "server-success");
@@ -371,6 +425,73 @@ test("HTTP handler wraps success and failures without state, secrets, or stack t
   assert.equal(JSON.stringify(failure).includes("SECRET"), false);
   assert.equal(JSON.stringify(failure).includes("stack"), false);
   assert.equal(JSON.stringify(state), before);
+});
+
+test("HTTP retryability requires explicit transient evidence and never relabels upstream 429 as server rate limiting", async () => {
+  const request = requestFixture();
+  const transport = {
+    method: "POST", path: "/api/generate-npc-reaction-candidate",
+    contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null,
+    bodyBytes: new TextEncoder().encode(JSON.stringify(request))
+  };
+  const vectors = [
+    [{ status: 429 }, false],
+    [{ status: 429, retryAfterMs: 1_000 }, true],
+    [{ status: 429, retryAfterMs: 2_001 }, false],
+    [{ status: 503 }, false],
+    [{ status: 503, retryable: true }, true]
+  ];
+  for (const [evidence, retryable] of vectors) {
+    let calls = 0;
+    const provider = providerFor(async () => {
+      calls += 1;
+      throw Object.assign(new Error("private upstream detail"), evidence);
+    });
+    const handler = createNpcReactionCandidateHttpHandler({
+      provider,
+      createServerCorrelationId: () => "server-retryability"
+    });
+    const response = await handler.handle(transport);
+    assert.equal(response.status, 503);
+    assert.deepEqual(response.body.error, { code: "provider_unavailable", retryable });
+    assert.equal(response.body.error.code === "server_rate_limited", false);
+    assert.equal(calls, 1);
+  }
+});
+
+test("HTTP handler enforces the 64 KiB boundary on the complete success envelope", async () => {
+  const request = requestFixture();
+  const baseResult = resultFixture(request);
+  const makeHandler = (result) => createNpcReactionCandidateHttpHandler({
+    provider: { generateCandidate: async () => result },
+    createServerCorrelationId: () => "server-response-size"
+  });
+  const transport = {
+    method: "POST", path: "/api/generate-npc-reaction-candidate",
+    contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null,
+    bodyBytes: new TextEncoder().encode(JSON.stringify(request))
+  };
+  const envelopeBody = (result) => ({
+    schemaVersion: 1, operation: request.operation, requestId: request.requestId,
+    correlationId: request.correlationId, serverCorrelationId: "server-response-size",
+    reactionPlanId: request.reactionPlanId, reactionAttemptId: request.reactionAttemptId, result
+  });
+  const sizeWithPadding = (length) => utf8Length(JSON.stringify(envelopeBody({ ...baseResult, padding: "x".repeat(length) })));
+  const baseSize = sizeWithPadding(0);
+  const paddingOverhead = baseSize - utf8Length(JSON.stringify(envelopeBody(baseResult)));
+  const acceptedPadding = 65_536 - baseSize;
+  assert.equal(sizeWithPadding(acceptedPadding), 65_536);
+  const accepted = await makeHandler({ ...baseResult, padding: "x".repeat(acceptedPadding) }).handle(transport);
+  assert.equal(accepted.status, 200);
+  assert.equal(utf8Length(JSON.stringify(accepted.body)), 65_536);
+
+  const nestedResult = { ...baseResult, padding: "x".repeat(acceptedPadding + 1) };
+  assert.ok(utf8Length(JSON.stringify(nestedResult)) <= 65_536);
+  assert.equal(sizeWithPadding(acceptedPadding + 1), 65_537);
+  const rejected = await makeHandler(nestedResult).handle(transport);
+  assert.equal(rejected.status, 502);
+  assert.deepEqual(rejected.body.error, { code: "invalid_provider_response", retryable: false });
+  assert.equal(paddingOverhead > 0, true);
 });
 
 test("non-routing HTTP success is accepted by the existing pure candidate validator", async () => {
@@ -411,3 +532,7 @@ test("provider module remains browser-safe, isolated, and exposes only closed er
   assert.equal(source.includes("fallback"), false);
   assert.equal(source.includes("runProviderWithRetry"), false);
 });
+
+function utf8Length(value) {
+  return new TextEncoder().encode(value).byteLength;
+}
