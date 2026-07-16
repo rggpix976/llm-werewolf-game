@@ -1425,7 +1425,7 @@ The session-local reaction coordinator owns two separate state machines. A logic
 | `rejected` | candidate/identity/authorization validation failed | none | yes |
 | `aborted` | reset, destroy, emergency cancellation, or stale/superseded final CAS stopped the attempt | none | yes |
 
-An attempt terminal status is immutable; retry never reopens it and always creates a new `reactionAttemptId` under the same logical reaction. A retryable `failed` or `timed_out` attempt returns its logical owner to the retry-eligible portion of `active`; a fresh attempt then starts. A non-retryable provider/auth/schema failure uses attempt `failed` and logical `rejected`. Structural, semantic, authorization, correlation, actor, or identity validation failure uses attempt `rejected` and logical `rejected`; validation failure is never retryable. A stale base/applicability result uses attempt `aborted` with reason `stale_result` and logical `superseded`. Explicit emergency cancellation uses attempt `aborted` and logical `cancelled`.
+An attempt terminal status is immutable; retry never reopens it and always creates a new `reactionAttemptId` under the same logical reaction. A retryable `failed` or `timed_out` attempt returns its logical owner to the retry-eligible portion of `active`; a fresh attempt then starts. A non-retryable provider/auth/schema failure uses attempt `failed` and logical `rejected`. Structural, semantic, authorization, correlation, or actor validation failure reached from `candidate_received` or `validated` uses the corresponding legal `rejected` transition and logical `rejected`; validation failure is never retryable. An identity or idempotency conflict instead uses the source-status mapping below, so it never creates an otherwise forbidden attempt transition. A stale base/applicability result uses attempt `aborted` with reason `stale_result` and logical `superseded`. Explicit emergency cancellation uses attempt `aborted` and logical `cancelled`.
 
 Exact duplicate responses do not transition either machine. A late result for a timed-out/failed/aborted attempt is duplicate or stale diagnostic input according to the conflict matrix below. After logical `committed`, every non-winning attempt is terminal or forced to `aborted`, and none can commit.
 
@@ -1446,6 +1446,25 @@ candidate_received -> rejected
 validated -> rejected
 attempting/candidate_received/validated -> aborted
 ```
+
+#### Identity-conflict attempt terminalization
+
+An active identity or idempotency conflict is terminalized from the current attempt status without inventing an `attempting -> rejected` or `candidate_received -> rejected` identity-conflict edge. After authoritative replay and stored-conflict lookup have both returned `not_found`, the exact source-status mapping is:
+
+| Current relevant attempt status | Identity-conflict terminal status | Fingerprint rule |
+| :--- | :--- | :--- |
+| `attempting` | `aborted` | remains `null` |
+| `candidate_received` | `aborted` | remains `null` |
+| `validated` | `rejected` | preserves the existing fingerprint |
+| `accepted` | unreachable on the active-conflict path | an active logical reaction with an accepted attempt is an invariant failure; no `accepted -> rejected` edge exists |
+| `rejected` | `rejected` | preserves its source observation state |
+| `aborted` | `aborted` | preserves its source observation state |
+| `failed` | `failed` | remains `null` |
+| `timed_out` | `timed_out` | remains `null` |
+
+For every reachable active row, the logical reaction transitions `active -> rejected`, one non-commit `identity_conflict` tombstone copies the mapped terminal attempt status and exact observation variant, and the reservation/logical/attempt entries are removed atomically only after complete tombstone validation. A terminal attempt is preserved rather than reopened or overwritten. The mapping changes no candidate fingerprint: unobserved `attempting`, `candidate_received`, `failed`, and `timed_out` evidence remains `null`; observed `validated` evidence remains fingerprinted when it becomes `rejected`; and an already `rejected` or `aborted` attempt retains whichever root-contained observation variant its valid source transition established.
+
+`accepted` is produced only on the detached committed-cleanup copy from a validated winner and is removed with the logical reaction and reservation in that same root replacement. It is therefore never a valid published `active` identity-conflict source. If a complete committed graph exists, replay or stored conflict is resolved before control applicability and preserves lifecycle; if no committed graph exists, an active/accepted control graph is `terminal_lifecycle_graph_mismatch`. This closes accepted reachability without adding a status, transition, root field, or schema-version change.
 
 ### Structured candidate transport and validation
 
@@ -2938,7 +2957,7 @@ The lifecycle trace is exact:
 | new commit, cleanup fails | published status remains `validated` | published status remains `active` | none | none; reservation/logical/attempts all retained | authoritative `N+2` remains; cleanup is 0 |
 | exact replay | retain existing | retain existing | unchanged, including missing | none; cleanup repair is separate | 0 |
 | hard stale | `aborted` | `superseded` | non-commit `stale_applicability` | after tombstone | 0 |
-| active identity/idempotency conflict | relevant nonterminal/validated attempt -> `rejected` | `active -> rejected` | one non-commit `identity_conflict` | reservation release and removal after tombstone | 0 |
+| active identity/idempotency conflict | `attempting`/`candidate_received` -> `aborted`; `validated` -> `rejected`; terminal `failed`/`timed_out`/`rejected`/`aborted` preserved; `accepted` unreachable | `active -> rejected` | one non-commit `identity_conflict` with the exact mapped summary and observation state | reservation release and removal after complete tombstone validation | 0 |
 | already-terminal identity/idempotency conflict | unchanged | unchanged | unchanged; no insert | none; no reopening/repair | 0 |
 | authorization/reference failure | `rejected` | `rejected` | non-commit `authorization_failure` | after tombstone | 0 |
 | allocation/order/exhaustion failure | `failed` | `rejected` | corresponding non-commit reason | after tombstone | 0 |
@@ -2947,19 +2966,19 @@ The lifecycle trace is exact:
 
 Exact authoritative replay is decided before this lifecycle matrix and returns with mutation zero even during cleanup pending, after reservation release/entry removal, at a later version, or with a missing/evicted tombstone. Replay never invokes cleanup. A stored conflict against a complete authoritative graph also returns before ordinary control applicability and leaves the old cleanup-pending root byte-for-byte unchanged: it cannot reject the active logical, reject the validated winner, insert a tombstone, or release the reservation. With no authoritative graph and no stored conflict, only logical `active` plus winning attempt `validated` may create a new commit. Only an active reaction with no committed graph may use active-conflict terminalization. A terminal lifecycle state whose required authoritative graph or tombstone is missing/mismatched throws `terminal_lifecycle_graph_mismatch` and performs no lifecycle or authoritative mutation; missing tombstone alone after a complete authoritative commit is the explicit replay exception.
 
-The complete 7-by-8 applicability matrix below applies after replay is `not_found`; `C` means ordinary commit is possible only without conflict (and active conflict uses terminalization), `A` means active conflict may terminalize but ordinary commit rejects, `P` means preserve lifecycle with no conflict-driven mutation, and `I` means an impossible lifecycle combination and `terminal_lifecycle_graph_mismatch`. A stored exact conflict result still precedes ordinary applicability classification.
+The complete 7-by-8 applicability matrix below applies after replay is `not_found`; `C` means ordinary commit is possible only without conflict and an active conflict uses the mapping above; `A` means an active conflict transitions the logical reaction to `rejected`, applies or preserves the exact attempt mapping above, and terminalizes atomically, while an ordinary no-conflict commit rejects; `P` is reserved for an already-terminal logical lifecycle and preserves it without conflict-driven mutation; and `I` means an impossible lifecycle combination and `terminal_lifecycle_graph_mismatch`. A stored exact conflict result still precedes ordinary applicability classification.
 
 | Logical status / relevant attempt | `attempting` | `candidate_received` | `validated` | `accepted` | `failed` | `timed_out` | `rejected` | `aborted` |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | `planned` | I | I | I | I | I | I | I | I |
-| `active` | A | A | C | I | P | P | P | P |
+| `active` | A | A | C | I | A | A | A | A |
 | `committed` | I | I | I | I | I | I | I | I |
 | `rejected` | I | I | I | I | P | I | P | P |
 | `superseded` | I | I | I | I | I | I | I | P |
 | `cancelled` | I | I | I | I | I | I | I | P |
 | `exhausted` | I | I | I | I | P | P | P | P |
 
-`planned` legitimately has no attempt, so every cell in a matrix that assumes a relevant attempt is impossible. For `P` under logical `active`, absent conflict continues to the normal `attempt_mismatch` rejection without changing the pre-existing status. For terminal non-commit rows, a valid matching tombstone allows conflict or late input to return its already-classified result with mutation zero. A `committed` status after authoritative replay returned `not_found` is always a terminal graph mismatch, including `committed + accepted`; when its graph exists, stage 2 replays or stage 3 classifies conflict before this matrix. `committed -> rejected`, `exhausted -> rejected`, `superseded -> rejected`, and every other terminal-to-terminal overwrite are prohibited. The matrix classifies ordinary control state only after authoritative lookup: the same `active + validated` cell means ordinary commit candidate when the authoritative graph is absent, but cleanup pending and replay/cleanup-only when that graph is complete.
+`planned` legitimately has no attempt, so every cell in a matrix that assumes a relevant attempt is impossible. For an `A` cell with no conflict, ordinary commit applicability returns the existing attempt mismatch without changing lifecycle. For an `A` cell with an active identity conflict, the logical reaction becomes `rejected`; a nonterminal attempt follows the exact `aborted`/`rejected` mapping, while an already-terminal attempt keeps its status and observation evidence. For terminal non-commit `P` rows, a valid matching tombstone allows conflict or late input to return its already-classified result with mutation zero. A `committed` status after authoritative replay returned `not_found` is always a terminal graph mismatch, including `committed + accepted`; when its graph exists, stage 2 replays or stage 3 classifies conflict before this matrix. `accepted -> rejected`, `committed -> rejected`, `exhausted -> rejected`, `superseded -> rejected`, and every other terminal-to-terminal overwrite are prohibited. The matrix classifies ordinary control state only after authoritative lookup: the same `active + validated` cell means ordinary commit candidate when the authoritative graph is absent, but cleanup pending and replay/cleanup-only when that graph is complete.
 
 | Control status | Authoritative committed graph | Meaning | Allowed action |
 | :--- | ---: | :--- | :--- |
@@ -3460,7 +3479,7 @@ The reaction idempotency key is `(gameSessionId, reactionPlanId, requestId)` wit
 | Case | Required classification | State-machine/result behavior |
 | :--- | :--- | :--- |
 | same logical ID, request ID, and request fingerprint | `idempotent replay` when a commit result exists; otherwise `duplicate` while the logical request is already active/terminal without commit | return stored commit only in the first case; no provider, publication, transition, or increment |
-| same logical ID and request ID, different request fingerprint | `identity conflict` (`idempotency_conflict`) | active logical reaction becomes `rejected` if this is its first terminal conflict; otherwise retain terminal status |
+| same logical ID and request ID, different request fingerprint | `identity conflict` (`idempotency_conflict`) | active logical reaction uses the exact source-status attempt mapping above and becomes `rejected` if this is its first terminal conflict; otherwise retain terminal lifecycle |
 | same logical ID, different request ID | `identity conflict` | reject both attempted aliasing and replay; no new logical reaction |
 | different logical ID, same request ID | `identity conflict` | reject request-ID reuse; no new logical reaction |
 | different logical ID, same trigger identity | `identity conflict` in initial one-reaction-per-trigger Phase 6 | reject the second logical reaction; future multi-NPC design must introduce an explicit actor-order key before changing this rule |
