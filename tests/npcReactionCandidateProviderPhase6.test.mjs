@@ -459,7 +459,7 @@ test("HTTP retryability requires explicit transient evidence and never relabels 
   }
 });
 
-test("HTTP handler enforces the 64 KiB boundary on the complete success envelope", async () => {
+test("HTTP handler revalidates injected provider results before returning 200", async () => {
   const request = requestFixture();
   const baseResult = resultFixture(request);
   const makeHandler = (result) => createNpcReactionCandidateHttpHandler({
@@ -471,27 +471,44 @@ test("HTTP handler enforces the 64 KiB boundary on the complete success envelope
     contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null,
     bodyBytes: new TextEncoder().encode(JSON.stringify(request))
   };
-  const envelopeBody = (result) => ({
-    schemaVersion: 1, operation: request.operation, requestId: request.requestId,
-    correlationId: request.correlationId, serverCorrelationId: "server-response-size",
-    reactionPlanId: request.reactionPlanId, reactionAttemptId: request.reactionAttemptId, result
-  });
-  const sizeWithPadding = (length) => utf8Length(JSON.stringify(envelopeBody({ ...baseResult, padding: "x".repeat(length) })));
-  const baseSize = sizeWithPadding(0);
-  const paddingOverhead = baseSize - utf8Length(JSON.stringify(envelopeBody(baseResult)));
-  const acceptedPadding = 65_536 - baseSize;
-  assert.equal(sizeWithPadding(acceptedPadding), 65_536);
-  const accepted = await makeHandler({ ...baseResult, padding: "x".repeat(acceptedPadding) }).handle(transport);
-  assert.equal(accepted.status, 200);
-  assert.equal(utf8Length(JSON.stringify(accepted.body)), 65_536);
+  const invalidResults = [
+    { ...baseResult, padding: "x" },
+    { ...baseResult, padding: "x".repeat(64_000) },
+    { ...baseResult, reactionAttemptId: "reaction-attempt-foreign" }
+  ];
+  for (const invalidResult of invalidResults) {
+    const rejected = await makeHandler(invalidResult).handle(transport);
+    assert.equal(rejected.status, 502);
+    assert.deepEqual(rejected.body.error, { code: "invalid_provider_response", retryable: false });
+  }
+});
 
-  const nestedResult = { ...baseResult, padding: "x".repeat(acceptedPadding + 1) };
-  assert.ok(utf8Length(JSON.stringify(nestedResult)) <= 65_536);
-  assert.equal(sizeWithPadding(acceptedPadding + 1), 65_537);
-  const rejected = await makeHandler(nestedResult).handle(transport);
-  assert.equal(rejected.status, 502);
-  assert.deepEqual(rejected.body.error, { code: "invalid_provider_response", retryable: false });
-  assert.equal(paddingOverhead > 0, true);
+test("HTTP handler returns the largest strict result fixture while retaining the complete-envelope size guard", async () => {
+  const request = requestFixture();
+  const maximumId = `n${"x".repeat(63)}`;
+  const maximumResult = resultFixture(request, {
+    candidate: {
+      schemaVersion: 1,
+      proposals: Array.from({ length: 16 }, () => ({ proposalType: "suspicion", targetId: maximumId }))
+    },
+    diagnostics: {
+      providerName: "p".repeat(64), model: "m".repeat(128), attemptCount: 1,
+      elapsedMs: Number.MAX_SAFE_INTEGER
+    }
+  });
+  const provider = providerFor(async () => maximumResult);
+  const handler = createNpcReactionCandidateHttpHandler({
+    provider,
+    createServerCorrelationId: () => "server-maximum-valid-result"
+  });
+  const response = await handler.handle({
+    method: "POST", path: "/api/generate-npc-reaction-candidate",
+    contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null,
+    bodyBytes: new TextEncoder().encode(JSON.stringify(request))
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.result.candidate.proposals.length, 16);
+  assert.ok(utf8Length(JSON.stringify(response.body)) < 65_536);
 });
 
 test("non-routing HTTP success is accepted by the existing pure candidate validator", async () => {

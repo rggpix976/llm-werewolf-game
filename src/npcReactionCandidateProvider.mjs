@@ -156,7 +156,8 @@ export function createNpcReactionCandidateHttpHandler({ provider, createServerCo
         return errorResponse(400, requestId, serverCorrelationId, "invalid_schema", false);
       }
       try {
-        const result = await provider.generateCandidate(validatedRequest, { signal });
+        const generatedResult = await provider.generateCandidate(validatedRequest, { signal });
+        const result = validateProviderResult(generatedResult, validatedRequest);
         return successResponse(serverCorrelationId, validatedRequest, result);
       } catch (error) {
         if (error instanceof NpcReactionCandidateProviderError && error.code === "aborted") throw error;
