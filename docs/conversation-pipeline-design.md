@@ -4175,7 +4175,7 @@ createNpcPublicationDeliveryController({
 })
 ```
 
-The factory argument requires exactly those eleven fields, with `additionalProperties: false`; no production dependency is optional or nullable.
+The factory argument requires exactly those ten fields, with `additionalProperties: false`; no production dependency is optional or nullable.
 
 `initialConsumer` requires exactly `consumerId: ID` and `sinkType: "browser" | "cli"`, with `additionalProperties: false`; the controller owns the initial `consumerGeneration: 0`. `createId()` is synchronous and returns one candidate per call. The controller neither repairs nor retries an invalid/colliding ID, and an exception does not select a fallback allocator.
 
@@ -4199,7 +4199,7 @@ replaceNpcPublicationDeliveryConsumer(input)
 reset()
 ```
 
-No other production method exposes the root, attempts, tokens, receipt index, acknowledgement index, capability registry, timers, abort handles, or inspector state. Receipts and exact request/payload references are controller-private runtime registries, not new members of the unchanged seven-field root. A successful receipt remains retained through acknowledgement and consumer replacement so exact duplicate acknowledgement remains classifiable, and is discarded only by reset; request/payload references remain only as long as the retained attempt/retry contract requires and are never external authority.
+No other production method exposes the root, attempts, tokens, receipt index, acknowledgement index, capability registry, timers, abort handles, or inspector state. Receipts and exact request/payload references are controller-private runtime registries, not new members of the unchanged twelve-field `NpcPublicationDeliveryControllerRoot`. A successful receipt remains retained through acknowledgement and consumer replacement so exact duplicate acknowledgement remains classifiable, and is discarded only by reset; request/payload references remain only as long as the retained attempt/retry contract requires and are never external authority.
 
 ##### Discovery, cursor, and head-of-line
 
@@ -4251,7 +4251,11 @@ Otherwise one detached transaction rebinds pending records, changes each retryab
 
 `NpcPublicationDeliveryObservation` is a strict runtime-only union whose every member requires exactly `schemaVersion: 1`, `outcomeType`, `gameSessionId`, `publicationId: ID | null`, `consumerId`, `consumerGeneration`, `sinkType`, `deliveryAttemptId: ID | null`, `deliveryAttemptOrder: non-negative safe integer | null`, `attemptNumber: integer 1..3 | null`, `code: NpcPublicationDeliveryObservationCode | null`, and `runtimeOrder: non-negative safe integer`, with `additionalProperties: false`. Delivery outcome types are exactly `npc_publication_delivery_prepared | npc_publication_sink_started | npc_publication_delivered | npc_publication_delivery_failed | npc_publication_acknowledged | npc_publication_duplicate_ack_suppressed | npc_publication_stale_ack_rejected | npc_publication_delivery_abandoned | npc_delivery_consumer_replaced`.
 
-Consumer replacement alone has null publication/attempt/order/number/code. Publication outcomes set the complete publication/attempt identity. `NpcPublicationDeliveryObservationCode` is exactly the existing canonical-resolution or transport-failure code for `npc_publication_delivery_failed`, or the exact existing acknowledgement error code for `npc_publication_stale_ack_rejected`; every other delivery outcome, including abandonment and duplicate suppression, has null code. Observations never contain text, display name, payload/fingerprint, receipt/token/capability, evidence, graph, locale, private/provider data, DOM/writer objects, stack/cause, or free-form message. `runtimeOrder` is a controller-private counter, not a root field; it advances only after primary storage. Exhaustion or observer exception is isolated and cannot change the primary result.
+Consumer replacement alone has null publication/attempt/order/number/code. Publication outcomes set the complete publication/attempt identity. `NpcPublicationDeliveryObservationCode` is exactly the existing canonical-resolution or transport-failure code for `npc_publication_delivery_failed`, or the exact existing acknowledgement error code for `npc_publication_stale_ack_rejected`; every other delivery outcome, including abandonment and duplicate suppression, has null code. Observations never contain text, display name, payload/fingerprint, receipt/token/capability, evidence, graph, locale, private/provider data, DOM/writer objects, stack/cause, or free-form message.
+
+The controller-private `nextObservationRuntimeOrder` begins at `0` and is not a root field. After the primary transition/result is stored, when it is less than `Number.MAX_SAFE_INTEGER`, the controller uses its current value once, stages the next value by adding one, constructs the exact observation, and invokes the observer at most once. When it equals `Number.MAX_SAFE_INTEGER`, the controller uses that value as the final unique safe `runtimeOrder`, invokes the observer at most once, and permanently latches that controller's observer channel as exhausted without incrementing or wrapping the counter. Once exhausted, later primary transitions still store and return or throw normally, but construct no observation, invoke no observer, and neither reuse nor change the final counter. Counter staging or the exhausted latch occurs before the observer call; an observer exception remains isolated and cannot reopen the channel, repeat the order, or change the primary result.
+
+Every earlier requirement for exactly one delivery observer invocation means exactly one while that controller's observer channel is available; the exhaustion rule is the sole exception and produces exactly zero invocations. Reset never revives the old channel. A separately constructed controller owns an independent channel beginning at order `0`.
 
 ##### Copy-on-write, first failure, and test seam
 
@@ -4266,23 +4270,31 @@ The next runtime PR may export `createNpcPublicationDeliveryControllerForTesting
 Future runtime coverage is mandatory and is grouped as follows:
 
 - Discovery: exact current consumer; missing-pending materialization; repeated-discovery idempotence; `0..1` result cardinality; cursor before/equal/after the unresolved head; cursor inability to expose a later publication; `failed_terminal` blocking; acknowledged advancement; reservation/finalization exclusion; malformed-graph invariant; and capacity rollback.
+- Factory: the exact ten required fields; rejection of every missing field, every extra field, and each null dependency; initial generation zero; and no injected production renderer.
 - Preparation: success; exact request and capability object shapes; fresh graph/context reads; head loss and non-head rejection; resolution terminalization with null fingerprint; renderer-invariant zero mutation; ID collision; attempt-order exhaustion; capacity; observer isolation; and a fault before every root-publication stage with byte-equivalent rollback.
 - Retry: old `failed_retryable -> abandoned`; exact `abandonedFromState`; old-token deletion; attempt-number increment; retained budget across replacement; exact payload-object reuse; renderer invocation remaining one; no context read on retry; cloned/consumed-token rejection; and third-failure exhaustion.
 - Begin and settlement: exact request reference; clone/reuse rejection; exact 15,000 and 16,000 ms boundaries; early timer rearm; stale-timer no-op; success/timeout, failure/timeout, and reset races; no-callback terminalization; timer/controller/listener cleanup; and zero counter gaps.
 - Receipt and acknowledgement: full lookup identity; impossible publication-only lookup; exact retained receipt; cloned receipt rejection; first, exact duplicate, conflicting, stale-session, and stale-generation acknowledgement; `ack_only`; zero sink invocation on acknowledgement retry; acknowledgement-order exhaustion; and observer isolation.
 - Consumer replacement: identical-consumer no-op; pending rebind; retryable abandonment; old-token invalidation; acknowledged/terminal preservation; prepared/in-flight/sink-succeeded blocking; generation-maximum invariant; retained-attempt collision; byte-equivalent rollback; and exact observer order.
 - Reset: every nonterminal source state; exact `abandonedFromState`; one signal abort; timer cleanup; capability/token/receipt invalidation; second-reset no-op; stale late callback; unaffected separately constructed controller; authoritative-state deep equality; and zero `stateVersion` delta.
+- Observer order: initial order `0`; `Number.MAX_SAFE_INTEGER - 1`; exact `Number.MAX_SAFE_INTEGER` as the final unique order; no observation on the next transition; no wrap or duplicate; unchanged primary state/result through exhaustion and observer exceptions; no revival after reset; and order `0` for a separately constructed controller.
 - Privacy and scope: no payload/fingerprint in observations, no text in errors, no evidence object in stored failure, no stack/cause, no provider/private graph exposure, and zero provider, AI Renderer, sink, browser/CLI, game-engine, or route invocation/import, authoritative mutation, and `stateVersion` delta.
 
 The following machine-readable closure vectors are normative:
 
 ```json
 [
+  { "contract": "factory_fields", "fieldCount": 10, "fieldNames": ["gameSessionId", "initialConsumer", "createId", "listCommittedNpcPublicationGraphs", "getCanonicalRenderingContext", "nowMonotonicMs", "scheduleTimer", "cancelTimer", "createAbortController", "observer"], "additionalProperties": false, "nullableDependencies": false },
+  { "contract": "controller_root_fields", "fieldCount": 12, "fieldNames": ["schemaVersion", "gameSessionId", "consumer", "invalidated", "nextDeliveryAttemptOrder", "nextSinkStartedOrder", "nextSinkSucceededOrder", "nextAcknowledgedOrder", "currentRecordsByPublicationId", "attemptsById", "acknowledgementsByPublicationId", "retryTokensById"], "privateRegistriesAreRootFields": false },
   { "operation": "discovery", "headAtOrBeforeCursor": true, "resultCount": 0, "laterPublicationExposed": false },
   { "operation": "resolution_failure", "attemptState": "failed_terminal", "payloadFingerprint": null, "requestCreated": false, "publicError": "npc_delivery_terminal" },
   { "operation": "repeat_sink", "oldAttemptState": "abandoned", "abandonedFromState": "failed_retryable", "oldTokenRetained": false, "payloadObjectReused": true, "rendererReinvoked": false },
   { "operation": "ack_only", "sinkReinvoked": false, "newAttemptCreated": false, "tokenConsumedWithAcknowledgement": true },
-  { "operation": "reset_twice", "secondReturnType": "undefined", "secondObserverCount": 0 }
+  { "operation": "reset_twice", "secondReturnType": "undefined", "secondObserverCount": 0 },
+  { "operation": "observer_order", "nextOrderBefore": 0, "emittedRuntimeOrder": 0, "nextOrderAfter": 1, "observerInvocationMaximum": 1 },
+  { "operation": "observer_order", "nextOrderBefore": 9007199254740990, "emittedRuntimeOrder": 9007199254740990, "nextOrderAfter": 9007199254740991, "observerInvocationMaximum": 1 },
+  { "operation": "observer_order_exhaustion", "nextOrderBefore": 9007199254740991, "emittedRuntimeOrder": 9007199254740991, "channelAfter": "exhausted", "counterWrapped": false, "observerInvocationMaximum": 1 },
+  { "operation": "observer_after_exhaustion", "observationConstructed": false, "observerInvocationCount": 0, "counterChanged": false, "primaryResultChanged": false }
 ]
 ```
 
