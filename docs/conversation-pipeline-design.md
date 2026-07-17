@@ -3865,6 +3865,138 @@ No other nullability combination is valid. Consumer replacement retains an aband
 
 `completeNpcPublicationSink(capability)` returns a frozen `NpcPublicationSinkCompletion` requiring exactly `schemaVersion: 1`, `status: "sink_succeeded"`, `receipt: NpcPublicationSinkSuccessReceipt`, and `retryToken: NpcPublicationDeliveryRetryToken` with `retryKind: "ack_only"`, with `additionalProperties: false`. `recordNpcPublicationSinkFailure(capability, failureEvidence)` returns a frozen `NpcPublicationSinkFailureResult` requiring exactly `schemaVersion: 1`, `status: "failed_retryable" | "failed_terminal"`, `failure: NpcPublicationTransportFailure`, and `retryToken: null | NpcPublicationDeliveryRetryToken`, with `additionalProperties: false`; the token is present exactly for `failed_retryable` and has `retryKind: "repeat_sink"`.
 
+##### Sink begin and settlement capabilities
+
+The exact recursively frozen `NpcPublicationDeliveryRequest` object returned by `prepareNpcPublicationDelivery(input)` is both delivery data and the one-shot begin capability for that attempt. The controller retains that exact object reference in a private runtime registry. `beginNpcPublicationSink(request)` accepts only that retained reference; field equality is insufficient. A clone, structured clone, spread copy, JSON round-trip, reconstruction, foreign-controller request, old-session request, old-generation request, consumed request, abandoned-attempt request, or another attempt's request cannot begin a sink. The request field set remains exactly the one already defined above and is never serialized as a capability.
+
+The exact API boundary is:
+
+```text
+prepareNpcPublicationDelivery(input) -> NpcPublicationDeliveryRequest
+beginNpcPublicationSink(request) -> NpcPublicationSinkExecution
+completeNpcPublicationSink(settlementCapability) -> NpcPublicationSinkCompletion
+recordNpcPublicationSinkFailure(settlementCapability, failureEvidence) -> NpcPublicationSinkFailureResult
+```
+
+`NpcPublicationSinkExecution` is runtime-private and has exactly `schemaVersion: 1`, `status: "in_flight"`, `request: the exact NpcPublicationDeliveryRequest reference`, `settlementCapability: opaque controller-issued capability`, `signal: the exact attempt-specific controller-owned AbortSignal`, `sinkDeadlineMs: 15000`, and `timeoutCleanupGraceMs: 1000`, with no optional/null members and `additionalProperties: false`. The execution wrapper and settlement capability are frozen; the native `AbortSignal` need not itself be frozen. The wrapper cannot abort or replace the signal, supply another signal, extend either deadline, or change either duration. The execution and capability are never serialized or exposed through snapshots, history, action results, diagnostics, providers, observers, or authoritative records.
+
+The settlement capability is opaque, controller-issued, attempt/consumer/session/sink-specific, object-identity based, one-shot, non-serializable, non-clonable, and validated by a controller-private non-enumerable brand. The first sink success, sink failure, timeout terminal settlement, or reset abandonment consumes it. A foreign, cloned, reconstructed, cross-identity, or exact-but-consumed capability throws `NpcPublicationDeliveryError` with `code: "npc_delivery_identity_conflict"`; reuse is never idempotent success. Receipt-based acknowledgement idempotency is a separate later contract.
+
+`beginNpcPublicationSink(request)` performs exactly this atomic order:
+
+1. Strictly validate the controller root.
+2. Validate the exact retained request object identity.
+3. Require the current record and attempt to be `prepared`.
+4. Compare every request/current-attempt binding.
+5. Create one attempt-specific `AbortController`.
+6. Create one branded settlement capability.
+7. Read one controller-injected monotonic start value.
+8. Stage the primary deadline and cleanup-timer handles.
+9. Stage `prepared -> in_flight` in a detached root.
+10. Allocate `sinkStartedOrder` exactly once.
+11. Revalidate the complete detached graph.
+12. Register the timer and runtime handles.
+13. Replace the root exactly once.
+14. Mark the begin-request capability consumed.
+15. Return the frozen `NpcPublicationSinkExecution`.
+16. After the stored transition, emit `npc_publication_sink_started`.
+
+Failure before root replacement preserves `prepared`, leaves the request unconsumed, creates no counter gap or observer outcome, and disposes every staged timer, controller, listener, capability, and handle so none remains registered. Observer failure after replacement never rolls back the stored state.
+
+##### Monotonic deadline and timeout settlement
+
+The controller injects the monotonic millisecond clock used for sink settlement. A production browser may use a `performance.now()`-equivalent monotonic source. `Date.now()`, RFC3339 values, timezone/system-clock correction, caller/wrapper elapsed time, observer timestamps, and timer-callback execution time alone are forbidden deadline authorities. Every clock read must be finite, non-negative, and non-decreasing. Regression, `NaN`, infinity, or a negative value throws `NpcPublicationDeliveryInvariantError` with `code: "invalid_npc_delivery_attempt"` without a transition. Monotonic values are runtime handles only and are not stored in the controller root, attempt, receipt, acknowledgement, retry token, or observer outcome.
+
+For one attempt, `sinkStartedAt` is the step-7 value, `deadlineAt = sinkStartedAt + 15000`, and `cleanupDeadlineAt = deadlineAt + 1000`. `now < deadlineAt` is before the deadline; `now >= deadlineAt` has reached it, so timeout wins at exactly 15,000 ms. Every completion/failure method reads the monotonic clock and settles an elapsed deadline before applying the requested transition. A delayed JavaScript timer cannot make a post-deadline success timely.
+
+At deadline, the controller synchronously latches timeout in the exact attempt's private settlement gate, aborts its `AbortController` exactly once without exposing the private reason, forbids success, starts the cleanup-evidence window, and schedules the cleanup deadline. Timeout-latched state remains `in_flight`; the latch and times are private runtime handles, not new root/attempt fields. The latch emits no observer outcome.
+
+Before `cleanupDeadlineAt`, the wrapper may use the same settlement capability only with `failureCode: "sink_timeout"`. Evidence `visibleEffect: "none"` plus `cleanupStatus: "complete"` produces `failed_retryable`, `sink_timeout`, `retry_sink`, and one `repeat_sink` token for attempts 1 or 2; attempt 3 instead produces `failed_terminal`, `sink_retry_exhausted`, `terminal_exhausted`, and no token. Any `visibleEffect: "unknown"` or `cleanupStatus: "unproved"` immediately produces `failed_terminal`, `sink_timeout`, `terminal_ambiguous`, and no token.
+
+At `now >= cleanupDeadlineAt`, absence of accepted evidence automatically stores the same terminal-ambiguous timeout, consumes the capability, cleans up handles, and emits the final failure observation. Evidence submitted at exactly 16,000 ms is too late. A wrapper that never calls back cannot leave an attempt indefinitely `in_flight`. Later completion/failure cannot change the stored result and fails as `npc_delivery_terminal`, or as stale session after reset.
+
+Success is accepted only for the exact settlement capability while the attempt is `in_flight`, timeout is not latched, `now < deadlineAt`, and the existing browser/CLI sink-success boundary is already satisfied. It stores `sink_succeeded`, one receipt, and one `ack_only` token; clears all settlement handles; consumes the capability; then observes. At or after the deadline, `completeNpcPublicationSink()` first latches timeout. Because the reported sink success proves a possibly visible effect, it then stores terminal-ambiguous `sink_timeout`, issues no receipt/token, emits the final failure observation, and throws `NpcPublicationDeliveryError` with `code: "npc_delivery_terminal"` only after that stored settlement.
+
+A failure before deadline uses its exact compatible failure code. After timeout latch, only `sink_timeout` evidence is admissible; a browser/CLI-specific code then is an `invalid_npc_delivery_attempt` invariant and changes no state, counter, token, receipt, or observer. If cleanup grace has already expired, terminal timeout settlement occurs before the late evidence is considered.
+
+##### Strict failure evidence and sink proof
+
+`NpcPublicationSinkFailureEvidence` is a runtime-only strict union with exactly `schemaVersion: 1`, `evidenceType: "npc_sink_failure_evidence"`, `sinkType: "browser" | "cli"`, `failureCode: "browser_sink_container_missing" | "browser_sink_attachment_failed" | "browser_sink_bookkeeping_failed" | "cli_sink_write_failed" | "sink_timeout" | "sink_aborted"`, `visibleEffect: "none" | "unknown"`, and `cleanupStatus: "complete" | "unproved"`, with no optional/null members and `additionalProperties: false`.
+
+It contains no session/publication/attempt/consumer ID, payload/fingerprint/text, DOM node, writer, message/path/stack/cause, timestamp, retryability/disposition, attempt number, token, or receipt. Identity comes only from the settlement capability. The wrapper never chooses disposition. The controller derives it from failure code, sink type, effect/cleanup evidence, attempt budget, timeout latch, and reset state.
+
+Browser permits only `browser_sink_container_missing`, `browser_sink_attachment_failed`, `browser_sink_bookkeeping_failed`, and `sink_timeout`; CLI permits only `cli_sink_write_failed` and `sink_timeout`. The strict union reserves `sink_aborted` for a future separately reviewed controller-owned operation, but initial Phase 6 accepts it from neither wrapper. A cross-sink or currently inactive code is an `invalid_npc_delivery_attempt` invariant. Only `none` plus `complete` proves no visible effect. Every other effect/cleanup combination is ambiguous and cannot be downgraded.
+
+Browser container lookup failure before sink start is `browser_sink_container_missing/none/complete`. Attachment failure is `browser_sink_attachment_failed/none/complete` only if the node was never attached. Post-attachment bookkeeping failure is retryable only after the wrapper removes the exact node, verifies it is not a child of the intended container, removes exact controller-owned bookkeeping, and proves no other node exists for the attempt. Failure of any proof is `unknown` or `unproved` and terminal ambiguous. Text equality, view-model/array state, paint, `MutationObserver`, and render scheduling are never proof.
+
+CLI success remains configured writer return/awaited fulfillment. A CLI failure is `none/complete` only when the configured writer contract mechanically guarantees that exact invocation produced no output. Generic throw/rejection, buffer inspection, prompt redraw, console mock counts, or possible partial output are insufficient and use `unknown/unproved` terminal ambiguity.
+
+Normal attempt timeout always uses `sink_timeout`; reset uses abandonment, not failure settlement. `sink_aborted` remains a reserved/inactive member for initial Phase 6 because no distinct controller operation currently aborts a still-settleable root outside timeout/reset. A wrapper, DOM, writer, caller-created `AbortError`, or foreign signal cannot activate it. A future use requires a separate reviewed controller-owned operation without changing the evidence ownership above.
+
+A caller without the exact settlement capability is rejected as `npc_delivery_identity_conflict` before evidence validation. Malformed evidence from the trusted wrapper throws `NpcPublicationDeliveryInvariantError` with `code: "invalid_npc_delivery_attempt"`; it is not stored as a transport failure. It changes no state/counter/token/receipt/observer, and the original valid attempt timers remain active.
+
+##### Settlement linearization, reset, and observer order
+
+Every attempt has one private settlement gate. At method entry it validates session/capability identity, settles elapsed monotonic deadlines, checks reset/terminal/consumed state, commits at most one success or failure, stores the root/attempt/token/receipt, consumes the capability, cleans timers/controllers/listeners/bookkeeping handles, emits the observer outcome, and only then returns or contractually throws. The first operation to complete the stored transition through this gate wins; Promise order, DOM callback order, observer order, wall-clock time, and timer callback order do not provide a second authority.
+
+Success, retryable failure, terminal failure, cleanup-grace exhaustion, acknowledgement when handles are no longer needed, reset, and begin rollback each clean every primary/cleanup timer, abort listener/controller, and sink bookkeeping handle they own. Every late timer checks exact session, attempt, consumer generation, and capability generation and is a stale/no-op diagnostic only; it creates no state, counter, token, receipt, or observer outcome.
+
+Reset competes through the same gate. If reset wins, it prevents preparation, aborts the active signal, stages `abandoned`, consumes/invalidates the settlement capability, destroys timers/handles, emits exactly one abandonment observation, and destroys the root. Late settlement is stale and emits no delivery-failure observation or receipt/token. If settlement wins, its one result and observation are stored first; reset then destroys the root under the existing contract without a second settlement. Cleanup grace never crosses into a new session.
+
+The exact observer order is stored transition, capability/token/receipt bookkeeping, timer/handle cleanup, observer callback, then method return/throw. Timeout latch alone emits nothing. Final failure, including cleanup-grace exhaustion, emits exactly one `npc_publication_delivery_failed`. Observer failure changes no stored result, token, receipt, code, return, or throw.
+
+No timeout, abort, browser cleanup, CLI failure, timer, observer, history read, commit replay, discovery, or action result starts another sink attempt. `failed_retryable` only issues `repeat_sink`; only explicit `retryNpcPublicationDelivery(exactRetainedToken)` creates the next attempt.
+
+The settlement matrices below are normative and machine-readable:
+
+```json
+{
+  "capabilityMatrix": [
+    { "case": "exact_prepared_first_begin", "result": "accepted" },
+    { "case": "cloned_prepared_request", "error": "npc_delivery_identity_conflict" },
+    { "case": "reused_prepared_request", "error": "npc_delivery_identity_conflict" },
+    { "case": "foreign_session_request", "error": "stale_npc_delivery_session" },
+    { "case": "old_generation_request", "error": "stale_npc_consumer_generation" },
+    { "case": "exact_settlement_first_success", "state": "sink_succeeded" },
+    { "case": "cloned_settlement_capability", "error": "npc_delivery_identity_conflict" },
+    { "case": "reused_settlement_capability", "error": "npc_delivery_identity_conflict" },
+    { "case": "cross_attempt_capability", "error": "npc_delivery_identity_conflict" },
+    { "case": "reset_invalidated_capability", "error": "stale_npc_delivery_session" }
+  ],
+  "deadlineMatrix": [
+    { "case": "success_before_deadline", "elapsedMs": 14999.999, "state": "sink_succeeded" },
+    { "case": "success_at_deadline", "elapsedMs": 15000, "failureCode": "sink_timeout", "disposition": "terminal_ambiguous", "state": "failed_terminal", "receipt": null },
+    { "case": "no_effect_timeout_attempt_1", "elapsedMs": 15999.999, "state": "failed_retryable", "retryKind": "repeat_sink" },
+    { "case": "no_effect_timeout_attempt_3", "elapsedMs": 15999.999, "failureCode": "sink_retry_exhausted", "disposition": "terminal_exhausted", "state": "failed_terminal" },
+    { "case": "unknown_effect_before_cleanup_deadline", "elapsedMs": 15999.999, "disposition": "terminal_ambiguous", "state": "failed_terminal" },
+    { "case": "no_evidence_at_cleanup_deadline", "elapsedMs": 16000, "disposition": "terminal_ambiguous", "state": "failed_terminal" },
+    { "case": "evidence_at_cleanup_deadline", "elapsedMs": 16000, "accepted": false, "state": "failed_terminal" },
+    { "case": "late_success_after_latch", "receipt": null, "disposition": "terminal_ambiguous" },
+    { "case": "delayed_timer_after_deadline", "successPermitted": false }
+  ],
+  "failureEvidenceMatrix": [
+    { "case": "browser_container_missing", "visibleEffect": "none", "cleanupStatus": "complete", "outcome": "retry_or_exhaustion_by_attempt" },
+    { "case": "browser_never_attached", "visibleEffect": "none", "cleanupStatus": "complete", "outcome": "retry_or_exhaustion_by_attempt" },
+    { "case": "browser_verified_removal", "visibleEffect": "none", "cleanupStatus": "complete", "outcome": "retry_or_exhaustion_by_attempt" },
+    { "case": "browser_unproved_removal", "visibleEffect": "unknown", "cleanupStatus": "unproved", "disposition": "terminal_ambiguous" },
+    { "case": "cli_explicit_no_effect", "visibleEffect": "none", "cleanupStatus": "complete", "outcome": "retry_or_exhaustion_by_attempt" },
+    { "case": "cli_generic_rejection", "visibleEffect": "unknown", "cleanupStatus": "unproved", "disposition": "terminal_ambiguous" },
+    { "case": "cross_sink_code", "invariant": "invalid_npc_delivery_attempt" },
+    { "case": "malformed_evidence", "invariant": "invalid_npc_delivery_attempt" },
+    { "case": "caller_created_capability", "error": "npc_delivery_identity_conflict" },
+    { "case": "evidence_has_retryable_or_disposition", "invariant": "invalid_npc_delivery_attempt" }
+  ],
+  "raceMatrix": [
+    { "winner": "completion_before_deadline", "outcome": "sink_succeeded" },
+    { "winner": "deadline_settlement", "completionCanIssueReceipt": false },
+    { "winner": "failure_settlement", "timerCanOverwrite": false },
+    { "winner": "reset", "outcome": "abandoned", "lateCallback": "stale" },
+    { "winner": "terminal_timeout", "resetOutcome": "destroy_without_second_observation" },
+    { "winner": "stored_settlement", "observerThrows": true, "primaryResultChanged": false }
+  ]
+}
+```
+
 `getNpcPublicationDeliveryRetryToken(input)` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `payloadFingerprint: Sha256Fingerprint`, and `retryTokenId: ID`, with `additionalProperties: false`. It returns only the controller-retained exact token. Publication-ID-only lookup and caller-created/cloned/changed tokens are forbidden. `retryNpcPublicationDelivery(token)` accepts only that retained capability: `repeat_sink` consumes the token and returns a new frozen `NpcPublicationDeliveryRequest` with a fresh attempt ID/order and the next attempt number; `ack_only` calls acknowledgement with the retained exact receipt and returns the acknowledgement result without renderer, sink, history append, or authoritative mutation. Wrong session, consumer, generation, sink, publication, attempt, order, attempt number, fingerprint, token, or capability identity fails closed.
 
 The initial retry policy is exactly three total sink attempts per publication and a 15,000 ms deadline per attempt, with no automatic backoff or hidden retry. Attempt/deadline values are controller policy, not provider policy. After attempt 3 fails without visible effect, the publication becomes `failed_terminal` with `sink_retry_exhausted`; an explicit future recovery design is required to reopen it.
@@ -3876,7 +4008,7 @@ The Phase 6 order is exact:
 1. `NpcReactionCommit` authoritatively publishes the canonical graph and one publication at `N+2`.
 2. Controller discovery derives `delivery pending`; it does not write authority.
 3. Preparation verifies the complete committed graph, head-of-line eligibility, consumer generation, and identity, reserves one attempt, renders the exact payload, and changes `pending -> prepared`.
-4. `beginNpcPublicationSink(...)` consumes one controller capability and changes `prepared -> in_flight`.
+4. `beginNpcPublicationSink(request)` consumes the exact retained `NpcPublicationDeliveryRequest` object identity once and changes `prepared -> in_flight`.
 5. The browser attaches and verifies the exact safe node, or the CLI configured writer returns/fulfills. No other event is sink success.
 6. `completeNpcPublicationSink(capability)` validates exact identity, changes `in_flight -> sink_succeeded`, assigns one sink-success order, and returns the retained receipt plus its controller-issued `ack_only` token.
 7. `acknowledgeNpcPublication(receipt)` accepts only that exact receipt, changes `sink_succeeded -> acknowledged`, assigns one acknowledgement order, stores the acknowledgement result, and then emits its observer outcome.
@@ -3892,7 +4024,7 @@ The NPC controller owns one bounded sink deadline, one AbortController, timer cl
 
 Browser success is the exact safe text node attached to and verified under the intended conversation container with controller identity bookkeeping stored on that node. Array/view-model insertion, render scheduling, paint, observer notification, or text equality is insufficient. If post-attachment bookkeeping fails, the wrapper must remove the exact node and verify removal before reporting `failed_retryable`; inability to prove removal is `failed_terminal`.
 
-CLI success is fulfillment of the configured writer for the exact payload. A writer failure is retryable only when the writer contract proves `visibleEffect: false`; a throw/rejection after an unknown or partial write is terminal to prevent duplicate output. Prompt redraw and console buffer inspection are not proof. Sink timeout or abort is retryable only when the wrapper proves the operation produced no visible effect and completed cleanup; otherwise it is terminal.
+CLI success is fulfillment of the configured writer for the exact payload. A writer failure is retryable only when the writer contract proves `visibleEffect: "none"` and `cleanupStatus: "complete"`; a throw/rejection after an unknown or partial write is terminal to prevent duplicate output. Prompt redraw and console buffer inspection are not proof. Sink timeout, or a future separately reviewed controller-owned abort, is retryable only when the wrapper proves the operation produced no visible effect and completed cleanup; otherwise it is terminal. Initial Phase 6 does not activate `sink_aborted`.
 
 Sink failure before success produces no receipt or acknowledgement, leaves authoritative state at `N+2`, and emits a redacted failure observation after the failure record is stored. Retry is explicit through a controller token or later delivery-only pump; no history/replay/action result implicitly retries. After sink success, every failure before acknowledgement is acknowledgement-only through the `ack_only` token created by sink completion and must never repeat rendering or output. This is not a transport-failure disposition. A terminal delivery failure does not invoke legacy NPC display, provider, Renderer, reaction preparation, or commit again.
 
@@ -3931,9 +4063,9 @@ The failure/state/token matrix is normative:
 
 | Operation evidence | Failure code | Disposition | Resulting state | Token | Automatic sink retry |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| No visible effect proved, cleanup complete, attempt 1 or 2 | exact sink/timeout/abort code | `retry_sink` | `failed_retryable` | `repeat_sink` | no |
+| No visible effect proved, cleanup complete, attempt 1 or 2 | exact active sink/timeout code | `retry_sink` | `failed_retryable` | `repeat_sink` | no |
 | No visible effect proved, cleanup complete, attempt 3 | `sink_retry_exhausted` | `terminal_exhausted` | `failed_terminal` | none | no |
-| Visible effect unknown or cleanup/rollback unproved, any attempt | exact sink/timeout/abort code | `terminal_ambiguous` | `failed_terminal` | none | no |
+| Visible effect unknown or cleanup/rollback unproved, any attempt | exact active sink/timeout code | `terminal_ambiguous` | `failed_terminal` | none | no |
 | Exact browser/CLI sink boundary succeeds | no transport failure | not applicable | `sink_succeeded` | `ack_only` | forbidden |
 | Exact acknowledgement succeeds | no transport failure | not applicable | `acknowledged` | consumed | forbidden |
 
@@ -3968,7 +4100,8 @@ These examples are normative and contain no rendered content:
   {
     "case": "third_no_effect_failure",
     "attemptNumber": 3,
-    "visibleEffect": false,
+    "visibleEffect": "none",
+    "cleanupStatus": "complete",
     "code": "sink_retry_exhausted",
     "disposition": "terminal_exhausted",
     "resultingState": "failed_terminal"
@@ -3977,6 +4110,7 @@ These examples are normative and contain no rendered content:
     "case": "ambiguous_first_attempt",
     "attemptNumber": 1,
     "visibleEffect": "unknown",
+    "cleanupStatus": "unproved",
     "code": "cli_sink_write_failed",
     "disposition": "terminal_ambiguous",
     "resultingState": "failed_terminal"
@@ -4191,9 +4325,10 @@ The repository has `src/openaiProvider.mjs`; there is no `src/openAIResponseProv
 - Phase 6 projection/validation tests prove deterministic strict allowlists, actor-private disclosure authorization, exclusion of every other private/legacy/internal field, provider ID/actor/version/patch rejection, final live CAS, exact `N+1 -> N+2`, zero increments for every non-commit outcome, and no legacy fallback after enabled-route rejection.
 - Phase 6 delivery contract tests prove strict discovery/preparation/request/payload/current-record/retained-attempt/receipt/acknowledgement/retry-token schemas; detached frozen canonical rendering; caller payload override rejection; one active attempt; head-of-line slot order; distinct dense runtime orders; every permitted state edge; and every omitted edge rejection without authoritative mutation. They cover 1024/3072 capacity boundaries, no attempt eviction/reuse, attempt-number preservation across replacement, and exact `npc_delivery_capacity_exhausted` rollback.
 - Phase 6 browser delivery tests exercise the actual DOM adapter from a controller-frozen canonical payload and prove exact safe-node attachment plus identity bookkeeping before receipt, cleanup-proved retry after pre-proof failure, terminal ambiguity when cleanup cannot be proved, acknowledgement-only retry after receipt, no second node, and reset/late callback isolation.
-- Phase 6 CLI delivery tests exercise the actual configured writer and prove synchronous/awaited fulfillment evidence, no-effect failure retry, partial/unknown write terminalization, timeout/abort cleanup, acknowledgement-only retry without a second write, and exact parity with browser controller identity and ordering.
+- Phase 6 CLI delivery tests exercise the actual configured writer and prove synchronous/awaited fulfillment evidence, no-effect failure retry, partial/unknown write terminalization, timeout cleanup, inactive `sink_aborted` rejection, acknowledgement-only retry without a second write, and exact parity with browser controller identity and ordering.
 - Phase 6 delivery idempotency tests cover repeated discovery, fresh-attempt sink retry, exact receipt/token lookup, exact duplicate acknowledgement and one suppression observation, conflicting/foreign receipt, wrong sink/consumer/generation/session, stale acknowledgement observations, terminal rendering failure, controller reset, and authoritative deep equality throughout. Consumer-replacement tests retain an old-generation `abandoned` attempt while publishing a new-generation `pending` current record, invalidate old capabilities/receipts/tokens/callbacks, reject attempt-ID collision, preserve acknowledged/terminal records, emit exact post-replacement observations, and prove byte-equal rollback at every pre-replacement fault point.
 - Phase 6 delivery failure reachability tests cover every transport code/disposition/state/token tuple. They prove `retry_sink` only for no-visible-effect evidence with budget remaining, `terminal_exhausted` on the third proved-no-effect failure, `terminal_ambiguous` for unknown effect at any attempt, absence of `retry_ack_only` from transport failures, and creation of `ack_only` only by exact sink completion. The normative JSON examples parse and match those transitions.
+- Phase 6 sink-settlement tests prove exact request/capability object identity, clone and one-shot reuse rejection, begin rollback without handles or counter gaps, a monotonic fake clock, the exact 15,000 ms deadline and 1,000 ms cleanup grace, delayed-timer behavior, completion/timeout, failure/timeout, reset/timeout, and reset/success races, and no-callback terminalization. They cover browser verified versus unproved removal, CLI explicit no-effect versus unknown partial write, cross-sink and malformed evidence invariants, timer/listener/controller cleanup, no hidden retry, the three-attempt maximum, observer isolation, authoritative deep equality, `stateVersion` delta zero, and zero Provider/AI Renderer/legacy fallback invocations.
 - Phase 6 history/replay tests prove reaction replay, history, `get_state`, diagnostics, snapshot, and observer subscription produce no live request, render, sink, receipt, acknowledgement, token, or redisplay; repeated history remains complete and deterministic in publication-slot order across pending/acknowledged/failed delivery states.
 - Phase 6 delivery/compatibility tests additionally prove default-off and disable rollback, unchanged Phase 4/5 controllers and legacy route, stateless proxy operation, no raw/legacy fallback for a structured reaction, retained `N+2` after every sink outcome, and no controlled Renderer activation before Phase 7.
 - Phase 6 documentation validation records the Unicode scan command, exact base/head/added-line scopes, inspected code-point classes, and file/line/code-point details for any finding; it is not a runtime test.
@@ -4318,6 +4453,10 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Phase 6 acknowledgement proof** | EXACT CONTROLLER-RETAINED `sink_succeeded` RECEIPT ONLY; ACK-ONLY RETRY AFTER SINK SUCCESS |
 | **Phase 6 delivery replay** | EXACT RETAINED `repeat_sink` OR `ack_only` TOKEN; COMMIT/HISTORY REPLAY NEVER DELIVERS |
 | **Phase 6 delivery terminal evidence** | PROVED NO-EFFECT EXHAUSTION IS `terminal_exhausted`; UNKNOWN VISIBLE EFFECT IS `terminal_ambiguous` |
+| **Phase 6 sink begin capability** | EXACT FROZEN `NpcPublicationDeliveryRequest` OBJECT REFERENCE; ONE-SHOT; CLONE/REUSE FAIL CLOSED |
+| **Phase 6 sink settlement capability** | OPAQUE BRANDED CONTROLLER OBJECT; EXACT ATTEMPT/SESSION/CONSUMER/SINK; FIRST SETTLEMENT WINS |
+| **Phase 6 sink clock/deadline** | INJECTED MONOTONIC CLOCK; TIMEOUT AT `>= 15000` MS; CLEANUP GRACE ENDS AT `>= 16000` MS |
+| **Phase 6 sink retry ownership** | FAILURE EVIDENCE NEVER CHOOSES DISPOSITION; ONLY EXPLICIT RETAINED `repeat_sink` TOKEN CREATES A NEW ATTEMPT |
 | **Phase 6 delivery failure fallback** | LEGACY NPC TEXT, PROVIDER, REACTION, AND AI RENDERER FALLBACK PROHIBITED |
 | **Phase 6 delivery reset** | ABANDON OLD ATTEMPTS, DESTROY COMPLETE RUNTIME ROOT, REJECT EVERY OLD-SESSION CALLBACK |
 | **Phase 6 AI Renderer ownership** | NONE; PHASE 6 CANONICAL DELIVERY NEVER CREATES `RendererRequest` OR ACCEPTS RENDERER SINK PROOF |
