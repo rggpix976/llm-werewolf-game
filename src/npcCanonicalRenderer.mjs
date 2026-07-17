@@ -183,9 +183,13 @@ function validateRenderingContext(context, locale) {
     || !SUPPORTED_LOCALES.has(context.locale)
     || context.locale !== locale
     || !isPlainObject(context.publicParticipantsById)) invariant();
-  if (Reflect.ownKeys(context.publicParticipantsById).some((key) => typeof key !== "string")) invariant();
+  const participantKeys = Reflect.ownKeys(context.publicParticipantsById);
+  if (participantKeys.some((key) => typeof key !== "string")) invariant();
   const participants = new Map();
-  for (const [key, participant] of Object.entries(context.publicParticipantsById)) {
+  for (const key of participantKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(context.publicParticipantsById, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) invariant();
+    const participant = descriptor.value;
     if (!hasExactFields(participant, PARTICIPANT_FIELDS)
       || participant.participantId !== key
       || !ID_PATTERN.test(participant.participantId)
@@ -207,7 +211,7 @@ function renderSegment(segment, table, participants) {
   const rendered = typeof primitive === "function"
     ? primitive(targetDisplayName)
     : typeof primitive === "string"
-      ? primitive.replaceAll("{targetDisplayName}", targetDisplayName ?? "")
+      ? primitive.replaceAll("{targetDisplayName}", () => targetDisplayName ?? "")
       : primitive;
   if (typeof rendered !== "string") throw new TypeError("renderer primitive did not return a string");
   return rendered;

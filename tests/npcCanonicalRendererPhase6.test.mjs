@@ -243,11 +243,23 @@ test("display-name code points are preserved without trim, collapse, normalizati
     ["Target ", "I suspect Target ."],
     ["E\u0301clair", "I suspect E\u0301clair."],
     ["<Target & friend>", "I suspect <Target & friend>."],
-    ["😀", "I suspect 😀."]
+    ["😀", "I suspect 😀."],
+    ["$&", "I suspect $&."],
+    ["$$", "I suspect $$."],
+    ["$`", "I suspect $`."],
+    ["$'", "I suspect $'."]
   ]) {
     const input = fixture("en", [{ kind: "suspicion", targetId: "target-1" }]);
     input.renderingContext.publicParticipantsById["target-1"].displayName = name;
-    assert.equal(resolveNpcCanonicalDeliveryPayload(input).displayText, expected);
+    const before = canonicalJson(input);
+    const payload = resolveNpcCanonicalDeliveryPayload(input);
+    assert.equal(payload.displayText, expected);
+    const payloadWithoutFingerprint = Object.fromEntries(
+      Object.entries(payload).filter(([key]) => key !== "payloadFingerprint")
+    );
+    assert.equal(payload.payloadFingerprint, sha256CanonicalJson(payloadWithoutFingerprint));
+    assert.equal(payload.displayText.includes("{targetDisplayName}"), false);
+    assert.equal(canonicalJson(input), before);
   }
 });
 
@@ -347,6 +359,36 @@ test("rendering context enforces exact public projection shape", () => {
     (input) => { input.renderingContext.publicParticipantsById["npc-1"].memory = []; }
   ];
   for (const change of vectors) expectInvariant(mutate(fixture(), change));
+
+  const hiddenVectors = [
+    { participantId: "secret", displayName: "Hidden", role: "werewolf" },
+    { participantId: "secret" },
+    { participantId: "different", displayName: "Hidden" }
+  ];
+  for (const hiddenValue of hiddenVectors) {
+    const input = fixture();
+    Object.defineProperty(input.renderingContext.publicParticipantsById, "secret", {
+      configurable: true,
+      enumerable: false,
+      value: hiddenValue,
+      writable: true
+    });
+    const beforeDescriptor = Object.getOwnPropertyDescriptor(
+      input.renderingContext.publicParticipantsById,
+      "secret"
+    );
+    let hashCalls = 0;
+    const resolve = createNpcCanonicalRendererForTesting({
+      rendererRegistry: { 1: { en: { join: "", roles: { seer: "ok" }, results: {}, vote: "", suspicion: "" } } },
+      hashCanonicalJson: (value) => { hashCalls += 1; return sha256CanonicalJson(value); }
+    });
+    assert.throws(() => resolve(input), (error) => error instanceof NpcPublicationDeliveryInvariantError);
+    assert.equal(hashCalls, 0);
+    assert.deepEqual(
+      Object.getOwnPropertyDescriptor(input.renderingContext.publicParticipantsById, "secret"),
+      beforeDescriptor
+    );
+  }
 });
 
 test("renderer and hash primitive faults return exact frozen terminal failures", () => {
