@@ -3797,11 +3797,37 @@ These machine-readable renderer tables and vectors are normative:
     "targetDisplayNames": ["Éclair 🐺"],
     "segments": ["result_claim:werewolf"],
     "displayText": "Éclair 🐺 is a werewolf."
+  },
+  {
+    "case": "leading_space_is_preserved",
+    "locale": "en",
+    "targetDisplayNames": [" Éclair"],
+    "targetDisplayNameCodePoints": ["U+0020", "U+00C9", "U+0063", "U+006C", "U+0061", "U+0069", "U+0072"],
+    "segments": ["result_claim:werewolf"],
+    "displayText": " Éclair is a werewolf."
+  },
+  {
+    "case": "trailing_space_is_preserved",
+    "locale": "en",
+    "targetDisplayNames": ["Éclair "],
+    "targetDisplayNameCodePoints": ["U+00C9", "U+0063", "U+006C", "U+0061", "U+0069", "U+0072", "U+0020"],
+    "segments": ["result_claim:werewolf"],
+    "displayText": "Éclair  is a werewolf.",
+    "placeholderBoundaryCodePoints": ["U+0072", "U+0020", "U+0020", "U+0069"]
+  },
+  {
+    "case": "combining_character_is_not_normalized",
+    "locale": "en",
+    "targetDisplayNames": ["Éclair"],
+    "targetDisplayNameCodePoints": ["U+0045", "U+0301", "U+0063", "U+006C", "U+0061", "U+0069", "U+0072"],
+    "segments": ["result_claim:not_werewolf"],
+    "displayText": "Éclair is not a werewolf.",
+    "payloadFingerprintInputUsesExactDisplayTextCodePoints": true
   }
 ]
 ```
 
-Future canonical-renderer tests must cover every role/result table member, every segment kind, all four exact locale keys, Japanese empty joining, English U+0020 joining, mixed plans, display-name code-point preservation, missing/mismatched graph/context edges, missing renderer version, primitive failure, `maxChars` and 1000-code-point boundaries, no truncation, payload field exclusion, fingerprint reproducibility, recursive freezing, input immutability, in-session replay after display-name changes elsewhere, and zero provider/AI Renderer/legacy/delivery/authoritative side effects. The delivery runtime remains unimplemented until a separately approved implementation task consumes this contract.
+Future canonical-renderer tests must cover every role/result table member, every segment kind, all four exact locale keys, Japanese empty joining, English U+0020 joining, mixed plans, leading-space preservation, trailing-space preservation (including the two U+0020 values where a trailing display-name space meets an English template space), decomposed combining-character preservation without Unicode normalization, and proof that the exact resulting display-text code-point sequence is included unchanged in the payload fingerprint input. They must also cover the existing accented/emoji display-name vector, missing/mismatched graph/context edges, missing renderer version, primitive failure, `maxChars` and 1000-code-point boundaries, no truncation, payload field exclusion, fingerprint reproducibility, recursive freezing, input immutability, in-session replay after display-name changes elsewhere, and zero provider/AI Renderer/legacy/delivery/authoritative side effects. The delivery runtime remains unimplemented until a separately approved implementation task consumes this contract.
 
 `NpcPublicationDeliveryRequest` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, and `payload: NpcCanonicalDeliveryPayload`, with `additionalProperties: false`. The controller, not the adapter, allocates `deliveryAttemptId` and attempt order. The request is a frozen runtime value and is never a provider/HTTP request.
 
