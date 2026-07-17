@@ -3837,7 +3837,7 @@ Future canonical-renderer tests must cover every role/result table member, every
 
 `NpcPublicationDeliveryRecord` is the current publication-level state and requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, `state: NpcPublicationDeliveryState`, and `currentAttemptId: null | ID`, with `additionalProperties: false`. `pending` has a null attempt ID. Every other state has a non-null attempt ID resolving to one exact `attemptsById` member whose publication, consumer identity, and state equal the current record. Terminal acknowledged/failure records retain the consumer identity that produced them; they are not rebound during consumer replacement.
 
-`NpcPublicationDeliveryAttemptRecord` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, `state: "prepared" | "in_flight" | "sink_succeeded" | "failed_retryable" | "failed_terminal" | "acknowledged" | "abandoned"`, `abandonedFromState: null | "prepared" | "in_flight" | "sink_succeeded" | "failed_retryable"`, `payloadFingerprint: Sha256Fingerprint`, `sinkStartedOrder: null | non-negative safe integer`, `sinkSucceededOrder: null | non-negative safe integer`, `acknowledgedOrder: null | non-negative safe integer`, `failure: null | NpcPublicationDeliveryFailure`, `receiptId: null | ID`, and `retryTokenId: null | ID`, with `additionalProperties: false`. Every allocated attempt remains in `attemptsById` until session reset; it is never overwritten, reused, or evicted. At most three attempts exist for one publication. Runtime orders are zero-based safe integers owned by the NPC controller and share no value or counter with authoritative publication or terminal orders. Each next-order counter advances exactly once with successful creation of its corresponding record transition; failure before that transition leaves no gap.
+`NpcPublicationDeliveryAttemptRecord` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `publicationId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, `state: "prepared" | "in_flight" | "sink_succeeded" | "failed_retryable" | "failed_terminal" | "acknowledged" | "abandoned"`, `abandonedFromState: null | "prepared" | "in_flight" | "sink_succeeded" | "failed_retryable"`, `payloadFingerprint: Sha256Fingerprint | null`, `sinkStartedOrder: null | non-negative safe integer`, `sinkSucceededOrder: null | non-negative safe integer`, `acknowledgedOrder: null | non-negative safe integer`, `failure: null | NpcPublicationDeliveryFailure`, `receiptId: null | ID`, and `retryTokenId: null | ID`, with `additionalProperties: false`. A null payload fingerprint is permitted only for a `failed_terminal` canonical-resolution failure that never created a payload, request, begin/settlement capability, timer, abort controller, receipt, or token. Every payload-owning state, including transport-terminal and abandoned attempts, retains a non-null fingerprint. Every allocated attempt remains in `attemptsById` until session reset; it is never overwritten, reused, or evicted. At most three attempts exist for one publication. Runtime orders are zero-based safe integers owned by the NPC controller and share no value or counter with authoritative publication or terminal orders. Each next-order counter advances exactly once with successful creation of its corresponding record transition; failure before that transition leaves no gap.
 
 The controller retains at most 1024 current publication records and 3072 attempt records. Capacity is checked before publication-state materialization, attempt ID allocation, order allocation, or consumer replacement staging. Exhaustion throws `npc_delivery_capacity_exhausted` and changes no record, attempt, token, capability, counter, or observer state. There is no attempt eviction because retained identity is required to reject old callbacks and ID reuse. Reset is the only operation that discards retained attempts.
 
@@ -3845,15 +3845,16 @@ The controller retains at most 1024 current publication records and 3072 attempt
 
 The attempt-field matrix is normative:
 
-| State | Started | Sink success | Ack | Failure | Receipt | Retry token | `abandonedFromState` |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `prepared` | null | null | null | null | null | null | null |
-| `in_flight` | set | null | null | null | null | null | null |
-| `sink_succeeded` | set | set | null | null | set | `ack_only` | null |
-| `failed_retryable` | set | null | null | retryable transport | null | `repeat_sink` | null |
-| `failed_terminal` | null or set | null | null | resolution, ambiguous transport, or exhaustion | null | null | null |
-| `acknowledged` | set | set | set | null | set | null | null |
-| `abandoned` | preserved from source | preserved only when source was `sink_succeeded` | null | preserved or null | preserved only when source was `sink_succeeded` | null | exact source state |
+| State | Fingerprint | Started | Sink success | Ack | Failure | Receipt | Retry token | `abandonedFromState` |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `prepared` | set | null | null | null | null | null | null | null |
+| `in_flight` | set | set | null | null | null | null | null | null |
+| `sink_succeeded` | set | set | set | null | null | set | `ack_only` | null |
+| `failed_retryable` | set | set | null | null | retryable transport | null | `repeat_sink` | null |
+| `failed_terminal` resolution | null | null | null | null | resolution | null | null | null |
+| `failed_terminal` transport | set | set | null | null | ambiguous/exhausted transport | null | null | null |
+| `acknowledged` | set | set | set | set | null | set | null | null |
+| `abandoned` | preserved | preserved from source | preserved only when source was `sink_succeeded` | null | preserved or null | preserved only when source was `sink_succeeded` | null | exact source state |
 
 No other nullability combination is valid. Consumer replacement retains an abandoned old attempt while publishing a new `pending` current record for the same publication; therefore an abandoned attempt need not be referenced by `currentRecordsByPublicationId`. Reset may abandon `prepared`, `in_flight`, `sink_succeeded`, or `failed_retryable`; `failed_terminal` and `acknowledged` are already terminal and are simply destroyed with the old root.
 
@@ -4024,7 +4025,7 @@ The Phase 6 order is exact:
 4. `beginNpcPublicationSink(request)` consumes the exact retained `NpcPublicationDeliveryRequest` object identity once and changes `prepared -> in_flight`.
 5. The browser attaches and verifies the exact safe node, or the CLI configured writer returns/fulfills. No other event is sink success.
 6. `completeNpcPublicationSink(capability)` validates exact identity, changes `in_flight -> sink_succeeded`, assigns one sink-success order, and returns the retained receipt plus its controller-issued `ack_only` token.
-7. `acknowledgeNpcPublication(receipt)` accepts only that exact receipt, changes `sink_succeeded -> acknowledged`, assigns one acknowledgement order, stores the acknowledgement result, and then emits its observer outcome.
+7. `acknowledgeNpcPublication({ sinkSuccessReceipt })` accepts an exact one-field outer input and only the controller-retained receipt reference, changes `sink_succeeded -> acknowledged`, assigns one acknowledgement order, stores the acknowledgement result, and then emits its observer outcome.
 8. Only after acknowledgement may discovery expose the next publication slot.
 
 Publication display order is ascending `publicationSlotOrder`. Delivery attempt order, sink-success order, and acknowledgement order are distinct controller counters but, because of head-of-line gating, successful first acknowledgements follow publication slot order. `recordAppendOrder` is audit order only. Canonical renderer execution occurs during preparation for the current head only. Phase 7 Renderer completion order cannot reorder delivery: a controlled slot is blocked until its finalization exists, and later slots cannot pass it. History projection is always ordered by `publicationSlotOrder` and has no append counter. Observer notification occurs after the corresponding controller transition/result is stored and never participates in ordering proof.
@@ -4149,7 +4150,141 @@ Every late completion, retry, receipt lookup, acknowledgement, observer callback
 
 Redacted observer outcomes are exactly `reaction_planned`, `reaction_activated`, `reaction_attempt_started`, `reaction_attempt_failed`, `reaction_attempt_timed_out`, `reaction_attempt_aborted`, `reaction_candidate_rejected`, `reaction_exhausted`, `reaction_superseded`, `reaction_cancelled`, `reaction_committed`, `reaction_duplicate_suppressed`, `reaction_identity_conflict`, `npc_publication_delivery_prepared`, `npc_publication_sink_started`, `npc_publication_delivered`, `npc_publication_delivery_failed`, `npc_publication_acknowledged`, `npc_publication_duplicate_ack_suppressed`, `npc_publication_stale_ack_rejected`, `npc_publication_delivery_abandoned`, and `npc_delivery_consumer_replaced`.
 
-Delivery observations may contain only session/publication/attempt IDs, consumer generation, normalized reason code, originating reaction version, actor ID, bounded duration, runtime order, and sink type. They exclude payload text/fingerprint, raw player/provider text, hidden facts, projection contents, prompts, credentials, private memory, receipts/tokens/capabilities, DOM nodes, and stack traces. Observer exceptions are isolated after the owning controller transition/result is stored. An observer event is never sink evidence, acknowledgement evidence, retry authorization, or history content.
+Delivery observations use only the exact strict fields defined by `NpcPublicationDeliveryObservation` below. They exclude originating reaction version, actor ID, duration, payload text/fingerprint, raw player/provider text, hidden facts, projection contents, prompts, credentials, private memory, receipts/tokens/capabilities, DOM nodes, and stack traces. Observer exceptions are isolated after the owning controller transition/result is stored. An observer event is never sink evidence, acknowledgement evidence, retry authorization, or history content.
+
+#### Final production-unconnected controller runtime contract
+
+This subsection closes the remaining Phase 6 runtime boundary for the next production-unconnected controller implementation. It is normative where an earlier C2 summary left API shape, atomic order, nullability, or ownership implicit. It changes no authoritative schema or delivery error set; the sole data-schema change is the resolution-only nullability of `NpcPublicationDeliveryAttemptRecord.payloadFingerprint` defined above.
+
+##### Construction and dependency ownership
+
+The production factory is exactly:
+
+```js
+createNpcPublicationDeliveryController({
+  gameSessionId,
+  initialConsumer,
+  createId,
+  listCommittedNpcPublicationGraphs,
+  getCanonicalRenderingContext,
+  nowMonotonicMs,
+  scheduleTimer,
+  cancelTimer,
+  createAbortController,
+  observer,
+})
+```
+
+The factory argument requires exactly those eleven fields, with `additionalProperties: false`; no production dependency is optional or nullable.
+
+`initialConsumer` requires exactly `consumerId: ID` and `sinkType: "browser" | "cli"`, with `additionalProperties: false`; the controller owns the initial `consumerGeneration: 0`. `createId()` is synchronous and returns one candidate per call. The controller neither repairs nor retries an invalid/colliding ID, and an exception does not select a fallback allocator.
+
+`listCommittedNpcPublicationGraphs({ gameSessionId })` accepts that exact one-field object with `additionalProperties: false` and is a synchronous read-only construction dependency, not a public controller method. Every invocation returns a dense authoritative-publication-order array of complete `NpcReactionCommittedGraphReferenceContext` values. It receives no controller root and reads no provider, server, history, or delivery state. Discovery and preparation each perform a fresh read; no cached graph becomes authority. `getCanonicalRenderingContext({ gameSessionId, publicationId })` accepts that exact two-field object with `additionalProperties: false`, is likewise synchronous/read-only, and returns the exact captured `CanonicalRenderingContext`; it accepts no current UI locale, text, target-name override, provider value, AI Renderer value, or legacy log.
+
+`nowMonotonicMs()` is synchronous, finite, non-negative, non-decreasing, and never a wall clock. `scheduleTimer(callback, delayMs)` returns one opaque handle without changing the callback; `cancelTimer(handle)` receives only that handle. `createAbortController()` creates exactly one native-compatible `{ signal, abort }` per begun attempt and accepts no caller signal. `observer(outcome)` runs only after the primary stored transition; its exception is isolated. The production controller directly uses `resolveNpcCanonicalDeliveryPayload`; production callers cannot inject another renderer.
+
+The public controller API is exactly:
+
+```text
+discoverPendingNpcPublications(input)
+prepareNpcPublicationDelivery(input)
+beginNpcPublicationSink(request)
+completeNpcPublicationSink(settlementCapability)
+recordNpcPublicationSinkFailure(settlementCapability, failureEvidence)
+getNpcPublicationDeliveryRetryToken(input)
+retryNpcPublicationDelivery(token)
+getCompletedNpcPublicationSinkReceipt(input)
+acknowledgeNpcPublication({ sinkSuccessReceipt })
+replaceNpcPublicationDeliveryConsumer(input)
+reset()
+```
+
+No other production method exposes the root, attempts, tokens, receipt index, acknowledgement index, capability registry, timers, abort handles, or inspector state. Receipts and exact request/payload references are controller-private runtime registries, not new members of the unchanged seven-field root. A successful receipt remains retained through acknowledgement and consumer replacement so exact duplicate acknowledgement remains classifiable, and is discarded only by reset; request/payload references remain only as long as the retained attempt/retry contract requires and are never external authority.
+
+##### Discovery, cursor, and head-of-line
+
+`discoverPendingNpcPublications(input)` retains its strict existing input. It validates the frozen root and exact session/consumer identity, reads and validates the fresh complete graph list, reconciles current records and acknowledgements, and determines the earliest unresolved displayable canonical NPC publication before applying the cursor. A reservation, Phase 7 finalization, legacy entry, provider result, replay-result-only object, or malformed graph is never eligible; a malformed engine-owned graph is invariant.
+
+At most the one head publication may be materialized in one invocation. Missing materialization checks capacity, adds one detached `pending` current record, validates the complete detached root, and replaces the root once. Failure creates no partial current record. `acknowledged` is the only resolved current state. `pending`, `prepared`, `in_flight`, `sink_succeeded`, `failed_retryable`, and `failed_terminal` block every later slot; a terminal failure therefore blocks later live delivery until a separately designed recovery exists.
+
+Head-of-line precedes `afterPublicationSlotOrder`. If the unresolved head slot is less than or equal to the cursor, discovery returns `[]` and cannot expose a later publication. If the head is after the cursor and is summary-eligible, discovery returns exactly one summary. Initial Phase 6 cardinality is therefore `0..1`; `limit: 1..32` remains validated only for schema compatibility and never relaxes head-of-line. Summary states remain only `pending`, `failed_retryable`, and `sink_succeeded`: pending has both IDs null, failed-retryable has the exact current attempt and active `repeat_sink` token, and sink-succeeded has the exact current attempt and active `ack_only` token.
+
+##### Preparation atomicity and renderer resolution
+
+`prepareNpcPublicationDelivery(input)` requires exactly `schemaVersion: 1`, `gameSessionId`, `publicationId`, `consumerId`, `consumerGeneration`, and `sinkType`. It requires a live controller, exact current consumer, a current-head `pending` record, no active attempt, fewer than three retained attempts for the publication, valid capacities/order, and fresh valid graph/context reads. `failed_retryable` uses only `repeat_sink`; `sink_succeeded` uses acknowledgement only.
+
+Successful preparation performs graph/context validation and canonical resolution before ID allocation. Only an exact payload success may proceed. It then checks the attempt-order increment, calls `createId()` exactly once, rejects every identity collision, stages one detached prepared attempt/current record/request capability, advances `nextDeliveryAttemptOrder` once, validates the detached root, replaces it once, registers the exact request reference, observes `npc_publication_delivery_prepared`, and returns that frozen request. Before root replacement, every failure leaves the record, attempt index, counter, capability registry, and observer unchanged. Observer failure does not roll back success.
+
+An exact `NpcPublicationResolutionFailure` has no payload or fingerprint and must not produce a sentinel. After order/identity safety checks, preparation calls `createId()` once, stages a `failed_terminal` attempt with `payloadFingerprint: null`, exact resolution failure, all sink/ack/receipt/token fields null, sets the current record/current attempt, increments the attempt-order counter once, replaces the root once, emits one `npc_publication_delivery_failed`, and only then throws `NpcPublicationDeliveryError { code: "npc_delivery_terminal" }`. It creates no request, begin/settlement capability, timer, abort controller, receipt, or token. A renderer invariant instead propagates unchanged with zero attempt, counter, observer, or root mutation.
+
+##### Explicit retry and retained payload identity
+
+`getNpcPublicationDeliveryRetryToken(input)` retains its exact complete identity input and returns only the controller-retained exact token reference. `retryNpcPublicationDelivery(exactRepeatSinkToken)` validates root, exact active token reference, full session/consumer/generation/sink/current-record/attempt ownership, capacity, budget, and order before allocating one fresh attempt ID exactly once.
+
+In the same detached transaction it changes the old `failed_retryable` attempt to `abandoned`, sets `abandonedFromState: "failed_retryable"`, preserves its failure/fingerprint/started order, clears `retryTokenId`, deletes and consumes the old token, and creates the next prepared attempt. The new attempt number is retained-attempt count plus one and never exceeds three. The new frozen request reuses the exact frozen payload object from the first successful preparation: renderer invocation count and context-reader invocation count remain unchanged, while only attempt ID/order/number and request/capability identity change. This explicit retry emits one prepared observation and no abandonment observation. Token deletion, old-attempt transition, new attempt/current record, counter increment, capability registration, root replacement, and observation are one atomic ordered operation; no dangling token edge is permitted.
+
+For `ack_only`, retry resolves the exact retained receipt and delegates to acknowledgement without deleting the token first. The acknowledgement transaction consumes/deletes it only on success. It performs no render, sink, new attempt, receipt, payload, history append, provider/AI Renderer call, or authoritative mutation.
+
+##### Runtime order and identity exhaustion
+
+`nextDeliveryAttemptOrder`, `nextSinkStartedOrder`, `nextSinkSucceededOrder`, and `nextAcknowledgedOrder` are safe integers. If the counter required by preparation/repeat, begin, completion, or acknowledgement is `Number.MAX_SAFE_INTEGER`, the method throws `NpcPublicationDeliveryInvariantError { code: "npc_delivery_order_corruption" }` before ID generation, root publication, capability/token consumption, receipt creation, observer invocation, timer creation, or abort-controller creation. Consumer replacement applies the same invariant before incrementing a maximum generation.
+
+Controller-generated `deliveryAttemptId`, `receiptId`, and `retryTokenId` candidates are checked against the current root, retained attempts, receipts, acknowledgements, retry tokens, active capabilities, and invalidated capability identity evidence. Any collision, invalid candidate, or allocator exception becomes the fixed redacted invariant `npc_delivery_identity_collision`; no second candidate is requested and no raw exception/cause is retained.
+
+##### Receipt lookup and acknowledgement
+
+`getCompletedNpcPublicationSinkReceipt(input)` accepts the exact `NpcPublicationSinkSuccessReceipt` field set as a lookup identity, not as proof. Only a complete field match to the retained receipt while its current attempt is `sink_succeeded` returns the exact retained receipt reference. Lookup changes no root, order, token, or observer. Sink-not-successful is `npc_acknowledgement_not_delivered`; identity mismatch is `npc_acknowledgement_identity_mismatch`; old session and generation use `stale_npc_acknowledgement_session` and `stale_npc_acknowledgement_generation`. Publication-only lookup is impossible.
+
+`acknowledgeNpcPublication(input)` requires exactly the one field `sinkSuccessReceipt`. That value must be the controller-retained exact receipt object; a field-equal clone is not proof. First acknowledgement validates root/reference/session/consumer/generation/sink/current attempt and its exact `ack_only` token, checks order, stages the acknowledgement, changes attempt/current record to `acknowledged`, sets/advances the acknowledgement order once, clears the attempt token, inserts the acknowledgement, deletes and consumes the token, validates and replaces the root once, performs handle cleanup, observes `npc_publication_acknowledged`, and returns the exact frozen acknowledgement. Authoritative mutation is zero.
+
+If the same publication already has an acknowledgement and the presented object is its exact retained receipt, duplicate acknowledgement returns the stored acknowledgement without root/counter/sink/token mutation and emits exactly one `npc_publication_duplicate_ack_suppressed` per invocation. A different receipt/fingerprint/current-generation identity is `npc_acknowledgement_conflict`. Old session/generation remains stale and emits exactly one redacted `npc_publication_stale_ack_rejected`; observer failure cannot change the error.
+
+##### Consumer replacement and reset
+
+`replaceNpcPublicationDeliveryConsumer(input)` requires exactly `schemaVersion: 1`, current session/consumer/generation/sink, `nextConsumerId`, and `nextSinkType`; the caller cannot specify the next generation. An identical next consumer/sink is an idempotent no-op returning the current frozen consumer with no generation, root, or observer change. Any current `prepared`, `in_flight`, or `sink_succeeded` attempt throws `npc_delivery_in_progress`.
+
+Otherwise one detached transaction rebinds pending records, changes each retryable old attempt to abandoned with its failure/fingerprint preserved, clears/deletes/consumes its `repeat_sink` token, creates the new pending current record, preserves acknowledged/failed-terminal records byte-for-byte, increments generation once, validates/replaces the root once, and invalidates old handles/capabilities. It observes each transformed retryable attempt in order and then one consumer-replaced outcome, returning the exact frozen new `NpcPublicationDeliveryConsumer`. Retained attempts remain and the attempt budget does not reset.
+
+`reset()` returns `undefined`. The first call prevents new preparation, obtains active gates, abandons every prepared/in-flight/sink-succeeded/failed-retryable attempt with exact source state, aborts each active controller once, cancels all timers, consumes/invalidates all capabilities and receipt/token/ack lookup identity, observes each active abandonment once, destroys the root/indexes/handles/counters, and permanently invalidates the controller. A second reset is a no-op with no observer. Every later public method and callback fails closed as old-session state; reset never initializes a replacement controller and never mutates authoritative state.
+
+##### Exact delivery observation
+
+`NpcPublicationDeliveryObservation` is a strict runtime-only union whose every member requires exactly `schemaVersion: 1`, `outcomeType`, `gameSessionId`, `publicationId: ID | null`, `consumerId`, `consumerGeneration`, `sinkType`, `deliveryAttemptId: ID | null`, `deliveryAttemptOrder: non-negative safe integer | null`, `attemptNumber: integer 1..3 | null`, `code: NpcPublicationDeliveryObservationCode | null`, and `runtimeOrder: non-negative safe integer`, with `additionalProperties: false`. Delivery outcome types are exactly `npc_publication_delivery_prepared | npc_publication_sink_started | npc_publication_delivered | npc_publication_delivery_failed | npc_publication_acknowledged | npc_publication_duplicate_ack_suppressed | npc_publication_stale_ack_rejected | npc_publication_delivery_abandoned | npc_delivery_consumer_replaced`.
+
+Consumer replacement alone has null publication/attempt/order/number/code. Publication outcomes set the complete publication/attempt identity. `NpcPublicationDeliveryObservationCode` is exactly the existing canonical-resolution or transport-failure code for `npc_publication_delivery_failed`, or the exact existing acknowledgement error code for `npc_publication_stale_ack_rejected`; every other delivery outcome, including abandonment and duplicate suppression, has null code. Observations never contain text, display name, payload/fingerprint, receipt/token/capability, evidence, graph, locale, private/provider data, DOM/writer objects, stack/cause, or free-form message. `runtimeOrder` is a controller-private counter, not a root field; it advances only after primary storage. Exhaustion or observer exception is isolated and cannot change the primary result.
+
+##### Copy-on-write, first failure, and test seam
+
+Every state-changing operation validates the current frozen root and input/capability, checks capacity/order/identity, builds and validates one detached root, stages private handles, replaces the root once, commits capability/handle indexes, cleans up, observes, and returns or performs the specified post-storage throw. It never mutates a live Map/object/array and then undoes it. Test fault injection at every pre-replacement stage must prove byte-equivalent rollback.
+
+The common first-failure order is: invalidated/stale session; outer shape; consumer generation; capability reference identity; root invariant; publication/attempt state; elapsed deadline settlement; evidence/receipt/token semantics; capacity; order arithmetic; ID allocation; detached transition; detached-root validation; stored transition; observer. A trusted malformed root detected while processing is invariant at detection. Caller-created capability identity fails before its supplied evidence is inspected.
+
+The existing closed `NpcPublicationDeliveryError`, five-code `NpcPublicationAcknowledgementError`, and eight-code `NpcPublicationDeliveryInvariantError` sets remain unchanged. In particular no sentinel fingerprint, synthetic payload, new rejection, or new state is introduced. Failure evidence is validated only after the exact settlement capability; malformed evidence and premature timeout evidence remain invariants, `sink_aborted` remains inactive, evidence never supplies disposition/retryability, and only the normalized transport failure—not the evidence object—is stored.
+
+The next runtime PR may export `createNpcPublicationDeliveryControllerForTesting(...)` only for tests. It may inject the canonical resolver, allocator, graph/context readers, clock/timers, abort-controller factory, observer, root-publication fault, and capability-registry fault. Any inspector returns only a detached frozen copy. Production modules must not import the test factory/inspector, and CI scans importers.
+
+Future runtime coverage is mandatory and is grouped as follows:
+
+- Discovery: exact current consumer; missing-pending materialization; repeated-discovery idempotence; `0..1` result cardinality; cursor before/equal/after the unresolved head; cursor inability to expose a later publication; `failed_terminal` blocking; acknowledged advancement; reservation/finalization exclusion; malformed-graph invariant; and capacity rollback.
+- Preparation: success; exact request and capability object shapes; fresh graph/context reads; head loss and non-head rejection; resolution terminalization with null fingerprint; renderer-invariant zero mutation; ID collision; attempt-order exhaustion; capacity; observer isolation; and a fault before every root-publication stage with byte-equivalent rollback.
+- Retry: old `failed_retryable -> abandoned`; exact `abandonedFromState`; old-token deletion; attempt-number increment; retained budget across replacement; exact payload-object reuse; renderer invocation remaining one; no context read on retry; cloned/consumed-token rejection; and third-failure exhaustion.
+- Begin and settlement: exact request reference; clone/reuse rejection; exact 15,000 and 16,000 ms boundaries; early timer rearm; stale-timer no-op; success/timeout, failure/timeout, and reset races; no-callback terminalization; timer/controller/listener cleanup; and zero counter gaps.
+- Receipt and acknowledgement: full lookup identity; impossible publication-only lookup; exact retained receipt; cloned receipt rejection; first, exact duplicate, conflicting, stale-session, and stale-generation acknowledgement; `ack_only`; zero sink invocation on acknowledgement retry; acknowledgement-order exhaustion; and observer isolation.
+- Consumer replacement: identical-consumer no-op; pending rebind; retryable abandonment; old-token invalidation; acknowledged/terminal preservation; prepared/in-flight/sink-succeeded blocking; generation-maximum invariant; retained-attempt collision; byte-equivalent rollback; and exact observer order.
+- Reset: every nonterminal source state; exact `abandonedFromState`; one signal abort; timer cleanup; capability/token/receipt invalidation; second-reset no-op; stale late callback; unaffected separately constructed controller; authoritative-state deep equality; and zero `stateVersion` delta.
+- Privacy and scope: no payload/fingerprint in observations, no text in errors, no evidence object in stored failure, no stack/cause, no provider/private graph exposure, and zero provider, AI Renderer, sink, browser/CLI, game-engine, or route invocation/import, authoritative mutation, and `stateVersion` delta.
+
+The following machine-readable closure vectors are normative:
+
+```json
+[
+  { "operation": "discovery", "headAtOrBeforeCursor": true, "resultCount": 0, "laterPublicationExposed": false },
+  { "operation": "resolution_failure", "attemptState": "failed_terminal", "payloadFingerprint": null, "requestCreated": false, "publicError": "npc_delivery_terminal" },
+  { "operation": "repeat_sink", "oldAttemptState": "abandoned", "abandonedFromState": "failed_retryable", "oldTokenRetained": false, "payloadObjectReused": true, "rendererReinvoked": false },
+  { "operation": "ack_only", "sinkReinvoked": false, "newAttemptCreated": false, "tokenConsumedWithAcknowledgement": true },
+  { "operation": "reset_twice", "secondReturnType": "undefined", "secondObserverCount": 0 }
+]
+```
 
 #### C2 self-review closure
 
