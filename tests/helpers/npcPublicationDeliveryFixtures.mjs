@@ -151,6 +151,9 @@ export function createDeliveryHarness({
   initialRuntimeOrders = {},
   renderer = resolveNpcCanonicalDeliveryPayload,
   observer = null,
+  createId = null,
+  scheduleTimer: scheduleTimerOverride = null,
+  synchronousTimerCallbacks = 0,
   beforeRootPublication = null,
   beforeCapabilityRegistryPublication = null
 } = {}) {
@@ -167,11 +170,13 @@ export function createDeliveryHarness({
       "npc-1": { participantId: "npc-1", displayName: "Actor" }
     }
   }]));
-  const scheduleTimer = (callback, delayMs) => {
+  const defaultScheduleTimer = (callback, delayMs) => {
     const handle = { callback, delayMs, cancelled: false, order: timers.length };
     timers.push(handle);
+    if (timers.length <= synchronousTimerCallbacks) callback();
     return handle;
   };
+  const scheduleTimer = scheduleTimerOverride ?? defaultScheduleTimer;
   const cancelTimer = (handle) => { handle.cancelled = true; };
   const createAbortController = () => {
     const controller = new AbortController();
@@ -190,7 +195,7 @@ export function createDeliveryHarness({
   const testing = createNpcPublicationDeliveryControllerForTesting({
     gameSessionId: "game-session-1",
     initialConsumer: { consumerId: "consumer-1", sinkType },
-    createId: () => `npc-delivery-id-${++idOrder}`,
+    createId: createId ?? (() => `npc-delivery-id-${++idOrder}`),
     listCommittedNpcPublicationGraphs: () => { counts.graphReads += 1; return graphs; },
     getCanonicalRenderingContext: ({ publicationId }) => { counts.contextReads += 1; return contexts.get(publicationId); },
     nowMonotonicMs: () => now,

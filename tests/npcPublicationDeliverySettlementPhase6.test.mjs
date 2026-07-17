@@ -8,6 +8,7 @@ import {
 } from "../src/npcPublicationDelivery.mjs";
 import {
   browserFailure,
+  committedGraphFixture,
   createDeliveryHarness,
   discoveryInput,
   prepareInput,
@@ -176,6 +177,119 @@ test("early primary and cleanup callbacks rearm while cleanup deadline terminali
   assert.equal(failureObservations.length, 1);
   harness.fire(cleanup);
   assert.equal(harness.observations.filter((value) => value.outcomeType === "npc_publication_delivery_failed").length, 1);
+});
+
+test("synchronous primary timer callback is latched until begin publication and settles once", () => {
+  const { harness, request } = preparedHarness({ synchronousTimerCallbacks: 1 });
+  const execution = harness.controller.beginNpcPublicationSink(request);
+  const afterBegin = harness.inspect();
+  assert.equal(afterBegin.root.attemptsById[request.deliveryAttemptId].state, "in_flight");
+  assert.equal(afterBegin.activeGateCount, 1);
+  assert.equal(afterBegin.root.nextSinkStartedOrder, 1);
+  assert.equal(harness.timers.length, 2);
+  assert.equal(harness.observations.filter((value) => value.outcomeType === "npc_publication_sink_started").length, 1);
+  assert.equal(execution.signal.aborted, false);
+
+  const staleSynchronousTimer = harness.timers[0];
+  const currentTimer = harness.timers[1];
+  let abortCount = 0;
+  execution.signal.addEventListener("abort", () => { abortCount += 1; });
+  harness.setNow(16000);
+  harness.fire(currentTimer);
+  assert.equal(harness.inspect().root.attemptsById[request.deliveryAttemptId].state, "failed_terminal");
+  assert.equal(abortCount, 1);
+  assert.equal(harness.observations.filter((value) => value.outcomeType === "npc_publication_delivery_failed").length, 1);
+  const settled = harness.inspect();
+  harness.fire(staleSynchronousTimer);
+  harness.fire(currentTimer);
+  assert.deepEqual(harness.inspect(), settled);
+  assert.equal(abortCount, 1);
+});
+
+test("synchronous pre-publication timer callback is invalidated by begin rollback", () => {
+  const { harness, request } = preparedHarness({
+    synchronousTimerCallbacks: 1,
+    beforeCapabilityRegistryPublication: (value) => {
+      if (!Object.hasOwn(value, "schemaVersion")) throw new Error("capability registry fault");
+    }
+  });
+  const before = harness.inspect();
+  const observationCount = harness.observations.length;
+  assert.throws(() => harness.controller.beginNpcPublicationSink(request), /capability registry fault/);
+  assert.deepEqual(harness.inspect(), before);
+  assert.equal(harness.abortControllers[0].signal.aborted, true);
+  assert.equal(harness.timers.length, 1);
+  assert.equal(harness.timers[0].cancelled, true);
+  harness.fire(harness.timers[0]);
+  assert.deepEqual(harness.inspect(), before);
+  assert.equal(harness.observations.length, observationCount);
+});
+
+test("sink success stages both identities atomically before retaining either", async (t) => {
+  const cases = [
+    { name: "second allocator throws", second: () => { throw new Error("private allocator failure"); } },
+    { name: "second allocator returns an invalid ID", second: () => "" },
+    { name: "receipt and token candidates are identical", second: () => "reusable-receipt-id" },
+    { name: "token candidate collides with the current attempt", second: () => "delivery-attempt-id" }
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.name, () => {
+      let call = 0;
+      const ids = [
+        () => "delivery-attempt-id",
+        () => "reusable-receipt-id",
+        scenario.second,
+        () => "reusable-receipt-id",
+        () => "successful-token-id"
+      ];
+      const { harness, request } = preparedHarness({ createId: () => ids[call++]() });
+      const execution = harness.controller.beginNpcPublicationSink(request);
+      const before = harness.inspect();
+      const observationCount = harness.observations.length;
+      const timer = harness.latestActiveTimer();
+      assert.throws(() => harness.controller.completeNpcPublicationSink(execution.settlementCapability), (error) => error.code === "npc_delivery_identity_collision");
+      assert.deepEqual(harness.inspect(), before);
+      assert.equal(timer.cancelled, false);
+      assert.equal(harness.observations.length, observationCount);
+
+      const completion = harness.controller.completeNpcPublicationSink(execution.settlementCapability);
+      assert.equal(completion.receipt.receiptId, "reusable-receipt-id");
+      assert.equal(completion.retryToken.retryTokenId, "successful-token-id");
+      assert.equal(harness.inspect().root.nextSinkSucceededOrder, before.root.nextSinkSucceededOrder + 1);
+    });
+  }
+});
+
+test("token identity collision with retained receipt or token leaves success transaction unchanged", async (t) => {
+  for (const collisionKind of ["receipt", "token"]) {
+    await t.test(collisionKind, () => {
+      const ids = ["attempt-1", "receipt-1", "token-1", "attempt-2", "reusable-receipt-2", `${collisionKind}-1`, "reusable-receipt-2", "token-2"];
+      let call = 0;
+      const harness = createDeliveryHarness({
+        graphs: [
+          committedGraphFixture({ number: 1 }),
+          committedGraphFixture({ number: 2 })
+        ],
+        createId: () => ids[call++]
+      });
+      harness.controller.discoverPendingNpcPublications(discoveryInput());
+      const firstRequest = harness.controller.prepareNpcPublicationDelivery(prepareInput("npc-publication-1"));
+      const first = harness.controller.completeNpcPublicationSink(harness.controller.beginNpcPublicationSink(firstRequest).settlementCapability);
+      harness.controller.acknowledgeNpcPublication({ sinkSuccessReceipt: first.receipt });
+      harness.controller.discoverPendingNpcPublications(discoveryInput());
+      const secondRequest = harness.controller.prepareNpcPublicationDelivery(prepareInput("npc-publication-2"));
+      const secondExecution = harness.controller.beginNpcPublicationSink(secondRequest);
+      const before = harness.inspect();
+      const observations = harness.observations.length;
+      const timer = harness.latestActiveTimer();
+      assert.throws(() => harness.controller.completeNpcPublicationSink(secondExecution.settlementCapability), (error) => error.code === "npc_delivery_identity_collision");
+      assert.deepEqual(harness.inspect(), before);
+      assert.equal(timer.cancelled, false);
+      assert.equal(harness.observations.length, observations);
+      const completion = harness.controller.completeNpcPublicationSink(secondExecution.settlementCapability);
+      assert.equal(completion.receipt.receiptId, "reusable-receipt-2");
+    });
+  }
 });
 
 test("success exactly at deadline stores terminal ambiguity and never creates a receipt", () => {

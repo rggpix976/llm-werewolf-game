@@ -497,10 +497,11 @@ function createController(options, testing = false) {
     if (counter === Number.MAX_SAFE_INTEGER) throw invariant("npc_delivery_order_corruption");
   }
 
-  function allocateId() {
+  function allocateId(stagedIds = null) {
     let candidate;
     try { candidate = options.createId(); } catch { throw invariant("npc_delivery_identity_collision"); }
-    if (!isId(candidate) || root.currentRecordsByPublicationId[candidate] || root.attemptsById[candidate] || root.acknowledgementsByPublicationId[candidate] || root.retryTokensById[candidate] || receiptsById.has(candidate) || invalidatedIds.has(candidate)) throw invariant("npc_delivery_identity_collision");
+    if (!isId(candidate) || root.currentRecordsByPublicationId[candidate] || root.attemptsById[candidate] || root.acknowledgementsByPublicationId[candidate] || root.retryTokensById[candidate] || receiptsById.has(candidate) || invalidatedIds.has(candidate) || stagedIds?.has(candidate)) throw invariant("npc_delivery_identity_collision");
+    stagedIds?.add(candidate);
     return candidate;
   }
 
@@ -730,7 +731,15 @@ function createController(options, testing = false) {
     const generation = ++timerGeneration;
     if (kind === "primary") gate.primaryGeneration = generation;
     else gate.cleanupGeneration = generation;
-    const callback = () => timerCallback(gate.attemptId, kind, generation);
+    const callback = () => {
+      if (!gate.published) {
+        if (!gate.publicationInvalidated && !gate.pendingTimerCallbacks.some((pending) => pending.kind === kind && pending.generation === generation)) {
+          gate.pendingTimerCallbacks.push({ kind, generation });
+        }
+        return;
+      }
+      timerCallback(gate.attemptId, kind, generation);
+    };
     let handle;
     try { handle = options.scheduleTimer(callback, delay); } catch { throw invariant("invalid_npc_delivery_attempt"); }
     if (handle === null || handle === undefined) throw invariant("invalid_npc_delivery_attempt");
@@ -777,9 +786,17 @@ function createController(options, testing = false) {
       primaryHandle: null,
       cleanupHandle: null,
       primaryGeneration: null,
-      cleanupGeneration: null
+      cleanupGeneration: null,
+      published: false,
+      publicationInvalidated: false,
+      pendingTimerCallbacks: []
     };
-    try { scheduleGateTimer(gate, "primary", SINK_DEADLINE_MS); } catch (error) { safelyAbort(abortController); throw error; }
+    try { scheduleGateTimer(gate, "primary", SINK_DEADLINE_MS); } catch (error) {
+      gate.publicationInvalidated = true;
+      gate.pendingTimerCallbacks.length = 0;
+      safelyAbort(abortController);
+      throw error;
+    }
     const updated = frozen({ ...attempt, state: "in_flight", sinkStartedOrder: root.nextSinkStartedOrder });
     const next = detachedRoot(root);
     next.attemptsById[attempt.deliveryAttemptId] = updated;
@@ -789,6 +806,8 @@ function createController(options, testing = false) {
       if (beforeCapabilityPublication) beforeCapabilityPublication(capability);
       publish(next);
     } catch (error) {
+      gate.publicationInvalidated = true;
+      gate.pendingTimerCallbacks.length = 0;
       invalidateTimer(gate, "primary");
       safelyAbort(abortController);
       throw error;
@@ -796,7 +815,10 @@ function createController(options, testing = false) {
     requests.delete(attempt.deliveryAttemptId);
     activeCapabilities.set(capability, gate);
     gates.set(attempt.deliveryAttemptId, gate);
+    gate.published = true;
     observe("npc_publication_sink_started", updated);
+    const pendingTimerCallbacks = gate.pendingTimerCallbacks.splice(0);
+    for (const pending of pendingTimerCallbacks) timerCallback(gate.attemptId, pending.kind, pending.generation);
     return Object.freeze({
       schemaVersion: 1,
       status: "in_flight",
@@ -938,9 +960,9 @@ function createController(options, testing = false) {
     const attempt = root.attemptsById[gate.attemptId];
     if (!attempt || attempt.state !== "in_flight") throw deliveryError("npc_delivery_terminal");
     ensureOrder(root.nextSinkSucceededOrder);
-    const receiptId = allocateId();
-    invalidatedIds.add(receiptId);
-    const retryTokenId = allocateId();
+    const stagedIds = new Set();
+    const receiptId = allocateId(stagedIds);
+    const retryTokenId = allocateId(stagedIds);
     const receipt = frozen({
       schemaVersion: 1,
       receiptType: "npc_sink_success",
@@ -967,6 +989,7 @@ function createController(options, testing = false) {
     receiptsById.set(receiptId, receipt);
     receiptsByAttemptId.set(attempt.deliveryAttemptId, receipt);
     exactTokens.set(retryTokenId, token);
+    invalidatedIds.add(receiptId);
     invalidatedIds.add(retryTokenId);
     cleanupGate(gate);
     observe("npc_publication_delivered", updated);
@@ -1223,6 +1246,7 @@ function createController(options, testing = false) {
     observerAvailable,
     activeRequestCount: requests.size,
     activeGateCount: gates.size,
+    retainedIdentityCount: invalidatedIds.size,
     retainedReceiptCount: receiptsById.size,
     retainedPayloadCount: payloads.size
   });
