@@ -3688,6 +3688,147 @@ The abandoned old attempt remains in `attemptsById`; it is not overwritten by th
 
 The canonical renderer reconstructs a detached payload, checks `displayText` against the plan `maxChars`, computes `payloadFingerprint = sha256CanonicalJson(payload without payloadFingerprint)`, and recursively freezes the result. `displayText` is runtime-only and is not appended to the publication ledger or supplied by a caller. Browser/CLI callers cannot override text, locale, actor, segment order, or presentation metadata. A render failure before a sink makes the publication `failed_terminal` for that session and consumer generation; it is never rerouted to legacy text or the AI Renderer.
 
+##### Canonical NPC renderer version 1
+
+`canonicalRendererVersion: 1` is the first and only Phase 6 canonical NPC renderer. It is an engine-owned, synchronous, pure lookup-and-join algorithm. It accepts only a complete committed canonical publication graph plus the strict local-only `CanonicalRenderingContext`; it does not accept a provider response, controlled-commentary plan or variant, legacy log entry, current UI locale, delivery attempt, receipt, acknowledgement, retry token, observer value, clock, or random source. The version recorded in `NpcCanonicalUtterancePublishedRecord` selects the exact renderer table. Lookup never substitutes a newer version. An absent renderer version or absent locale table is `NpcPublicationResolutionFailure { failureType: "npc_delivery_resolution", code: "canonical_render_failed", disposition: "terminal" }`; no legacy, AI Renderer, provider, locale, or template fallback is permitted.
+
+The supported version-1 locale keys are exactly `ja`, `ja-JP`, `en`, and `en-US`. Lookup uses the stored locale byte-for-byte. `ja` and `ja-JP` select equal immutable Japanese tables, and `en` and `en-US` select equal immutable English tables; this equality is explicit table content, not locale fallback or normalization. The Japanese role nouns are exactly the public role vocabulary represented by `publicRoleName()` for the same `GameRole`; the English sentences are fixed by the table below. Hidden team or role truth is never consulted during rendering.
+
+The version-1 segment tables are normative:
+
+| Segment evidence | Closed value | `ja` / `ja-JP` text | `en` / `en-US` text |
+| :--- | :--- | :--- | :--- |
+| role claim | `claimedRole: "seer"` | `私は占い師です。` | `I am the seer.` |
+| role claim | `claimedRole: "werewolf"` | `私は人狼です。` | `I am a werewolf.` |
+| role claim | `claimedRole: "citizen"` | `私は市民です。` | `I am a citizen.` |
+| result claim | `result: "werewolf"` | `{targetDisplayName}は人狼です。` | `{targetDisplayName} is a werewolf.` |
+| result claim | `result: "not_werewolf"` | `{targetDisplayName}は人狼ではありません。` | `{targetDisplayName} is not a werewolf.` |
+| vote declaration | exact target event | `{targetDisplayName}に投票します。` | `I will vote for {targetDisplayName}.` |
+| suspicion | exact target event | `{targetDisplayName}を疑っています。` | `I suspect {targetDisplayName}.` |
+
+`{targetDisplayName}` is a specification placeholder, not literal output. Its only authority is `CanonicalRenderingContext.publicParticipantsById[targetId].displayName` for the exact target ID resolved from the committed claim/event and matching descriptor. The renderer copies the stored code points exactly. It does not trim, normalize Unicode, change case, transliterate, localize, consult the current roster or latest display name, accept a provider-supplied name, or emit an unknown-target placeholder. A missing participant, mismatched index key/`participantId`, invalid display-name shape, or target identity contradiction is `invalid_npc_delivery_publication_graph`, not a render fallback. The context is a detached, immutable session public-participant projection retained for deterministic in-session replay; persistence/reload recovery and multi-tab coordination remain out of scope.
+
+The renderer processes `plan.canonicalSegments` exactly once in stored plan order. `publication.canonicalSegmentIds` must equal that complete ordered ID list. For each segment, all of the following edges are exact before text selection:
+
+1. The segment ID is unique and its `descriptorId` resolves to exactly one descriptor at the same plan position.
+2. A `canonical_claim` resolves to exactly one committed claim by `claimId`. A role descriptor resolves only to a role claim with the same `claimedRole`; a result descriptor resolves only to a result claim with the same `targetId` and `result`.
+3. A `canonical_vote` resolves to exactly one `vote_declared` event by `voteEventId`, and a `canonical_suspicion` resolves to exactly one `suspicion_expressed` event by `suspicionEventId`; each event target equals its descriptor target.
+4. Every resolved claim/event actor equals `plan.npcId` and `publication.actorId`. Its NPC source has the exact plan ID, descriptor ID, originating input record ID, and reaction commit request ID owned by the plan/publication graph.
+5. Claim/event version, turn, correlation, and publication identity edges satisfy the existing committed-graph contract. No dangling, duplicate, aliased, foreign-session, foreign-plan, foreign-actor, foreign-descriptor, wrong-kind, or reordered edge is accepted.
+
+Any failure in those engine-owned graph/context checks throws `NpcPublicationDeliveryInvariantError` with `code: "invalid_npc_delivery_publication_graph"` and the fixed redacted message. It does not create a delivery attempt or terminal resolution record and does not repair authority. Only absence or primitive failure of the exact renderer (including failure or an invalid return from `sha256CanonicalJson`) and a successfully rendered value exceeding a length bound are resolution failures. Renderer/primitive absence or failure is `canonical_render_failed`; overflow is `canonical_render_limit_exceeded`.
+
+Each segment produces exactly one table string. Japanese joins the strings with the empty string. English joins them with exactly one U+0020 SPACE. Joining adds no leading or trailing space, newline, tab, double space, conjunction, punctuation, or reordered content; the table strings already own their punctuation. The final `displayText` length is measured in Unicode code points, not UTF-16 code units or UTF-8 bytes, and must be in both `1..plan.maxChars` and `1..1000`. The renderer never truncates. A valid rendered string outside either bound produces `canonical_render_limit_exceeded`; an engine-owned invalid `maxChars` remains a publication-graph invariant.
+
+Payload construction has exactly this order:
+
+1. Strictly validate the complete publication/plan/claim/event/segment graph without mutation.
+2. Strictly validate the detached `CanonicalRenderingContext` and all required participant lookups.
+3. Resolve the exact stored `canonicalRendererVersion` and stored locale table.
+4. Resolve every canonical segment against its exact descriptor and claim/event evidence in plan order.
+5. Produce one table string per segment using only closed values and the exact target display-name projection.
+6. Join once using the locale table's exact separator.
+7. Measure Unicode code points and enforce both length bounds without truncation.
+8. Construct the exact `NpcCanonicalDeliveryPayload` fields except `payloadFingerprint`.
+9. Compute `sha256CanonicalJson(payload without payloadFingerprint)`.
+10. Add that value as `payloadFingerprint` without changing another field.
+11. Recursively freeze the detached payload.
+12. Return it without authoritative or input mutation.
+
+Diagnostics, delivery/session consumer identity, attempt/order state, sink type, time/deadline, receipt, acknowledgement, retry token, observer values, current UI locale, and DOM/CLI state are excluded from both payload construction and its fingerprint. Repeating the operation with the same committed graph, renderer version, and captured rendering context produces code-point-identical `displayText` and an identical fingerprint, regardless of delivery, history, replay, or acknowledgement state.
+
+These machine-readable renderer tables and vectors are normative:
+
+```json
+{
+  "canonicalRendererVersion": 1,
+  "locales": {
+    "ja": {
+      "join": "",
+      "roles": { "seer": "私は占い師です。", "werewolf": "私は人狼です。", "citizen": "私は市民です。" },
+      "results": { "werewolf": "{targetDisplayName}は人狼です。", "not_werewolf": "{targetDisplayName}は人狼ではありません。" },
+      "vote": "{targetDisplayName}に投票します。",
+      "suspicion": "{targetDisplayName}を疑っています。"
+    },
+    "ja-JP": {
+      "join": "",
+      "roles": { "seer": "私は占い師です。", "werewolf": "私は人狼です。", "citizen": "私は市民です。" },
+      "results": { "werewolf": "{targetDisplayName}は人狼です。", "not_werewolf": "{targetDisplayName}は人狼ではありません。" },
+      "vote": "{targetDisplayName}に投票します。",
+      "suspicion": "{targetDisplayName}を疑っています。"
+    },
+    "en": {
+      "join": " ",
+      "roles": { "seer": "I am the seer.", "werewolf": "I am a werewolf.", "citizen": "I am a citizen." },
+      "results": { "werewolf": "{targetDisplayName} is a werewolf.", "not_werewolf": "{targetDisplayName} is not a werewolf." },
+      "vote": "I will vote for {targetDisplayName}.",
+      "suspicion": "I suspect {targetDisplayName}."
+    },
+    "en-US": {
+      "join": " ",
+      "roles": { "seer": "I am the seer.", "werewolf": "I am a werewolf.", "citizen": "I am a citizen." },
+      "results": { "werewolf": "{targetDisplayName} is a werewolf.", "not_werewolf": "{targetDisplayName} is not a werewolf." },
+      "vote": "I will vote for {targetDisplayName}.",
+      "suspicion": "I suspect {targetDisplayName}."
+    }
+  }
+}
+```
+
+```json
+[
+  {
+    "case": "ja_mixed_plan_order",
+    "locale": "ja-JP",
+    "targetDisplayNames": ["ベニ", "シアン", "ダイ"],
+    "segments": ["role_claim:seer", "result_claim:werewolf", "vote_declaration", "suspicion"],
+    "displayText": "私は占い師です。ベニは人狼です。シアンに投票します。ダイを疑っています。"
+  },
+  {
+    "case": "en_mixed_plan_order",
+    "locale": "en-US",
+    "targetDisplayNames": ["Beni", "Cyan", "Dai"],
+    "segments": ["role_claim:seer", "result_claim:not_werewolf", "vote_declaration", "suspicion"],
+    "displayText": "I am the seer. Beni is not a werewolf. I will vote for Cyan. I suspect Dai."
+  },
+  {
+    "case": "display_name_code_points_are_preserved",
+    "locale": "en",
+    "targetDisplayNames": ["Éclair 🐺"],
+    "segments": ["result_claim:werewolf"],
+    "displayText": "Éclair 🐺 is a werewolf."
+  },
+  {
+    "case": "leading_space_is_preserved",
+    "locale": "en",
+    "targetDisplayNames": [" Éclair"],
+    "targetDisplayNameCodePoints": ["U+0020", "U+00C9", "U+0063", "U+006C", "U+0061", "U+0069", "U+0072"],
+    "segments": ["result_claim:werewolf"],
+    "displayText": " Éclair is a werewolf."
+  },
+  {
+    "case": "trailing_space_is_preserved",
+    "locale": "en",
+    "targetDisplayNames": ["Éclair "],
+    "targetDisplayNameCodePoints": ["U+00C9", "U+0063", "U+006C", "U+0061", "U+0069", "U+0072", "U+0020"],
+    "segments": ["result_claim:werewolf"],
+    "displayText": "Éclair  is a werewolf.",
+    "placeholderBoundaryCodePoints": ["U+0072", "U+0020", "U+0020", "U+0069"]
+  },
+  {
+    "case": "combining_character_is_not_normalized",
+    "locale": "en",
+    "targetDisplayNames": ["Éclair"],
+    "targetDisplayNameCodePoints": ["U+0045", "U+0301", "U+0063", "U+006C", "U+0061", "U+0069", "U+0072"],
+    "segments": ["result_claim:not_werewolf"],
+    "displayText": "Éclair is not a werewolf.",
+    "payloadFingerprintInputUsesExactDisplayTextCodePoints": true
+  }
+]
+```
+
+Future canonical-renderer tests must cover every role/result table member, every segment kind, all four exact locale keys, Japanese empty joining, English U+0020 joining, mixed plans, leading-space preservation, trailing-space preservation (including the two U+0020 values where a trailing display-name space meets an English template space), decomposed combining-character preservation without Unicode normalization, and proof that the exact resulting display-text code-point sequence is included unchanged in the payload fingerprint input. They must also cover the existing accented/emoji display-name vector, missing/mismatched graph/context edges, missing renderer version, primitive failure, `maxChars` and 1000-code-point boundaries, no truncation, payload field exclusion, fingerprint reproducibility, recursive freezing, input immutability, in-session replay after display-name changes elsewhere, and zero provider/AI Renderer/legacy/delivery/authoritative side effects. The delivery runtime remains unimplemented until a separately approved implementation task consumes this contract.
+
 `NpcPublicationDeliveryRequest` requires exactly `schemaVersion: 1`, `gameSessionId: ID`, `consumerId: ID`, `consumerGeneration: non-negative safe integer`, `sinkType: "browser" | "cli"`, `deliveryAttemptId: ID`, `deliveryAttemptOrder: non-negative safe integer`, `attemptNumber: integer 1..3`, `publicationSlotOrder: non-negative safe integer`, `recordAppendOrder: non-negative safe integer`, and `payload: NpcCanonicalDeliveryPayload`, with `additionalProperties: false`. The controller, not the adapter, allocates `deliveryAttemptId` and attempt order. The request is a frozen runtime value and is never a provider/HTTP request.
 
 #### Delivery record, receipt, acknowledgement, and retry token
@@ -4171,6 +4312,7 @@ In Phase 2, the browser runtime validates Interpreter responses against the comp
 | **Phase 6 NPC delivery indexes** | ONE CURRENT RECORD PER PUBLICATION + BOUNDED IMMUTABLE ATTEMPTS BY ID; CONSUMER REPLACEMENT NEVER OVERWRITES OLD ATTEMPT EVIDENCE |
 | **Phase 6 live delivery source** | COMMITTED `NpcCanonicalUtterancePublishedRecord` + COMPLETE VALID CANONICAL GRAPH ONLY |
 | **Phase 6 delivery payload source** | ENGINE CANONICAL RENDERER; DETACHED, FROZEN, STORED LOCALE/VERSION; CALLER OVERRIDE PROHIBITED |
+| **Phase 6 canonical renderer v1** | EXACT `ja`/`ja-JP` AND `en`/`en-US` TABLES; PLAN-ORDER SEGMENTS; SESSION PUBLIC DISPLAY-NAME PROJECTION; CODE-POINT BOUNDS; NO FALLBACK OR TRUNCATION |
 | **Phase 6 delivery order** | HEAD-OF-LINE ASCENDING `publicationSlotOrder`; APPEND/ATTEMPT/SINK/ACK/OBSERVER ORDERS ARE DISTINCT |
 | **Phase 6 sink proof** | EXACT BROWSER DOM ATTACHMENT OR CONFIGURED CLI WRITE FULFILLMENT; OBSERVER/TEXT/VIEW MODEL INSUFFICIENT |
 | **Phase 6 acknowledgement proof** | EXACT CONTROLLER-RETAINED `sink_succeeded` RECEIPT ONLY; ACK-ONLY RETRY AFTER SINK SUCCESS |
