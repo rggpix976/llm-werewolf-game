@@ -157,7 +157,9 @@ export function createNpcReactionCandidateHttpHandler({ provider, createServerCo
       }
       try {
         const generatedResult = await provider.generateCandidate(validatedRequest, { signal });
+        if (signal?.aborted) throw providerError("aborted");
         const result = validateProviderResult(generatedResult, validatedRequest);
+        if (signal?.aborted) throw providerError("aborted");
         return successResponse(serverCorrelationId, validatedRequest, result);
       } catch (error) {
         if (signal?.aborted) throw providerError("aborted");

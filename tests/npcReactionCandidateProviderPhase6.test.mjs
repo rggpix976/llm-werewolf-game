@@ -476,6 +476,37 @@ test("HTTP handler trusts only its request AbortSignal and redacts provider-orig
   }
 });
 
+test("HTTP handler suppresses a valid result when the request aborts at provider completion", async () => {
+  const request = requestFixture();
+  const state = { stateVersion: 7, publicationCount: 2, deliveryCount: 1 };
+  const before = structuredClone(state);
+  const requestAbort = new AbortController();
+  let calls = 0;
+  const handler = createNpcReactionCandidateHttpHandler({
+    provider: {
+      generateCandidate: async (_value, { signal }) => {
+        calls += 1;
+        assert.equal(signal, requestAbort.signal);
+        requestAbort.abort(new Error("private completion-race reason"));
+        return resultFixture(request);
+      }
+    },
+    createServerCorrelationId: () => "server-completion-race"
+  });
+  await assert.rejects(handler.handle({
+    method: "POST", path: "/api/generate-npc-reaction-candidate",
+    contentTypeHeader: "application/json; charset=utf-8", contentEncodingHeader: null,
+    bodyBytes: new TextEncoder().encode(JSON.stringify(request))
+  }, { signal: requestAbort.signal }), (error) => {
+    assert.ok(expectedError("aborted", false)(error));
+    assert.equal(error.message.includes("private"), false);
+    assert.equal(Object.hasOwn(error, "cause"), false);
+    return true;
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(state, before);
+});
+
 test("HTTP retryability requires explicit transient evidence and never relabels upstream 429 as server rate limiting", async () => {
   const request = requestFixture();
   const transport = {
