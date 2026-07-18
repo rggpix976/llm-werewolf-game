@@ -85,6 +85,49 @@ test("every approved fault stage preserves authority and clears the commit latch
   });
 });
 
+test("final replacement revalidates complete live authority and transaction ownership", async (t) => {
+  const cases = [
+    ["intervening stateVersion", (game) => { game.state.stateVersion += 1; }],
+    ["same-version forbidden field", (game) => { game.state.publicInfo.push({ type: "intervening_authority" }); }],
+    ["intervening turn and phase", (game) => { game.state.turnId = "turn-intervening"; game.state.turnOrder += 1; game.state.phase = "night"; }],
+    ["transaction ownership", (game) => { game.npcAuthorityCommitOwner = Object.freeze({}); }]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, () => {
+    let value;
+    let armed = true;
+    value = createNpcAuthorityPortFixture({
+      npcAuthorityFaultInjector(stage) {
+        if (armed && stage === "commit_before_final_replacement") {
+          armed = false;
+          mutate(value.game);
+        }
+      }
+    });
+    const input = commitInput(value);
+    const planCount = value.game.state.conversation.reactionPlans.length;
+    const publicationCount = value.game.state.conversation.publications.length;
+    assert.throws(
+      () => value.game.commitPreparedNpcReactionAtomically(input),
+      (error) => error instanceof NpcStructuredReactionAuthorityPortInvariantError
+        && error.code === "invalid_npc_structured_state_replacement"
+    );
+    assert.equal(value.game.state.conversation.reactionPlans.length, planCount);
+    assert.equal(value.game.state.conversation.publications.length, publicationCount);
+    assert.equal(value.game.npcAuthorityCommitInProgress, false);
+    assert.equal(value.game.npcAuthorityCommitOwner, null);
+    if (name === "intervening stateVersion") {
+      const retry = value.game.commitPreparedNpcReactionAtomically(input);
+      assert.equal(retry.status, "conflict");
+      assert.equal(retry.currentStateVersion, input.expectedStateVersion + 1);
+    } else if (name === "same-version forbidden field") {
+      assert.deepEqual(value.game.state.publicInfo.at(-1), { type: "intervening_authority" });
+    } else if (name === "intervening turn and phase") {
+      assert.equal(value.game.state.turnId, "turn-intervening");
+      assert.equal(value.game.state.phase, "night");
+    }
+  });
+});
+
 test("commit input exactness, nested accessors, reentrancy, and destroy fail closed", () => {
   const value = createNpcAuthorityPortFixture();
   const input = commitInput(value);

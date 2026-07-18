@@ -1,4 +1,4 @@
-import { ID_PATTERN, SHA256_PATTERN, enums } from "./conversation/domain.mjs";
+import { ID_PATTERN, enums } from "./conversation/domain.mjs";
 import {
   validateCanonicalClaim,
   validateConversationCommitResult,
@@ -145,20 +145,8 @@ function validateParticipants(value) {
 }
 
 function validateReplay(value) {
-  if (value?.status === "not_found") {
-    exact(value, ["schemaVersion", "status"]); if (value.schemaVersion !== 1) fail(); return;
-  }
-  if (value?.status === "conflict") {
-    exact(value, ["schemaVersion", "status", "code"]);
-    if (value.schemaVersion !== 1 || !["trigger_identity_conflict", "request_identity_conflict", "reaction_identity_conflict", "committed_graph_conflict"].includes(value.code)) fail();
-    return;
-  }
-  exact(value, ["schemaVersion", "status", "logicalIdentity", "result"]);
-  if (value.schemaVersion !== 1 || value.status !== "replayed") fail();
-  exact(value.logicalIdentity, ["gameSessionId", "reactionPlanId", "requestId", "requestFingerprint", "originatingInputRecordId", "turnId", "turnOrder", "npcId"]);
-  for (const field of ["gameSessionId", "reactionPlanId", "requestId", "originatingInputRecordId", "turnId", "npcId"]) id(value.logicalIdentity[field]);
-  fingerprint(value.logicalIdentity.requestFingerprint); safe(value.logicalIdentity.turnOrder);
-  validateConversationCommitResult(value.result); if (value.result.commitType !== "npc_reaction") fail();
+  exact(value, ["schemaVersion", "status"]);
+  if (value.schemaVersion !== 1 || value.status !== "not_found") fail();
 }
 
 function assertPlainAcyclic(value, active = new Set()) {
@@ -201,7 +189,6 @@ function exact(value, fields) {
 function dense(value, min, max) { if (!Array.isArray(value) || value.length < min || value.length > max) fail(); for (let i = 0; i < value.length; i += 1) if (!Object.hasOwn(value, i)) fail(); return value; }
 function ids(value, min, max) { dense(value, min, max); value.forEach(id); if (new Set(value).size !== value.length) fail(); return value; }
 function id(value) { if (typeof value !== "string" || !ID_PATTERN.test(value)) fail(); }
-function fingerprint(value) { if (typeof value !== "string" || !SHA256_PATTERN.test(value)) fail(); }
 function safe(value) { if (!Number.isSafeInteger(value) || value < 0) fail(); }
 function plain(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype; }
 function fail() { throw new TypeError("invalid"); }

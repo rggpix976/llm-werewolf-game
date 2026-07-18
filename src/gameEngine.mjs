@@ -184,6 +184,7 @@ export class WerewolfGame {
     this.activeNpcReaction = null;
     this._commandInProgress = false;
     this.npcAuthorityCommitInProgress = false;
+    this.npcAuthorityCommitOwner = null;
     this._destroyed = false;
   }
 
@@ -413,16 +414,16 @@ export class WerewolfGame {
     const trigger = resolveNpcStructuredTrigger(this.state, request);
     this.npcAuthorityFaultInjector("read_after_trigger_resolution");
     const replay = resolveNpcStructuredCommittedReplay(this.state, trigger);
+    if (replay.status === "replayed") return buildNpcAuthorityReplayReadResult(this.state, request, replay);
+    if (replay.status === "conflict") return buildNpcAuthorityConflictReadResult(this.state, request, replay.code);
+    if (!isNpcStructuredTriggerCurrentlyApplicable(this.state, trigger)) {
+      return buildNpcAuthorityConflictReadResult(this.state, request, "stale_trigger");
+    }
     const actor = this.state.players.find((player) => player.id === trigger.targetNpcId);
     if (!actor) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
     let knownInformationProjection;
     try {
-      const projectionState = cloneState(this.state);
-      projectionState.turnId = trigger.input.turnId;
-      projectionState.turnOrder = trigger.turnOrder;
-      projectionState.phase = "player_question";
-      projectionState.stateVersion = trigger.result.resultingStateVersion;
-      knownInformationProjection = buildNpcKnownInformationProjection(actor.id, trigger.result.requestId, projectionState);
+      knownInformationProjection = buildNpcKnownInformationProjection(actor.id, trigger.result.requestId, this.state);
     } catch { throw npcAuthorityInvariant("invalid_npc_structured_authority_snapshot"); }
     const preparation = buildNpcPreparationAuthorityContext(this.state, actor);
     const snapshot = {
@@ -473,9 +474,12 @@ export class WerewolfGame {
       });
     }
     this.npcAuthorityCommitInProgress = true;
+    const transactionOwner = Object.freeze({});
+    this.npcAuthorityCommitOwner = transactionOwner;
     try {
       try { validateNpcAuthoritativeStateFoundation(this.state); validateCommittedConversationGraph(this._conversationGraph()); }
       catch { throw npcAuthorityInvariant("invalid_npc_structured_authority_state"); }
+      const livePrecondition = captureNpcAuthorityLivePrecondition(this.state);
       this.npcAuthorityFaultInjector("commit_before_working_copy");
       const working = this._workingCopy();
       this.npcAuthorityFaultInjector("commit_after_working_copy");
@@ -552,10 +556,12 @@ export class WerewolfGame {
       });
       validateNpcAuthorityFinalCommittedResult(finalResult, request.preparedReaction, request.expectedStateVersion);
       this.npcAuthorityFaultInjector("commit_before_final_replacement");
+      assertNpcAuthorityLivePrecondition(this, livePrecondition, transactionOwner);
       commitState(this.state, working.state);
       return finalResult;
     } finally {
       this.npcAuthorityCommitInProgress = false;
+      this.npcAuthorityCommitOwner = null;
     }
   }
 
@@ -1231,8 +1237,21 @@ function resolveNpcStructuredTrigger(state, request) {
   const questionEvent = events.filter((event) => event.eventType === "public_question_recorded"
     && event.targetId === targetNpcId && event.source?.inputRecordId === input.inputRecordId
     && event.source?.requestId === result.requestId);
-  if (questionEvent.length !== 1 || !state.players.some((player) => player.id === targetNpcId)) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
-  return { result, input, events, targetNpcId, turnOrder: state.turnOrder };
+  if (questionEvent.length !== 1) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  return { result, input, events, targetNpcId, acceptedQuestion: questions[0] };
+}
+
+function isNpcStructuredTriggerCurrentlyApplicable(state, trigger) {
+  const question = trigger.acceptedQuestion;
+  return trigger.input.turnId === state.turnId
+    && trigger.result.preconditionStateVersion === trigger.input.capturedStateVersion
+    && trigger.result.resultingStateVersion === state.stateVersion
+    && question.acceptedTurnId === state.turnId
+    && question.acceptedStateVersion === trigger.result.preconditionStateVersion
+    && question.acceptedPhase === state.phase
+    && trigger.events.every((event) => event.turnId === state.turnId
+      && event.stateVersion === state.stateVersion && event.occurredPhase === state.phase)
+    && state.players.some((player) => player.id === trigger.targetNpcId);
 }
 
 function resolveNpcStructuredCommittedReplay(state, trigger) {
@@ -1268,6 +1287,74 @@ function resolveNpcStructuredCommittedReplay(state, trigger) {
     },
     result: structuredClone(result)
   };
+}
+
+function buildNpcAuthorityReplayReadResult(state, request, replay) {
+  const value = {
+    schemaVersion: 1,
+    status: "replayed",
+    gameSessionId: state.gameSessionId,
+    triggerRequestId: request.triggerRequestId,
+    originatingInputRecordId: request.originatingInputRecordId,
+    logicalIdentity: structuredClone(replay.logicalIdentity),
+    result: structuredClone(replay.result)
+  };
+  validateNpcAuthorityReplayReadResult(value);
+  return deepFreeze(value);
+}
+
+function buildNpcAuthorityConflictReadResult(state, request, code) {
+  if (!["trigger_identity_conflict", "request_identity_conflict", "reaction_identity_conflict", "committed_graph_conflict", "stale_trigger"].includes(code)) {
+    throw npcAuthorityInvariant("invalid_npc_structured_replay_graph");
+  }
+  const value = {
+    schemaVersion: 1,
+    status: "conflict",
+    gameSessionId: state.gameSessionId,
+    triggerRequestId: request.triggerRequestId,
+    originatingInputRecordId: request.originatingInputRecordId,
+    code
+  };
+  assertNpcAuthorityExact(value, ["schemaVersion", "status", "gameSessionId", "triggerRequestId", "originatingInputRecordId", "code"], "invalid_npc_structured_replay_graph");
+  return deepFreeze(value);
+}
+
+function validateNpcAuthorityReplayReadResult(value) {
+  assertNpcAuthorityExact(value, ["schemaVersion", "status", "gameSessionId", "triggerRequestId", "originatingInputRecordId", "logicalIdentity", "result"], "invalid_npc_structured_replay_graph");
+  if (value.schemaVersion !== 1 || value.status !== "replayed") throw npcAuthorityInvariant("invalid_npc_structured_replay_graph");
+  for (const field of ["gameSessionId", "triggerRequestId", "originatingInputRecordId"]) assertNpcAuthorityId(value[field], "invalid_npc_structured_replay_graph");
+  assertNpcAuthorityExact(value.logicalIdentity, ["gameSessionId", "reactionPlanId", "requestId", "requestFingerprint", "originatingInputRecordId", "turnId", "turnOrder", "npcId"], "invalid_npc_structured_replay_graph");
+  for (const field of ["gameSessionId", "reactionPlanId", "requestId", "originatingInputRecordId", "turnId", "npcId"]) assertNpcAuthorityId(value.logicalIdentity[field], "invalid_npc_structured_replay_graph");
+  if (typeof value.logicalIdentity.requestFingerprint !== "string" || !SHA256_PATTERN.test(value.logicalIdentity.requestFingerprint)
+    || !Number.isSafeInteger(value.logicalIdentity.turnOrder) || value.logicalIdentity.turnOrder < 0) throw npcAuthorityInvariant("invalid_npc_structured_replay_graph");
+  validateConversationCommitResult(value.result);
+  if (value.result.commitType !== "npc_reaction" || value.logicalIdentity.gameSessionId !== value.gameSessionId
+    || value.logicalIdentity.originatingInputRecordId !== value.originatingInputRecordId
+    || value.result.reactionPlanId !== value.logicalIdentity.reactionPlanId
+    || value.result.requestId !== value.logicalIdentity.requestId
+    || value.result.requestFingerprint !== value.logicalIdentity.requestFingerprint) throw npcAuthorityInvariant("invalid_npc_structured_replay_graph");
+}
+
+function captureNpcAuthorityLivePrecondition(state) {
+  return Object.freeze({
+    gameSessionId: state.gameSessionId,
+    stateVersion: state.stateVersion,
+    turnId: state.turnId,
+    turnOrder: state.turnOrder,
+    phase: state.phase,
+    rootFingerprint: sha256Fingerprint(state)
+  });
+}
+
+function assertNpcAuthorityLivePrecondition(game, expected, transactionOwner) {
+  const state = game.state;
+  let rootFingerprint;
+  try { rootFingerprint = sha256Fingerprint(state); }
+  catch { throw npcAuthorityInvariant("invalid_npc_structured_state_replacement"); }
+  if (game._destroyed || game.npcAuthorityCommitInProgress !== true || game.npcAuthorityCommitOwner !== transactionOwner
+    || state.gameSessionId !== expected.gameSessionId || state.stateVersion !== expected.stateVersion
+    || state.turnId !== expected.turnId || state.turnOrder !== expected.turnOrder || state.phase !== expected.phase
+    || rootFingerprint !== expected.rootFingerprint) throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
 }
 
 function buildNpcPreparationAuthorityContext(state, actor, requestedActorId = actor?.id) {
