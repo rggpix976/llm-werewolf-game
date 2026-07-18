@@ -287,6 +287,56 @@ test("prepared fingerprint and strict shape fail closed for every fingerprint ow
   }
 });
 
+test("self-consistent invalid artifact allocation remains invalid after fingerprint refresh", () => {
+  const vectors = [
+    [undefined, (delta) => { delta.artifactAllocation.schemaVersion = 2; }],
+    [undefined, (delta) => { delta.artifactAllocation.allocationType = "forged"; }],
+    [undefined, (delta) => { delta.artifactAllocation.descriptorIds[0] = "other-descriptor"; }],
+    [undefined, (delta) => { delta.artifactAllocation.eventIds[0] = "other-event"; }],
+    [undefined, (delta) => { delta.artifactAllocation.segmentIds[0] = "other-segment"; }],
+    [undefined, (delta) => { delta.artifactAllocation.descriptorIds.pop(); }],
+    [undefined, (delta) => { delta.artifactAllocation.eventIds.push("extra-event"); }],
+    [undefined, (delta) => { delta.artifactAllocation.segmentIds.push("extra-segment"); }],
+    [[{ proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" }],
+      (delta) => { delta.artifactAllocation.claimAllocations[0].proposalIndex = 1; }],
+    [[{ proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" }],
+      (delta) => { delta.artifactAllocation.claimAllocations[0].claimId = "other-claim"; }],
+    [[{ proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" }],
+      (delta) => { delta.artifactAllocation.claimAllocations.pop(); }],
+    [undefined, (delta) => {
+      delta.artifactAllocation.eventIds[0] = delta.artifactAllocation.descriptorIds[0];
+    }]
+  ];
+  for (const [proposals, change] of vectors) {
+    const value = cloneCommitted(proposals);
+    change(value.fixture.preparedReaction.delta);
+    refreshPreparedReaction(value.fixture.preparedReaction);
+    assertInvariant(() => translate(value), "invalid_npc_reaction_prepared_reaction");
+  }
+});
+
+test("self-consistent invalid order and idempotency reservations remain invalid after fingerprint refresh", () => {
+  const vectors = [
+    (delta) => { delta.orderReservation.schemaVersion = 2; },
+    (delta) => { delta.orderReservation.reservationType = "forged"; },
+    (delta) => { delta.idempotencyReservation.schemaVersion = 2; },
+    (delta) => { delta.orderReservation.eventCreatedOrders.pop(); },
+    (delta) => { delta.orderReservation.eventCreatedOrders[0] += 1; },
+    (delta) => { delta.orderReservation.commitResultCreatedAtOrder += 1; },
+    (delta) => { delta.orderReservation.resultingNextCreatedOrder += 1; },
+    (delta) => { delta.orderReservation.publicationSlotOrder += 1; },
+    (delta) => { delta.orderReservation.resultingNextPublicationSlotOrder += 1; },
+    (delta) => { delta.orderReservation.publicationRecordAppendOrder += 1; },
+    (delta) => { delta.orderReservation.resultingNextRecordAppendOrder += 1; }
+  ];
+  for (const change of vectors) {
+    const value = cloneCommitted();
+    change(value.fixture.preparedReaction.delta);
+    refreshPreparedReaction(value.fixture.preparedReaction);
+    assertInvariant(() => translate(value), "invalid_npc_reaction_prepared_reaction");
+  }
+});
+
 test("precondition, version, phase, participant and top-level changes are forbidden", () => {
   const vectors = [
     ["invalid_npc_reaction_prepared_reaction", (value) => { value.fixture.preparedReaction.delta.binding.gameSessionId = "other-session"; refreshPreparedReaction(value.fixture.preparedReaction); }],
@@ -431,6 +481,30 @@ test("authorized delta validator accepts exact output and rejects shape, counts,
     const value = structuredClone(delta);
     change(value);
     assert.throws(() => validateNpcReactionAuthorizedDelta(value), NpcReactionAuthorityTranslationInvariantError);
+  }
+});
+
+test("authorized delta validator rejects valid-shaped cross-record graph mismatches", () => {
+  const ordinary = translate(cloneCommitted());
+  const claimProducing = translate(cloneCommitted([
+    { proposalType: "result_claim", targetId: "npc-beni", result: "werewolf" }
+  ]));
+  const vectors = [
+    [ordinary, (value) => { value.appends.events[0].eventId = "other-event"; }],
+    [ordinary, (value) => { value.appends.commitResults[0].createdEventIds[0] = "other-event"; }],
+    [ordinary, (value) => { value.appends.reactionPlans[0].canonicalSegments[0].suspicionEventId = "other-event"; }],
+    [claimProducing, (value) => { value.appends.claims[0].claimId = "other-claim"; }],
+    [claimProducing, (value) => { value.appends.commitResults[0].createdClaimIds[0] = "other-claim"; }],
+    [claimProducing, (value) => { value.appends.reactionPlans[0].canonicalSegments[0].claimId = "other-claim"; }],
+    [ordinary, (value) => { value.counters.nextCreatedOrder += 1; }],
+    [ordinary, (value) => { value.counters.nextPublicationSlotOrder += 1; }],
+    [ordinary, (value) => { value.counters.nextRecordAppendOrder += 1; }]
+  ];
+  for (const [source, change] of vectors) {
+    const value = structuredClone(source);
+    change(value);
+    assertInvariant(() => validateNpcReactionAuthorizedDelta(value),
+      "invalid_npc_reaction_authorized_delta");
   }
 });
 

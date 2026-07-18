@@ -7,7 +7,12 @@ import {
   validateNpcReactionPlan,
   validatePublicEvent
 } from "./conversation/validators.mjs";
-import { validateCommittedConversationGraph } from "./conversation/references.mjs";
+import {
+  validateClaimReferences,
+  validateCommittedConversationGraph,
+  validateEventReferences,
+  validateReactionPlanReferences
+} from "./conversation/references.mjs";
 import { validateNpcAuthoritativeStateFoundation } from "./npcAuthoritativeStateFoundation.mjs";
 
 export const NPC_REACTION_AUTHORITY_TRANSLATION_INVARIANT_CODES = Object.freeze([
@@ -335,6 +340,23 @@ export function validateNpcReactionAuthorizedDelta(value) {
     value.appends.events.forEach(validatePublicEvent);
     validateDisplayPublicationRecord(publication);
     validateConversationCommitResult(result);
+    validateClaimReferences(value.appends.claims, { reactionPlans: [plan] });
+    validateEventReferences(value.appends.events, {
+      reactionPlans: [plan],
+      claims: value.appends.claims
+    });
+    validateReactionPlanReferences(plan, {
+      schemaVersion: 1,
+      contextType: "committed_graph",
+      reactionPlan: plan,
+      idempotencyRecord: record,
+      commitResult: result,
+      publication,
+      claims: value.appends.claims,
+      events: value.appends.events,
+      segments: plan.canonicalSegments
+    });
+    validateAuthorizedDeltaSegmentTargets(plan, value.appends.claims, value.appends.events);
   } catch {
     throw invariant("invalid_npc_reaction_authorized_delta");
   }
@@ -355,7 +377,10 @@ export function validateNpcReactionAuthorizedDelta(value) {
     || record.gameSessionId !== value.precondition.gameSessionId
     || record.turnId !== value.precondition.turnId
     || record.turnOrder !== value.precondition.turnOrder
-    || record.preconditionStateVersion !== value.precondition.stateVersion) {
+    || record.preconditionStateVersion !== value.precondition.stateVersion
+    || value.counters.nextCreatedOrder !== result.createdAtOrder + 1
+    || value.counters.nextPublicationSlotOrder !== publication.publicationSlotOrder + 1
+    || value.counters.nextRecordAppendOrder !== publication.recordAppendOrder + 1) {
     throw invariant("invalid_npc_reaction_authorized_delta");
   }
 }
@@ -484,16 +509,116 @@ function validatePreparedReaction(prepared) {
       throw invariant("invalid_npc_reaction_prepared_reaction");
     }
   }
-  for (const field of ORDER_FIELDS.filter((field) => !["reservationType"].includes(field))) {
-    if (field === "eventCreatedOrders") {
-      if (!isDenseArray(delta.orderReservation[field])) throw invariant("invalid_npc_reaction_prepared_reaction");
-    } else if (field !== "schemaVersion") assertSafe(delta.orderReservation[field], "invalid_npc_reaction_prepared_reaction");
-  }
   const hashInput = clone(delta, "invalid_npc_reaction_prepared_reaction");
   hashInput.preparationFingerprint = ZERO_FINGERPRINT;
   hashInput.idempotencyReservation.preparationFingerprint = ZERO_FINGERPRINT;
   if (sha256CanonicalJson(hashInput) !== prepared.preparationFingerprint) {
     throw invariant("npc_reaction_projection_fingerprint_mismatch");
+  }
+  validateArtifactAllocation(delta);
+  validateOrderReservation(delta);
+}
+
+function validateAuthorizedDeltaSegmentTargets(plan, claims, events) {
+  const claimsById = new Map(claims.map((claim) => [claim.claimId, claim]));
+  const eventsById = new Map(events.map((event) => [event.eventId, event]));
+  for (const segment of plan.canonicalSegments) {
+    const target = segment.type === "canonical_claim"
+      ? claimsById.get(segment.claimId)
+      : eventsById.get(segment.voteEventId ?? segment.suspicionEventId);
+    const expectedEventType = segment.type === "canonical_vote"
+      ? "vote_declared"
+      : segment.type === "canonical_suspicion" ? "suspicion_expressed" : null;
+    if (!target
+      || target.source.sourceType !== "npc_reaction"
+      || target.source.reactionPlanId !== plan.reactionPlanId
+      || target.source.descriptorId !== segment.descriptorId
+      || target.source.reactionCommitRequestId !== plan.requestId
+      || target.actorId !== plan.npcId
+      || (target.createdStateVersion ?? target.stateVersion) !== plan.resultingStateVersion
+      || (expectedEventType && target.eventType !== expectedEventType)) {
+      throw new Error("invalid authorized delta segment target");
+    }
+  }
+}
+
+function validateArtifactAllocation(delta) {
+  const code = "invalid_npc_reaction_prepared_reaction";
+  const allocation = delta.artifactAllocation;
+  const descriptors = delta.plan.intendedSpeechActs;
+  const segments = delta.plan.canonicalSegments;
+  if (allocation.schemaVersion !== 1 || allocation.allocationType !== "npc_reaction_artifacts") {
+    throw invariant(code);
+  }
+  assertDenseUniqueIds(allocation.descriptorIds, descriptors.length, code);
+  assertDenseUniqueIds(allocation.eventIds, delta.events.length, code);
+  assertDenseUniqueIds(allocation.segmentIds, segments.length, code);
+  assertId(allocation.publicationId, code);
+  if (!isDenseArray(allocation.claimAllocations) || allocation.claimAllocations.length > 4) {
+    throw invariant(code);
+  }
+  const claimIndexes = descriptors.flatMap((descriptor, index) =>
+    ["role_claim", "result_claim"].includes(descriptor.descriptorType) ? [index] : []);
+  if (allocation.claimAllocations.length !== claimIndexes.length) throw invariant(code);
+  allocation.claimAllocations.forEach((item, index) => {
+    assertExactObject(item, ["proposalIndex", "claimId"], code);
+    if (!Number.isSafeInteger(item.proposalIndex) || item.proposalIndex !== claimIndexes[index]) {
+      throw invariant(code);
+    }
+    assertId(item.claimId, code);
+  });
+  assertCanonicalEqual(
+    allocation.descriptorIds,
+    descriptors.map((descriptor) => descriptor.descriptorId),
+    code
+  );
+  assertCanonicalEqual(allocation.eventIds, delta.events.map((event) => event.eventId), code);
+  assertCanonicalEqual(allocation.segmentIds, segments.map((segment) => segment.segmentId), code);
+  assertCanonicalEqual(
+    allocation.claimAllocations.map((item) => item.claimId),
+    delta.claims.map((claim) => claim.claimId),
+    code
+  );
+  const ids = [
+    ...allocation.descriptorIds,
+    ...allocation.claimAllocations.map((item) => item.claimId),
+    ...allocation.eventIds,
+    ...allocation.segmentIds,
+    allocation.publicationId
+  ];
+  if (new Set(ids).size !== ids.length) throw invariant(code);
+}
+
+function validateOrderReservation(delta) {
+  const code = "invalid_npc_reaction_prepared_reaction";
+  const order = delta.orderReservation;
+  if (order.schemaVersion !== 1 || order.reservationType !== "npc_reaction_orders"
+    || !isDenseArray(order.eventCreatedOrders)
+    || order.eventCreatedOrders.length !== delta.events.length) {
+    throw invariant(code);
+  }
+  for (const field of ORDER_FIELDS) {
+    if (["schemaVersion", "reservationType", "eventCreatedOrders"].includes(field)) continue;
+    assertSafe(order[field], code);
+  }
+  order.eventCreatedOrders.forEach((value) => assertSafe(value, code));
+  const expectedEventOrders = Array.from(
+    { length: delta.events.length },
+    (_, index) => order.preconditionNextCreatedOrder + index
+  );
+  assertCanonicalEqual(order.eventCreatedOrders, expectedEventOrders, code);
+  assertCanonicalEqual(order.eventCreatedOrders, delta.events.map((event) => event.createdOrder), code);
+  if (order.commitResultCreatedAtOrder !== order.preconditionNextCreatedOrder + delta.events.length
+    || order.resultingNextCreatedOrder !== order.commitResultCreatedAtOrder + 1
+    || order.publicationSlotOrder !== order.preconditionNextPublicationSlotOrder
+    || order.resultingNextPublicationSlotOrder !== order.publicationSlotOrder + 1
+    || order.publicationRecordAppendOrder !== order.preconditionNextRecordAppendOrder
+    || order.resultingNextRecordAppendOrder !== order.publicationRecordAppendOrder + 1
+    || order.commitResultCreatedAtOrder !== delta.expectedCommitResult.createdAtOrder
+    || order.publicationSlotOrder !== delta.publication.publicationSlotOrder
+    || order.publicationRecordAppendOrder !== delta.publication.recordAppendOrder
+    || delta.idempotencyReservation.schemaVersion !== 1) {
+    throw invariant(code);
   }
 }
 
@@ -707,6 +832,12 @@ function assertId(value, code) {
 
 function assertFingerprint(value, code) {
   if (typeof value !== "string" || !SHA256_PATTERN.test(value)) throw invariant(code);
+}
+
+function assertDenseUniqueIds(value, expectedLength, code) {
+  if (!isDenseArray(value) || value.length !== expectedLength) throw invariant(code);
+  value.forEach((item) => assertId(item, code));
+  if (new Set(value).size !== value.length) throw invariant(code);
 }
 
 function assertSafe(value, code) {
