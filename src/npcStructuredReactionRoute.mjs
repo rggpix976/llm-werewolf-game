@@ -119,7 +119,9 @@ export function createNpcStructuredReactionRoute(configuration = {}) {
     if (firstRead.status === "conflict") return conflictResult(trigger, firstRead);
     const snapshot = validateSnapshot(firstRead);
 
+    const sourceCoordinatorRoot = coordinatorRoot;
     let operation;
+    let planningPublished = false;
     try {
       const policy = createNpcStructuredRoutePolicy();
       const foundation = createLogicalReactionFoundation({
@@ -146,9 +148,9 @@ export function createNpcStructuredReactionRoute(configuration = {}) {
       if (planned.status === "rejected") {
         return routeResult(trigger, "rejected", { stage: "planning", reason: "ordering_failure" });
       }
-      coordinatorRoot = planned.root;
+      const operationGeneration = generation + 1;
       operation = {
-        generation: ++generation,
+        generation: operationGeneration,
         trigger,
         snapshot,
         logical,
@@ -160,12 +162,29 @@ export function createNpcStructuredReactionRoute(configuration = {}) {
         backoffTimer: null,
         deadlineAt: checkedDeadline(nowMonotonicMs, policy.retryPolicy.logicalDeadlineMs),
         winner: null,
-        result: null
+        result: null,
+        sourceCoordinatorRoot
       };
+      operation.deadlineTimer = armTimer(
+        operation,
+        "deadline",
+        policy.retryPolicy.logicalDeadlineMs,
+        () => winDeadline(operation),
+        { staged: true }
+      );
+      generation = operationGeneration;
+      coordinatorRoot = planned.root;
       active = operation;
-      operation.deadlineTimer = armTimer(operation, "deadline", policy.retryPolicy.logicalDeadlineMs, () => winDeadline(operation));
+      planningPublished = true;
+      operation.deadlineTimer.publish();
       observe(operation, "planning", "created", "planned", null);
     } catch (error) {
+      if (!planningPublished) {
+        clearOperationTimers(operation);
+        operation?.abortController?.abort();
+        coordinatorRoot = sourceCoordinatorRoot;
+        if (active === operation) active = null;
+      }
       if (error instanceof NpcStructuredReactionRouteError || error instanceof NpcStructuredReactionRouteInvariantError) throw error;
       throw invariant(classifyBuilderError(error));
     }
@@ -173,11 +192,17 @@ export function createNpcStructuredReactionRoute(configuration = {}) {
       const result = await runAttempts(operation);
       rememberTerminal(operation, result);
       return result;
+    } catch (error) {
+      recoverUnexpectedOperation(operation);
+      if (error instanceof NpcStructuredReactionRouteError || error instanceof NpcStructuredReactionRouteInvariantError) throw error;
+      throw invariant("invalid_npc_structured_route_state");
     } finally {
-      if (active === operation && operation.winner) active = null;
+      if (active === operation) active = null;
       clearOperationTimers(operation);
+      operation.abortController?.abort();
       operation.abortController = null;
       operation.snapshot = null;
+      operation.sourceCoordinatorRoot = null;
     }
   }
 
@@ -556,7 +581,7 @@ export function createNpcStructuredReactionRoute(configuration = {}) {
     });
   }
 
-  function armTimer(operation, kind, delay, callback) {
+  function armTimer(operation, kind, delay, callback, { staged = false } = {}) {
     if (!Number.isFinite(delay) || delay < 0) throw invariant("invalid_npc_structured_route_timer");
     let published = false;
     let invalidated = false;
@@ -564,17 +589,73 @@ export function createNpcStructuredReactionRoute(configuration = {}) {
     let handle;
     const expectedGeneration = operation.generation;
     const wrapped = () => {
-      if (invalidated || operation.generation !== expectedGeneration || operation.winner || !isCurrent(operation)) return;
+      if (invalidated || operation.generation !== expectedGeneration || operation.winner) return;
       if (!published) { pending = true; return; }
+      if (!isCurrent(operation)) return;
       callback();
     };
     try { handle = scheduleTimer(wrapped, delay); }
     catch { invalidated = true; throw invariant("invalid_npc_structured_route_timer"); }
     if (handle === undefined || handle === null) { invalidated = true; throw invariant("invalid_npc_structured_route_timer"); }
-    const gate = { kind, handle, invalidate() { invalidated = true; } };
-    published = true;
-    if (pending) queueMicrotask(wrapped);
+    const gate = {
+      kind,
+      handle,
+      publish() {
+        if (invalidated || published) return;
+        published = true;
+        if (pending) queueMicrotask(wrapped);
+      },
+      invalidate() { invalidated = true; pending = false; }
+    };
+    if (!staged) gate.publish();
     return gate;
+  }
+
+  function recoverUnexpectedOperation(operation) {
+    if (!operation || operation.winner) return;
+    generation += 1;
+    clearOperationTimers(operation);
+    try { operation.abortController?.abort(); } catch {}
+
+    let replay;
+    try {
+      const read = readAuthority(operation.trigger);
+      if (read.status === "replayed"
+        && read.logicalIdentity.reactionPlanId === operation.logical.reactionPlanId) replay = read;
+    } catch {}
+    if (replay) {
+      coordinatorRoot = operation.sourceCoordinatorRoot;
+      operation.winner = "replayed";
+      operation.result = replayResult(operation.trigger, replay);
+      return;
+    }
+
+    const attempt = operation.currentAttemptId
+      ? coordinatorRoot.reactionAttempts[operation.currentAttemptId]
+      : null;
+    const attemptTerminalStatus = attempt && !["failed", "timed_out", "rejected", "aborted"].includes(attempt.status)
+      ? attempt.status === "attempting" ? "aborted" : "rejected"
+      : null;
+    try {
+      terminalFailure(
+        operation,
+        "rejected",
+        "internal_failure",
+        "runtime",
+        "runtime_invariant",
+        attemptTerminalStatus
+      );
+    } catch {
+      coordinatorRoot = operation.sourceCoordinatorRoot;
+      operation.winner = "rejected";
+      operation.result = routeResult(operation.trigger, "rejected", {
+        reactionPlanId: operation.logical.reactionPlanId,
+        requestId: operation.logical.requestId,
+        attemptCount: operation.attemptCount,
+        stage: "runtime",
+        reason: "internal_failure"
+      });
+    }
   }
 
   function clearOperationTimers(operation) {

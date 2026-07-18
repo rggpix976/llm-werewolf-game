@@ -11,11 +11,16 @@ export function createRouteFixture(options = {}) {
   const authorityPort = {
     readNpcStructuredReactionSnapshot(input) {
       calls.read += 1;
-      return authority.game.readNpcStructuredReactionSnapshot(input);
+      const result = authority.game.readNpcStructuredReactionSnapshot(input);
+      return options.readResult ? options.readResult(result, input, calls) : result;
     },
     commitPreparedNpcReactionAtomically(input) {
       calls.commit += 1;
       calls.lastCommitInput = structuredClone(input);
+      if (options.commitOverride) {
+        const overridden = options.commitOverride(input, calls);
+        if (overridden !== undefined) return overridden;
+      }
       const result = authority.game.commitPreparedNpcReactionAtomically(input);
       return options.commitResult ? options.commitResult(result, input) : result;
     }
@@ -31,15 +36,19 @@ export function createRouteFixture(options = {}) {
     gameSessionId: authority.game.state.gameSessionId,
     createId: options.createId ?? (() => `route-${++id}`),
     nowUtc: options.nowUtc ?? (() => "2026-07-18T00:00:00.000Z"),
-    nowMonotonicMs: () => monotonic,
+    nowMonotonicMs: options.nowMonotonicMs ?? (() => monotonic),
     scheduleTimer(callback, delayMs) {
+      if (options.scheduleTimer) return options.scheduleTimer(callback, delayMs, timers);
       const handle = { callback, delayMs, cancelled: false };
       timers.push(handle);
       if (options.synchronousTimer) callback();
       return handle;
     },
-    cancelTimer(handle) { handle.cancelled = true; },
-    createAbortController: () => new AbortController(),
+    cancelTimer(handle) {
+      if (options.cancelTimer) return options.cancelTimer(handle);
+      handle.cancelled = true;
+    },
+    createAbortController: options.createAbortController ?? (() => new AbortController()),
     authorityPort,
     candidateTransport,
     observer: options.observer ?? ((value) => observations.push(value))
