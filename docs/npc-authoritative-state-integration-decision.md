@@ -407,6 +407,8 @@ Baseline: Slice 2 merge. Add the narrow read and atomic commit operations, exist
 
 Baseline: Slice 3 merge. Recreate the Structured Route Goal using the narrow port; implement Coordinator, provider attempts/deadline, validation, preparation, commit invocation, and cleanup. Generic CAS and production UI wiring remain out of scope.
 
+The accepted runtime correction is a strict read result union: authoritative `replayed` and `conflict` outcomes terminate before any current projection, ID allocation, Coordinator mutation, Provider call, or timer; only the current-applicable authority snapshot enters new planning. The original pre-Slice-3 Structured Route Goal remains a historical BLOCKED record and is superseded, not resumed, by the rewritten Slice 4 Goal.
+
 ### Slice 5 — Delivery orchestration
 
 Baseline: Slice 4 merge. Add explicit delivery pump, retry, receipt, and acknowledgement orchestration without authoritative writes.
