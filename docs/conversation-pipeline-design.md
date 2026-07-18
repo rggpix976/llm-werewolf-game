@@ -2748,6 +2748,16 @@ It is synchronous and returns `NpcReactionCommitExecutionResult`. It is not a pu
 
 `NpcReactionCommitInput` requires exactly `schemaVersion: 1` and `preparedReaction: PreparedCanonicalNpcReaction`; it has no optional/null fields and `additionalProperties: false`. Commit reconstructs a detached value, recalculates the preparation fingerprint, requires outer/delta/idempotency-reservation fingerprint equality, and shares no caller-owned reference. Raw candidate, provider body, preparation snapshot, current state, lifecycle state, or registry is forbidden in the input. Indexes are read only from the owning `WerewolfGame`; current state, active logical reaction, winning attempt, and terminal-slot reservation are read only if lookup proves that a new commit path is required.
 
+#### Authoritative game-state integration
+
+The adopted integration architecture is defined by [NPC Authoritative State Integration Decision](npc-authoritative-state-integration-decision.md). `WerewolfGame.state` is the sole canonical authority. The state accepted and returned by the pure Authoritative Commit primitive is a detached transaction projection constructed inside an engine-owned working-copy transaction; its `replacementState` is not the live game root and is never returned to Structured Route as a replacement capability.
+
+Structured Route does not own a generic `readSnapshot`/`compareAndSwap` adapter. It calls only a narrow engine-owned structured-reaction read operation and synchronous atomic prepared-reaction commit operation. The atomic operation builds the Commit participant projection from canonical game players, validates the pure Commit replacement projection, extracts only the closed NPC conversation delta, validates the complete working game state, advances `stateVersion` exactly once, and invokes the existing final state replacement primitive once. It performs no fallible work after replacement.
+
+Canonical `reactionPlans` and `npcReactionCommitIdempotencyRecords` are owned by the existing `state.conversation` root. The stored NPC player array remains the only NPC participant source; `participantId`, `participantClass`, and `maySpeak` are engine-derived transaction evidence, not a second persisted participant registry. Existing publication, commit-result, claim, event, and order-counter registries remain shared and are not duplicated.
+
+This documentation decision does not implement the state fields, projection, translator, authority port, or route. Structured Route remains blocked until the canonical-state foundation, pure projection/delta translator, and engine-owned authority port are separately merged.
+
 The pre-provider read-only entrypoint is:
 
 ```js
