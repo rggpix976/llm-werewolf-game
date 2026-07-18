@@ -16,6 +16,7 @@ import { projectMappedPlayerEntries, renderUnacknowledgedPlayerPublications, ren
 import { PlayerPublicationDeliveryController } from "./playerPublicationDelivery.mjs";
 import { buildNpcKnownInformationProjection } from "./npcKnownInformationProjection.mjs";
 import { createLogicalReactionFoundation, createReactionAttemptFoundation, resolveNpcStructuredReactionPolicy } from "./npcReactionFoundation.mjs";
+import { createNpcAuthoritativeConversationRegistries, validateNpcAuthoritativeStateFoundation } from "./npcAuthoritativeStateFoundation.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -96,6 +97,7 @@ export class WerewolfGame {
     });
 
     initializeSuspicion(players, rng, options.scenario);
+    const npcRegistries = createNpcAuthoritativeConversationRegistries();
 
     const state = {
       gameSessionId: engineId("game", createId),
@@ -113,7 +115,10 @@ export class WerewolfGame {
       playerLog: [],
       developerLog: [],
       conversation: {
-        inputRecords: [], acceptedSpeechActs: [], claims: [], events: [], displayPlans: [], publications: [], playerLegacyDisplayCompatibilityRecords: [], commitResults: [], idempotencyRecords: [],
+        inputRecords: [], acceptedSpeechActs: [], claims: [], events: [], displayPlans: [],
+        reactionPlans: npcRegistries.reactionPlans,
+        publications: [], playerLegacyDisplayCompatibilityRecords: [], commitResults: [], idempotencyRecords: [],
+        npcReactionCommitIdempotencyRecords: npcRegistries.npcReactionCommitIdempotencyRecords,
         nextCreatedOrder: 0, nextPublicationSlotOrder: 0, nextRecordAppendOrder: 0
       },
       rng,
@@ -146,6 +151,7 @@ export class WerewolfGame {
   }
 
   constructor(state, responseProvider = new PseudoResponseProvider(), options = {}) {
+    validateNpcAuthoritativeStateFoundation(state);
     this.state = state;
     this.responseProvider = responseProvider;
     this.createId = options.createId ?? (() => globalThis.crypto.randomUUID());
@@ -261,7 +267,7 @@ export class WerewolfGame {
       }
       const working = this._workingCopy(), result = await working._executeCompatibilityAction(action);
       if (this._destroyed || this.state.stateVersion !== preconditionVersion || this.state.turnId !== working.state.turnId || this.state.gameSessionId !== working.state.gameSessionId) throw typedError("stale_state_version");
-      working.state.stateVersion = preconditionVersion + 1; commitState(this.state, working.state);
+      working.state.stateVersion = preconditionVersion + 1; validateNpcAuthoritativeStateFoundation(working.state); commitState(this.state, working.state);
       return this._actionResult(action.type, result, logCursor);
     } finally { this._commandInProgress = false; }
   }
@@ -323,14 +329,14 @@ export class WerewolfGame {
     working.state.playerLog.push(structuredClone(delta.legacyDelta.playerLogEntry)); this.phase4FaultInjector("legacy_log_staged"); working.state.publicInfo.push(structuredClone(delta.legacyDelta.publicInfoEntry));
     validateCommittedConversationGraph(this._conversationGraph(working.state)); this.phase4FaultInjector("mapping_graph_validation");
     working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
-    this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; commitState(this.state, working.state);
+    this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; validateNpcAuthoritativeStateFoundation(working.state); commitState(this.state, working.state);
     const reactionBinding = Object.freeze({ gameSessionId: this.state.gameSessionId, turnId: this.state.turnId, turnOrder: this.state.turnOrder, preconditionPhase: this.state.phase, preconditionStateVersion: this.state.stateVersion, targetNpcId: target.id, requestId: delta.requestId, correlationId: delta.correlationId, inputRecordId: delta.inputRecordId, requestFingerprint: delta.requestFingerprint });
     const controller = new AbortController(), active = { binding: reactionBinding, controller }; this.activeNpcReaction = active;
     try {
       const npcWorking = this._workingCopy(), reaction = await npcWorking.handlePlayerQuestion(target.id, action.input ?? action.question, { skipPlayerSide: true, signal: controller.signal });
       this._assertNpcReactionCas(active, npcWorking);
       if (reaction?.reason === "response_provider_error") return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
-      this.phase4FaultInjector("npc_final_state_replacement"); npcWorking.state.stateVersion = preconditionVersion + 2; commitState(this.state, npcWorking.state);
+      this.phase4FaultInjector("npc_final_state_replacement"); npcWorking.state.stateVersion = preconditionVersion + 2; validateNpcAuthoritativeStateFoundation(npcWorking.state); commitState(this.state, npcWorking.state);
       return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
     } finally { if (this.activeNpcReaction === active) this.activeNpcReaction = null; }
   }
@@ -382,7 +388,7 @@ export class WerewolfGame {
 
   _clarificationContinuation(action) { if (action.type !== "ask_npc" || !action.clarificationRequestId) return false; const prior = this.interpreterTerminalAudit.get(action.clarificationRequestId); return prior?.outcome?.category === "clarification" && prior.turnId === this.state.turnId; }
 
-  _workingCopy() { const working = Object.create(Object.getPrototypeOf(this)); Object.assign(working, this); working.state = cloneState(this.state); working.interpreterValidationEnabled = false; return working; }
+  _workingCopy() { validateNpcAuthoritativeStateFoundation(this.state); const clonedState = cloneState(this.state); validateNpcAuthoritativeStateFoundation(clonedState); const working = Object.create(Object.getPrototypeOf(this)); Object.assign(working, this); working.state = clonedState; working.interpreterValidationEnabled = false; return working; }
 
   async _observeInterpreter(action) {
     if (!this.interpreterProvider?.interpretPlayerInput) return null;
