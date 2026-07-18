@@ -1,8 +1,10 @@
 # Development Status
 
-Last updated: 2026-07-17
+Last updated: 2026-07-18
 
 ## Current State
+
+- The Phase 6 NPC authority-integration architecture decision is accepted in documentation. `WerewolfGame.state` remains the sole canonical authority; the Authoritative Commit state is a detached transaction projection; NPC participants are derived from canonical game players; canonical reaction plans and NPC idempotency records will be added to the existing conversation root; and only a narrow engine-owned read/atomic-commit port may publish. Runtime implementation has not started. The prior Structured Route Goal remains blocked until the canonical-state foundation, projection/delta translator, and engine authority port are merged in order.
 
 - Conversation pipeline migration Phases 1-5 are merged on `master`: pure domain contracts/renderers, shadow transport, authoritative player-candidate validation, atomic player conversation commit, exact compatibility mapping, structured player history/delivery, explicit pre-cutover drain, and browser/CLI sink acknowledgement. Migration feature flags remain default-off with strict dependencies.
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. Phase 5 resolves that identity without positional/text inference and keeps history, live delivery, and acknowledgement separate.

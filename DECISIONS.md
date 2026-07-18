@@ -67,3 +67,11 @@ All LLM calls are handled by the Node.js server. The browser communicates with t
 Real OpenAI API verification is explicit, local, single-request, non-retrying, non-fallback, and never executed by automated tests or AI agents (Jules).
 
 The `npm run smoke:openai` command requires a mandatory opt-in flag `OPENAI_LIVE_SMOKE_TEST=I_ACCEPT_API_CHARGES` to prevent accidental billing and ensures that verification follows the production code path through a temporary local server.
+
+## D-012: WerewolfGame Owns NPC Structured-Reaction Authority
+
+`WerewolfGame.state` remains the sole canonical authoritative state. The state consumed and returned by the pure NPC Authoritative Commit module is a detached, nonauthoritative transaction projection, not a second game root or a live replacement capability.
+
+Canonical NPC reaction plans and NPC commit idempotency records become fields of the existing authoritative `state.conversation` root. Existing players remain the sole stored NPC source; Commit participants are deterministically derived and are never persisted as a second participant registry.
+
+Only a narrow engine-owned read/atomic-commit port may publish a prepared NPC reaction. Generic route-owned compare-and-swap, whole replacement with the Commit projection, route-side partial merge, and a second authoritative structured state are forbidden. See [NPC Authoritative State Integration Decision](docs/npc-authoritative-state-integration-decision.md).
