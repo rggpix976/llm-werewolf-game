@@ -8,15 +8,28 @@ import { PHASES, ROLES, TEAMS, publicRoleName, publicTeamName, teamForRole } fro
 import { SeededRandom } from "./seededRandom.mjs";
 import { containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
 import { createPhase3Binding, validatePhase3Response } from "./interpreterValidation.mjs";
-import { sha256Fingerprint } from "./conversation/ids.mjs";
+import { canonicalJson, sha256Fingerprint } from "./conversation/ids.mjs";
 import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
-import { validateCommittedConversationGraph, validatePlayerLegacyDisplayCompatibilityReferences } from "./conversation/references.mjs";
+import { validateCommittedConversationGraph, validatePlayerLegacyDisplayCompatibilityReferences, validateReactionPlanReferences } from "./conversation/references.mjs";
+import { validateConversationCommitResult } from "./conversation/validators.mjs";
 import { preparePlayerConversationCommit, resolvePlayerConversationCommitPolicy } from "./playerConversationCommit.mjs";
 import { projectMappedPlayerEntries, renderUnacknowledgedPlayerPublications, renderPlayerPublication, resolvePlayerStructuredConsumerPolicy } from "./playerStructuredConsumer.mjs";
 import { PlayerPublicationDeliveryController } from "./playerPublicationDelivery.mjs";
 import { buildNpcKnownInformationProjection } from "./npcKnownInformationProjection.mjs";
 import { createLogicalReactionFoundation, createReactionAttemptFoundation, resolveNpcStructuredReactionPolicy } from "./npcReactionFoundation.mjs";
 import { createNpcAuthoritativeConversationRegistries, validateNpcAuthoritativeStateFoundation } from "./npcAuthoritativeStateFoundation.mjs";
+import { NPC_REACTION_COMMIT_REJECTION_CODES, commitNpcReactionAuthoritatively } from "./npcReactionAuthoritativeCommit.mjs";
+import { validateNpcReactionCoordinatorRoot } from "./npcReactionCoordinator.mjs";
+import {
+  buildNpcReactionCommitTransactionProjection,
+  translateNpcReactionCommitReplacementToAuthorizedDelta,
+  validateNpcReactionAuthorizedDelta,
+  validateNpcReactionCommitTransactionProjection
+} from "./npcReactionAuthorityTranslation.mjs";
+import {
+  NpcStructuredReactionAuthorityPortInvariantError,
+  validateNpcStructuredReactionAuthoritySnapshot
+} from "./npcStructuredReactionAuthorityPort.mjs";
 
 const DEFAULT_PLAYERS = [
   {
@@ -131,7 +144,7 @@ export class WerewolfGame {
     const game = new WerewolfGame(
       state,
       options.responseProvider ?? new PseudoResponseProvider(),
-      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, playerStructuredConsumerEnabled: options.playerStructuredConsumerEnabled === true, npcStructuredReactionEnabled: options.npcStructuredReactionEnabled === true, playerStructuredConsumerObserver: options.playerStructuredConsumerObserver, phase4FaultInjector: options.phase4FaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
+      { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, playerStructuredConsumerEnabled: options.playerStructuredConsumerEnabled === true, npcStructuredReactionEnabled: options.npcStructuredReactionEnabled === true, playerStructuredConsumerObserver: options.playerStructuredConsumerObserver, phase4FaultInjector: options.phase4FaultInjector, npcAuthorityFaultInjector: options.npcAuthorityFaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
     );
     game.addPublicInfo({
       type: "setup",
@@ -163,12 +176,14 @@ export class WerewolfGame {
     this.playerStructuredConsumerObserver = options.playerStructuredConsumerObserver ?? (() => {});
     this.playerPublicationDeliveryController = new PlayerPublicationDeliveryController({ gameSessionId: state.gameSessionId, createId: this.createId, observer: this.playerStructuredConsumerObserver, enabled: this.playerStructuredConsumerEnabled, initialWatermark: 0, isQuiescent: () => !this._commandInProgress && !this.activeNpcReaction && ![...this.pendingInterpreterRequests.values()].some((pending) => pending.status === "pending"), listPublications: () => this.state.conversation.publications.filter((record) => record.recordType === "player_utterance_published").sort((a, b) => a.publicationSlotOrder - b.publicationSlotOrder), resolvePublication: (publicationId, deliveryMode) => deliveryMode === "structured" ? this._displayPlayerPublication(this._renderPlayerPublication(publicationId)) : this._legacyPlayerPublication(publicationId), resolvePreCutoverIdentity: (publicationId) => { const mapping = this.getPlayerLegacyDisplayCompatibilityRecord({ publicationId }); return { compatibilityMappingId: mapping.compatibilityMappingId, legacyEntryId: mapping.legacyEntryId, legacyLogAppendOrder: mapping.legacyLogAppendOrder, legacyEntryFingerprint: mapping.legacyEntryFingerprint }; } });
     this.phase4FaultInjector = options.phase4FaultInjector ?? (() => {});
+    this.npcAuthorityFaultInjector = options.npcAuthorityFaultInjector ?? (() => {});
     this.interpreterObserver = options.interpreterObserver ?? (() => {});
     this.now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
     this.pendingInterpreterRequests = new Map();
     this.interpreterTerminalAudit = new Map();
     this.activeNpcReaction = null;
     this._commandInProgress = false;
+    this.npcAuthorityCommitInProgress = false;
     this._destroyed = false;
   }
 
@@ -387,6 +402,162 @@ export class WerewolfGame {
   }
 
   _clarificationContinuation(action) { if (action.type !== "ask_npc" || !action.clarificationRequestId) return false; const prior = this.interpreterTerminalAudit.get(action.clarificationRequestId); return prior?.outcome?.category === "clarification" && prior.turnId === this.state.turnId; }
+
+  readNpcStructuredReactionSnapshot(input) {
+    if (this._destroyed || this.npcAuthorityCommitInProgress) throw npcAuthorityInvariant("invalid_npc_structured_authority_state");
+    const request = reconstructNpcAuthorityReadInput(input);
+    if (request.gameSessionId !== this.state.gameSessionId) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+    try { validateNpcAuthoritativeStateFoundation(this.state); validateCommittedConversationGraph(this._conversationGraph()); }
+    catch { throw npcAuthorityInvariant("invalid_npc_structured_authority_state"); }
+    this.npcAuthorityFaultInjector("read_before_trigger_resolution");
+    const trigger = resolveNpcStructuredTrigger(this.state, request);
+    this.npcAuthorityFaultInjector("read_after_trigger_resolution");
+    const replay = resolveNpcStructuredCommittedReplay(this.state, trigger);
+    const actor = this.state.players.find((player) => player.id === trigger.targetNpcId);
+    if (!actor) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+    let knownInformationProjection;
+    try {
+      const projectionState = cloneState(this.state);
+      projectionState.turnId = trigger.input.turnId;
+      projectionState.turnOrder = trigger.turnOrder;
+      projectionState.phase = "player_question";
+      projectionState.stateVersion = trigger.result.resultingStateVersion;
+      knownInformationProjection = buildNpcKnownInformationProjection(actor.id, trigger.result.requestId, projectionState);
+    } catch { throw npcAuthorityInvariant("invalid_npc_structured_authority_snapshot"); }
+    const preparation = buildNpcPreparationAuthorityContext(this.state, actor);
+    const snapshot = {
+      schemaVersion: 1,
+      snapshotType: "npc_structured_reaction_authority",
+      gameSessionId: this.state.gameSessionId,
+      turnId: this.state.turnId,
+      turnOrder: this.state.turnOrder,
+      currentPhase: this.state.phase,
+      stateVersion: this.state.stateVersion,
+      triggeringCommitResult: structuredClone(trigger.result),
+      originatingInputRecord: structuredClone(trigger.input),
+      triggeringEvents: structuredClone(trigger.events),
+      targetNpcId: actor.id,
+      knownInformationProjection: structuredClone(knownInformationProjection),
+      currentRoster: structuredClone(preparation.currentRoster),
+      actorApplicability: structuredClone(preparation.actorApplicability),
+      currentAuthorization: structuredClone(preparation.currentAuthorization),
+      currentTargetIds: structuredClone(preparation.currentTargetIds),
+      existingClaims: structuredClone(this.state.conversation.claims),
+      existingEvents: structuredClone(this.state.conversation.events),
+      nextOrderEvidence: {
+        nextCreatedOrder: this.state.conversation.nextCreatedOrder,
+        nextPublicationSlotOrder: this.state.conversation.nextPublicationSlotOrder,
+        nextRecordAppendOrder: this.state.conversation.nextRecordAppendOrder
+      },
+      occupiedArtifactIds: collectNpcAuthorityIds(this.state),
+      publicParticipantsById: buildNpcPublicParticipants(this.state),
+      committedReplay: structuredClone(replay)
+    };
+    try { validateNpcStructuredReactionAuthoritySnapshot(snapshot); }
+    catch { throw npcAuthorityInvariant("invalid_npc_structured_authority_snapshot"); }
+    this.npcAuthorityFaultInjector("read_before_snapshot_freeze");
+    return deepFreeze(snapshot);
+  }
+
+  commitPreparedNpcReactionAtomically(input) {
+    if (this._destroyed || this.npcAuthorityCommitInProgress) throw npcAuthorityInvariant("invalid_npc_structured_authority_state");
+    const request = reconstructNpcAuthorityCommitInput(input);
+    if (request.gameSessionId !== this.state.gameSessionId) throw npcAuthorityInvariant("invalid_npc_structured_commit_input");
+    if (request.expectedStateVersion !== this.state.stateVersion) {
+      return deepFreeze({
+        schemaVersion: 1,
+        status: "conflict",
+        gameSessionId: this.state.gameSessionId,
+        expectedStateVersion: request.expectedStateVersion,
+        currentStateVersion: this.state.stateVersion
+      });
+    }
+    this.npcAuthorityCommitInProgress = true;
+    try {
+      try { validateNpcAuthoritativeStateFoundation(this.state); validateCommittedConversationGraph(this._conversationGraph()); }
+      catch { throw npcAuthorityInvariant("invalid_npc_structured_authority_state"); }
+      this.npcAuthorityFaultInjector("commit_before_working_copy");
+      const working = this._workingCopy();
+      this.npcAuthorityFaultInjector("commit_after_working_copy");
+      try { validateNpcAuthoritativeStateFoundation(working.state); validateCommittedConversationGraph(working._conversationGraph()); }
+      catch { throw npcAuthorityInvariant("invalid_npc_structured_working_state"); }
+      let currentProjection;
+      try { currentProjection = buildNpcReactionCommitTransactionProjection(working.state); validateNpcReactionCommitTransactionProjection(currentProjection); }
+      catch { throw npcAuthorityInvariant("invalid_npc_structured_commit_projection"); }
+      this.npcAuthorityFaultInjector("commit_after_projection");
+      const binding = request.preparedReaction?.delta?.binding;
+      if (!binding || binding.gameSessionId !== working.state.gameSessionId) {
+        throw npcAuthorityInvariant("invalid_npc_structured_commit_input");
+      }
+      const actor = working.state.players.find((player) => player.id === binding.npcId);
+      const preparation = buildNpcPreparationAuthorityContext(working.state, actor, binding.npcId);
+      const liveValidationContext = {
+        schemaVersion: 1,
+        contextType: "npc_reaction_commit_live",
+        gameSessionId: working.state.gameSessionId,
+        turnId: working.state.turnId,
+        turnOrder: working.state.turnOrder,
+        currentPhase: working.state.phase,
+        currentStateVersion: working.state.stateVersion,
+        actorApplicability: preparation.actorApplicability,
+        currentAuthorization: preparation.currentAuthorization,
+        currentTargetIds: preparation.currentTargetIds
+      };
+      try {
+        validateNpcReactionCoordinatorRoot(request.coordinatorRoot);
+        validateReactionPlanReferences(request.preparedReaction.delta.plan, request.preCommitReferenceContext);
+      } catch { throw npcAuthorityInvariant("invalid_npc_structured_commit_input"); }
+      this.npcAuthorityFaultInjector("commit_before_pure_commit");
+      const commitResult = commitNpcReactionAuthoritatively({
+        schemaVersion: 1,
+        currentState: currentProjection,
+        preparedReaction: request.preparedReaction,
+        preCommitReferenceContext: request.preCommitReferenceContext,
+        coordinatorRoot: request.coordinatorRoot,
+        liveValidationContext
+      });
+      this.npcAuthorityFaultInjector("commit_after_pure_commit");
+      validateNpcAuthorityCommitPrimitiveResult(commitResult, request.preparedReaction, request.expectedStateVersion);
+      if (commitResult.status === "replayed" || commitResult.status === "rejected") return deepFreeze(structuredClone(commitResult));
+      let authorizedDelta;
+      try {
+        validateNpcReactionCommitTransactionProjection(commitResult.replacementState);
+        this.npcAuthorityFaultInjector("commit_before_translation");
+        authorizedDelta = translateNpcReactionCommitReplacementToAuthorizedDelta({
+          currentProjection,
+          replacementProjection: commitResult.replacementState,
+          preparedReaction: request.preparedReaction
+        });
+        this.npcAuthorityFaultInjector("commit_after_translation");
+        validateNpcReactionAuthorizedDelta(authorizedDelta);
+      } catch { throw npcAuthorityInvariant("invalid_npc_structured_authorized_delta"); }
+      const beforeWorking = cloneState(working.state);
+      this.npcAuthorityFaultInjector("commit_before_delta_apply");
+      applyNpcAuthorizedDelta(working.state, authorizedDelta);
+      this.npcAuthorityFaultInjector("commit_after_delta_apply");
+      assertNpcAuthorityForbiddenPathsPreserved(beforeWorking, working.state, authorizedDelta);
+      this.npcAuthorityFaultInjector("commit_before_working_validation");
+      try {
+        validateNpcAuthoritativeStateFoundation(working.state);
+        validateCommittedConversationGraph(working._conversationGraph());
+        validateNpcReactionCommitTransactionProjection(buildNpcReactionCommitTransactionProjection(working.state));
+      } catch { throw npcAuthorityInvariant("invalid_npc_structured_working_state"); }
+      if (working.state.stateVersion !== request.expectedStateVersion + 1) throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
+      this.npcAuthorityFaultInjector("commit_after_working_validation");
+      const finalResult = deepFreeze({
+        schemaVersion: 1,
+        status: "committed",
+        result: structuredClone(commitResult.result),
+        coordinatorCleanupHandoff: structuredClone(commitResult.coordinatorCleanupHandoff)
+      });
+      validateNpcAuthorityFinalCommittedResult(finalResult, request.preparedReaction, request.expectedStateVersion);
+      this.npcAuthorityFaultInjector("commit_before_final_replacement");
+      commitState(this.state, working.state);
+      return finalResult;
+    } finally {
+      this.npcAuthorityCommitInProgress = false;
+    }
+  }
 
   _workingCopy() { validateNpcAuthoritativeStateFoundation(this.state); const clonedState = cloneState(this.state); validateNpcAuthoritativeStateFoundation(clonedState); const working = Object.create(Object.getPrototypeOf(this)); Object.assign(working, this); working.state = clonedState; working.interpreterValidationEnabled = false; return working; }
 
@@ -1012,6 +1183,244 @@ export class WerewolfGame {
     }).join("\n\n");
   }
 }
+
+const NPC_AUTHORITY_READ_FIELDS = Object.freeze([
+  "schemaVersion", "gameSessionId", "triggerRequestId", "originatingInputRecordId"
+]);
+const NPC_AUTHORITY_COMMIT_FIELDS = Object.freeze([
+  "schemaVersion", "gameSessionId", "expectedStateVersion", "preparedReaction",
+  "coordinatorRoot", "preCommitReferenceContext"
+]);
+
+function reconstructNpcAuthorityReadInput(value) {
+  assertNpcAuthorityExact(value, NPC_AUTHORITY_READ_FIELDS, "invalid_npc_structured_authority_input");
+  if (value.schemaVersion !== 1) throw npcAuthorityInvariant("invalid_npc_structured_authority_input");
+  for (const field of ["gameSessionId", "triggerRequestId", "originatingInputRecordId"]) assertNpcAuthorityId(value[field], "invalid_npc_structured_authority_input");
+  return structuredClone(value);
+}
+
+function reconstructNpcAuthorityCommitInput(value) {
+  assertNpcAuthorityExact(value, NPC_AUTHORITY_COMMIT_FIELDS, "invalid_npc_structured_commit_input");
+  if (value.schemaVersion !== 1) throw npcAuthorityInvariant("invalid_npc_structured_commit_input");
+  assertNpcAuthorityId(value.gameSessionId, "invalid_npc_structured_commit_input");
+  if (!Number.isSafeInteger(value.expectedStateVersion) || value.expectedStateVersion < 0) throw npcAuthorityInvariant("invalid_npc_structured_commit_input");
+  for (const field of ["preparedReaction", "coordinatorRoot", "preCommitReferenceContext"]) assertNpcAuthorityPlainData(value[field], "invalid_npc_structured_commit_input");
+  return structuredClone(value);
+}
+
+function resolveNpcStructuredTrigger(state, request) {
+  const conversation = state.conversation;
+  const results = conversation.commitResults.filter((result) => result.commitType === "player_conversation" && result.requestId === request.triggerRequestId);
+  const records = conversation.idempotencyRecords.filter((record) => record.requestId === request.triggerRequestId);
+  const inputs = conversation.inputRecords.filter((input) => input.inputRecordId === request.originatingInputRecordId);
+  if (results.length !== 1 || records.length !== 1 || inputs.length !== 1) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  const [result] = results, [record] = records, [input] = inputs;
+  if (result.inputRecordId !== input.inputRecordId || result.requestId !== input.requestId
+    || result.correlationId !== input.correlationId || record.requestFingerprint !== result.requestFingerprint
+    || canonicalJson(record.result) !== canonicalJson(result)) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  const acts = conversation.acceptedSpeechActs.filter((act) => act.requestId === result.requestId && act.inputRecordId === input.inputRecordId);
+  const questions = acts.filter((act) => act.type === "accepted_question" && typeof act.targetId === "string");
+  const targetIds = [...new Set(questions.map((act) => act.targetId))];
+  if (questions.length !== 1 || targetIds.length !== 1) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  const targetNpcId = targetIds[0];
+  const events = result.createdEventIds.map((eventId) => {
+    const matches = conversation.events.filter((event) => event.eventId === eventId);
+    if (matches.length !== 1) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+    return matches[0];
+  });
+  const questionEvent = events.filter((event) => event.eventType === "public_question_recorded"
+    && event.targetId === targetNpcId && event.source?.inputRecordId === input.inputRecordId
+    && event.source?.requestId === result.requestId);
+  if (questionEvent.length !== 1 || !state.players.some((player) => player.id === targetNpcId)) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  return { result, input, events, targetNpcId, turnOrder: state.turnOrder };
+}
+
+function resolveNpcStructuredCommittedReplay(state, trigger) {
+  const records = state.conversation.npcReactionCommitIdempotencyRecords;
+  const triggerMatches = records.filter((record) => record.causationId === trigger.result.requestId
+    || record.originatingInputRecordId === trigger.input.inputRecordId);
+  if (triggerMatches.length === 0) return { schemaVersion: 1, status: "not_found" };
+  if (triggerMatches.length !== 1) return { schemaVersion: 1, status: "conflict", code: "trigger_identity_conflict" };
+  const record = triggerMatches[0];
+  if (record.causationId !== trigger.result.requestId || record.originatingInputRecordId !== trigger.input.inputRecordId
+    || record.npcId !== trigger.targetNpcId) return { schemaVersion: 1, status: "conflict", code: "trigger_identity_conflict" };
+  const plans = state.conversation.reactionPlans.filter((plan) => plan.reactionPlanId === record.reactionPlanId);
+  const results = state.conversation.commitResults.filter((result) => result.commitType === "npc_reaction" && result.requestId === record.commitResultRequestId);
+  const publications = state.conversation.publications.filter((publication) => publication.publicationId === record.npcPublicationId);
+  if (plans.length !== 1 || results.length !== 1 || publications.length !== 1) throw npcAuthorityInvariant("invalid_npc_structured_replay_graph");
+  const plan = plans[0], result = results[0];
+  if (plan.requestId !== record.requestId || plan.successfulAttemptId !== record.successfulAttemptId
+    || result.reactionPlanId !== record.reactionPlanId || result.requestFingerprint !== record.requestFingerprint) {
+    return { schemaVersion: 1, status: "conflict", code: "committed_graph_conflict" };
+  }
+  return {
+    schemaVersion: 1,
+    status: "replayed",
+    logicalIdentity: {
+      gameSessionId: record.gameSessionId,
+      reactionPlanId: record.reactionPlanId,
+      requestId: record.requestId,
+      requestFingerprint: record.requestFingerprint,
+      originatingInputRecordId: record.originatingInputRecordId,
+      turnId: record.turnId,
+      turnOrder: record.turnOrder,
+      npcId: record.npcId
+    },
+    result: structuredClone(result)
+  };
+}
+
+function buildNpcPreparationAuthorityContext(state, actor, requestedActorId = actor?.id) {
+  const currentRoster = [
+    { participantId: "player", participantClass: "player", publicStatus: "alive" },
+    ...state.players.map((player) => ({ participantId: player.id, participantClass: "npc", publicStatus: player.alive ? "alive" : "dead" }))
+  ];
+  if (!actor) return {
+    currentRoster,
+    actorApplicability: { schemaVersion: 1, presence: "absent", actorId: requestedActorId, absenceReason: "removed_from_roster" },
+    currentAuthorization: { schemaVersion: 1, availability: "unavailable", actorId: requestedActorId, reason: "actor_absent" },
+    currentTargetIds: state.players.map((player) => player.id)
+  };
+  const resultFacts = (actor.knownInfo ?? []).filter((fact) => fact?.type === "seer_result")
+    .map((fact) => ({ targetId: fact.targetId, result: fact.result }));
+  const maySpeak = actor.alive && state.winner === null;
+  return {
+    currentRoster,
+    actorApplicability: { schemaVersion: 1, presence: "present", actorId: actor.id, alive: actor.alive, maySpeak },
+    currentAuthorization: {
+      schemaVersion: 1,
+      availability: "available",
+      actorId: actor.id,
+      roleDisclosurePolicy: actor.conversationPolicy.roleClaim,
+      allowedClaimRoles: actor.role === "seer" && resultFacts.length > 0 ? ["seer"] : [],
+      authorizedResultFacts: resultFacts
+    },
+    currentTargetIds: state.players.filter((player) => player.id !== actor.id).map((player) => player.id)
+  };
+}
+
+function buildNpcPublicParticipants(state) {
+  return Object.fromEntries([
+    ["player", { participantId: "player", displayName: "Player" }],
+    ...state.players.map((player) => [player.id, { participantId: player.id, displayName: player.name }])
+  ]);
+}
+
+function collectNpcAuthorityIds(state) {
+  const found = new Set([state.gameSessionId, state.turnId, "player", ...state.players.map((player) => player.id)]);
+  const visit = (value, key = "") => {
+    if (typeof value === "string" && (key.endsWith("Id") || key.endsWith("Ids")) && ID_PATTERN.test(value)) found.add(value);
+    else if (Array.isArray(value)) value.forEach((child) => visit(child, key));
+    else if (value && typeof value === "object") for (const [childKey, child] of Object.entries(value)) visit(child, childKey);
+  };
+  visit(state.conversation);
+  return [...found].sort();
+}
+
+function validateNpcAuthorityCommitPrimitiveResult(value, prepared, expectedVersion) {
+  try {
+    assertNpcAuthorityPlainData(value, "invalid_npc_structured_commit_result");
+    if (value.status === "replayed") {
+      assertNpcAuthorityExact(value, ["schemaVersion", "status", "result"], "invalid_npc_structured_commit_result");
+      validateConversationCommitResult(value.result);
+    } else if (value.status === "rejected") {
+      assertNpcAuthorityExact(value, ["schemaVersion", "status", "binding", "rejection"], "invalid_npc_structured_commit_result");
+      assertNpcAuthorityExact(value.binding, ["schemaVersion", "gameSessionId", "reactionPlanId", "successfulAttemptId", "requestId", "correlationId", "turnId", "preconditionStateVersion", "npcId"], "invalid_npc_structured_commit_result");
+      assertNpcAuthorityExact(value.rejection, ["stage", "reasonCode", "retryable", "diagnostics"], "invalid_npc_structured_commit_result");
+      if (!["idempotency", "applicability", "authorization", "allocation", "ordering"].includes(value.rejection.stage)
+        || !NPC_REACTION_COMMIT_REJECTION_CODES.includes(value.rejection.reasonCode)
+        || value.rejection.retryable !== false || !Array.isArray(value.rejection.diagnostics)
+        || value.rejection.diagnostics.length !== 1) throw new TypeError("invalid");
+      assertNpcAuthorityExact(value.rejection.diagnostics[0], ["code", "location"], "invalid_npc_structured_commit_result");
+      if (value.rejection.diagnostics[0].code !== value.rejection.reasonCode
+        || typeof value.rejection.diagnostics[0].location !== "string") throw new TypeError("invalid");
+    } else if (value.status === "committed") {
+      assertNpcAuthorityExact(value, ["schemaVersion", "status", "replacementState", "result", "coordinatorCleanupHandoff"], "invalid_npc_structured_commit_result");
+      validateConversationCommitResult(value.result);
+      if (value.result.resultingStateVersion !== expectedVersion + 1
+        || value.result.reactionPlanId !== prepared.delta.binding.reactionPlanId) throw new TypeError("invalid");
+      validateNpcAuthorityCleanupHandoff(value.coordinatorCleanupHandoff, prepared);
+    } else throw new TypeError("invalid");
+    if (value.schemaVersion !== 1) throw new TypeError("invalid");
+  } catch (error) {
+    if (error instanceof NpcStructuredReactionAuthorityPortInvariantError) throw error;
+    throw npcAuthorityInvariant("invalid_npc_structured_commit_result");
+  }
+}
+
+function validateNpcAuthorityCleanupHandoff(value, prepared) {
+  assertNpcAuthorityExact(value, ["schemaVersion", "gameSessionId", "reactionPlanId", "successfulAttemptId", "preparationFingerprint", "npcPublicationId", "commitResultRequestId"], "invalid_npc_structured_commit_result");
+  const delta = prepared.delta;
+  if (value.schemaVersion !== 1 || value.gameSessionId !== delta.binding.gameSessionId
+    || value.reactionPlanId !== delta.binding.reactionPlanId || value.successfulAttemptId !== delta.binding.successfulAttemptId
+    || value.preparationFingerprint !== prepared.preparationFingerprint || value.npcPublicationId !== delta.publication.publicationId
+    || value.commitResultRequestId !== delta.expectedCommitResult.requestId) throw npcAuthorityInvariant("invalid_npc_structured_commit_result");
+}
+
+function validateNpcAuthorityFinalCommittedResult(value, prepared, expectedVersion) {
+  assertNpcAuthorityExact(value, ["schemaVersion", "status", "result", "coordinatorCleanupHandoff"], "invalid_npc_structured_commit_result");
+  if (value.schemaVersion !== 1 || value.status !== "committed" || value.result.resultingStateVersion !== expectedVersion + 1) throw npcAuthorityInvariant("invalid_npc_structured_commit_result");
+  validateConversationCommitResult(value.result);
+  validateNpcAuthorityCleanupHandoff(value.coordinatorCleanupHandoff, prepared);
+}
+
+function applyNpcAuthorizedDelta(state, delta) {
+  const conversation = state.conversation;
+  conversation.reactionPlans.push(...structuredClone(delta.appends.reactionPlans));
+  conversation.claims.push(...structuredClone(delta.appends.claims));
+  conversation.events.push(...structuredClone(delta.appends.events));
+  conversation.publications.push(...structuredClone(delta.appends.publications));
+  conversation.npcReactionCommitIdempotencyRecords.push(...structuredClone(delta.appends.npcReactionCommitIdempotencyRecords));
+  conversation.commitResults.push(...structuredClone(delta.appends.commitResults));
+  conversation.nextCreatedOrder = delta.counters.nextCreatedOrder;
+  conversation.nextPublicationSlotOrder = delta.counters.nextPublicationSlotOrder;
+  conversation.nextRecordAppendOrder = delta.counters.nextRecordAppendOrder;
+  state.stateVersion = delta.resultingStateVersion;
+}
+
+function assertNpcAuthorityForbiddenPathsPreserved(before, after, delta) {
+  const allowedArrays = ["reactionPlans", "claims", "events", "publications", "npcReactionCommitIdempotencyRecords", "commitResults"];
+  const beforeRoot = structuredClone(before), afterRoot = structuredClone(after);
+  afterRoot.stateVersion = beforeRoot.stateVersion;
+  for (const field of allowedArrays) afterRoot.conversation[field] = beforeRoot.conversation[field];
+  for (const field of ["nextCreatedOrder", "nextPublicationSlotOrder", "nextRecordAppendOrder"]) afterRoot.conversation[field] = beforeRoot.conversation[field];
+  if (canonicalJson(beforeRoot) !== canonicalJson(afterRoot)) throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
+  for (const field of allowedArrays) {
+    const prefix = before.conversation[field], current = after.conversation[field], append = delta.appends[field];
+    if (canonicalJson(current.slice(0, prefix.length)) !== canonicalJson(prefix)
+      || canonicalJson(current.slice(prefix.length)) !== canonicalJson(append)) throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
+  }
+}
+
+function assertNpcAuthorityExact(value, fields, code) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw npcAuthorityInvariant(code);
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== fields.length || keys.some((key) => typeof key !== "string" || !fields.includes(key))) throw npcAuthorityInvariant(code);
+  for (const field of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw npcAuthorityInvariant(code);
+  }
+}
+
+function assertNpcAuthorityPlainData(value, code, active = new Set()) {
+  if (!value || typeof value !== "object") return;
+  if (active.has(value)) throw npcAuthorityInvariant(code);
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) throw npcAuthorityInvariant(code);
+  active.add(value);
+  const keys = Array.isArray(value) ? Object.keys(value) : Reflect.ownKeys(value);
+  if (Array.isArray(value) && (Object.getOwnPropertySymbols(value).length > 0
+    || keys.some((key, index) => key !== String(index)))) throw npcAuthorityInvariant(code);
+  for (const key of keys) {
+    if (typeof key !== "string") throw npcAuthorityInvariant(code);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw npcAuthorityInvariant(code);
+    assertNpcAuthorityPlainData(descriptor.value, code, active);
+  }
+  active.delete(value);
+}
+
+function assertNpcAuthorityId(value, code) { if (typeof value !== "string" || !ID_PATTERN.test(value)) throw npcAuthorityInvariant(code); }
+function npcAuthorityInvariant(code) { return new NpcStructuredReactionAuthorityPortInvariantError(code); }
 
 function assignRoles({ rng, shuffleRoles, scenario }) {
   if (scenario === "sample") {
