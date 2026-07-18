@@ -4,7 +4,7 @@ Last updated: 2026-07-18
 
 ## Current State
 
-- The Phase 6 NPC authority-integration architecture decision is accepted in documentation. `WerewolfGame.state` remains the sole canonical authority; the Authoritative Commit state is a detached transaction projection; NPC participants are derived from canonical game players; canonical reaction plans and NPC idempotency records will be added to the existing conversation root; and only a narrow engine-owned read/atomic-commit port may publish. Runtime implementation has not started. The prior Structured Route Goal remains blocked until the canonical-state foundation, projection/delta translator, and engine authority port are merged in order.
+- The Phase 6 NPC authority-integration architecture decision is accepted in documentation. `WerewolfGame.state` remains the sole canonical authority; the Authoritative Commit state is a detached transaction projection; NPC participants are derived from canonical game players; and only a narrow engine-owned read/atomic-commit port may publish. Slice 1 canonical-state foundation implementation is present in the current change and remains pending merge: every new conversation root owns fresh `reactionPlans` and `npcReactionCommitIdempotencyRecords` arrays, old-shape state fails closed without lazy migration, working copies preserve detached registries, public/developer snapshots remain unchanged, and `stateVersion` behavior is unchanged. Slice 2 projection/authorized-delta translation, Slice 3 engine-owned authority ports, Structured Route, and production integration remain unimplemented. The prior Structured Route Goal remains blocked until all three slices are merged in order.
 
 - Conversation pipeline migration Phases 1-5 are merged on `master`: pure domain contracts/renderers, shadow transport, authoritative player-candidate validation, atomic player conversation commit, exact compatibility mapping, structured player history/delivery, explicit pre-cutover drain, and browser/CLI sink acknowledgement. Migration feature flags remain default-off with strict dependencies.
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. Phase 5 resolves that identity without positional/text inference and keeps history, live delivery, and acknowledgement separate.
@@ -62,7 +62,7 @@ Last updated: 2026-07-18
   - `npm.cmd run sample`
   - `git diff --check`
   - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
-- Result: 469/469 tests passed. The dedicated production-unconnected sink-wrapper suites passed 27/27, covering exact browser/CLI factories and APIs, safe DOM text attachment and rollback proof, full-identity evidence lookup, exact terminal-control sanitization, synchronous/asynchronous writer completion, one-shot settlement, caller-owned retry/acknowledgement, timeout/reset races, controller integration, redaction, and input/authoritative-state immutability. The delivery-controller suites remain 44/44, Canonical Renderer 11/11, non-routing Provider 17/17, Candidate validation 23/23, Coordinator 18/18, Pure Preparation 12/12, and non-routing authoritative commit 15/15. `npm.cmd run sample`, changed-module syntax checks, and `git diff --check` passed. No dependency, package, lockfile, game-engine, browser UI, CLI route, production server route, provider/AI Renderer call, authoritative mutation, or structured route changed.
+- Result: 488/488 tests passed. The new canonical-state foundation suite passed 19/19, covering exact exports and registry creation, every new-session flag mode, strict container/counter/property validation, sparse/alias rejection, old-shape constructor failure, clone detachment, compatibility preservation, lifecycle, snapshot privacy, redaction, and source immutability. The dedicated production-unconnected sink-wrapper suites remain 27/27; the delivery-controller suites remain 44/44, Canonical Renderer 11/11, non-routing Provider 17/17, Candidate validation 23/23, Coordinator 18/18, Pure Preparation 12/12, and non-routing authoritative commit 15/15. `npm.cmd run sample`, changed-module syntax checks, and `git diff --check` passed. No dependency, package, lockfile, browser UI, CLI route, production server route, provider/AI Renderer call, NPC commit writer, projection/delta translator, authority port, delivery route, or structured route changed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -79,9 +79,9 @@ Last updated: 2026-07-18
 
 ## Next Recommended Task
 
-1. Review the isolated NPC publication delivery controller against the exact C2 runtime contract, especially timeout races, explicit retry, receipt identity, consumer replacement, reset, observer exhaustion, and rollback.
-2. Review the isolated browser/CLI sink wrappers against the exact C2 execution, settlement, visible-effect, reset, and controller-ownership contracts.
-3. After merge, keep structured-route/production integration as a later reviewed stage and retain the legacy provisional NPC transaction as the active runtime route. The old Phase 6 implementation Goal remains BLOCKED history.
+1. Review and merge the current Slice 1 canonical authoritative state foundation.
+2. Implement Slice 2 pure projection and authorized-delta translation from the merged Slice 1 baseline.
+3. Implement Slice 3 engine-owned narrow authority ports from the merged Slice 2 baseline. Keep structured-route/production integration blocked until all three slices are merged, and retain the legacy provisional NPC transaction as the active runtime route.
 
 ## Read This First Next Time
 

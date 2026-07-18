@@ -19,7 +19,7 @@ test("atomic player commit stores strict artifacts at N+1 and NPC effects at N+2
   const instance = game([{ type: "question", targetId: "npc1", topic: "opinion", sourceSpan: { start: 0, end: 5 } }]);
   const result = await instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" });
   assert.equal(instance.state.stateVersion, 2); assert.equal(result.result.conversationCommitResult.preconditionStateVersion, 0); assert.equal(result.result.conversationCommitResult.resultingStateVersion, 1);
-  assert.deepEqual(Object.fromEntries(Object.entries(instance.state.conversation).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.length])), { inputRecords: 1, acceptedSpeechActs: 1, claims: 0, events: 1, displayPlans: 1, publications: 1, playerLegacyDisplayCompatibilityRecords: 1, commitResults: 1, idempotencyRecords: 1 });
+  assert.deepEqual(Object.fromEntries(Object.entries(instance.state.conversation).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.length])), { inputRecords: 1, acceptedSpeechActs: 1, claims: 0, events: 1, displayPlans: 1, reactionPlans: 0, publications: 1, playerLegacyDisplayCompatibilityRecords: 1, commitResults: 1, idempotencyRecords: 1, npcReactionCommitIdempotencyRecords: 0 });
   assert.equal(instance.state.conversation.events[0].stateVersion, 1); assert.equal(instance.state.conversation.publications[0].gameStateVersion, 1);
   assert.equal(instance.state.playerLog.filter((entry) => entry.message.includes("hello")).length, 1);
 });
