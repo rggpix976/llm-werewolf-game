@@ -13,6 +13,7 @@ import {
   receiveNpcReactionCandidate,
   resetNpcReactionCoordinator,
   terminalizeNpcReaction,
+  terminalizeNpcReactionAttempt,
   terminalizeNpcReactionIdentityConflict,
   validateNpcReactionCoordinatorRoot,
   validateReactionTombstone
@@ -20,6 +21,23 @@ import {
 
 const FP_A = "a".repeat(64);
 const FP_B = "b".repeat(64);
+
+test("attempt terminalization follows the closed pre/post-validation transition table", () => {
+  const failed = terminalizeNpcReactionAttempt(activeRoot("attempting"), {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", reactionAttemptId: "attempt-1", terminalStatus: "failed"
+  });
+  assert.equal(failed.root.reactionAttempts["attempt-1"].status, "failed");
+  assert.equal(terminalizeNpcReactionAttempt(failed.root, {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", reactionAttemptId: "attempt-1", terminalStatus: "failed"
+  }).status, "already_terminal");
+  assert.throws(() => terminalizeNpcReactionAttempt(activeRoot("validated"), {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", reactionAttemptId: "attempt-1", terminalStatus: "failed"
+  }), invariant());
+  const rejected = terminalizeNpcReactionAttempt(activeRoot("validated"), {
+    gameSessionId: "session-1", reactionPlanId: "plan-1", reactionAttemptId: "attempt-1", terminalStatus: "rejected"
+  });
+  assert.equal(rejected.root.reactionAttempts["attempt-1"].candidateFingerprint, FP_A);
+});
 
 test("control root is exact, strict, frozen, browser-safe, and session owned", async () => {
   const root = createNpcReactionCoordinatorRoot("session-1");

@@ -4,7 +4,7 @@ Last updated: 2026-07-18
 
 ## Current State
 
-- The Phase 6 NPC authority-integration architecture decision is accepted in documentation. `WerewolfGame.state` remains the sole canonical authority; the Authoritative Commit state is a detached transaction projection; NPC participants are derived from canonical game players; and only a narrow engine-owned read/atomic-commit port may publish. Slice 1 canonical-state foundation is merged. Slice 2 pure authority translation is implemented in the current change and pending merge: it builds the exact detached Commit projection and extracts only the authorized append/counter delta from a validated pure Commit replacement, without live mutation or `gameEngine.mjs` integration. Slice 3 engine-owned authority ports, Structured Route, and production integration remain unimplemented. The prior Structured Route Goal remains blocked until all three slices are merged in order.
+- The Phase 6 NPC authority-integration architecture decision is accepted. Slices 1–3 are merged: canonical NPC registries live in the sole `WerewolfGame.state` authority, pure projection/authorized-delta translation is available, and the engine owns the exact narrow read/atomic-commit port. Slice 4's rewritten, production-unconnected Structured Route is implemented in the current change and pending merge. It uses only those two authority operations and adds Coordinator planning, bounded provider attempts/deadline, authentic transport evidence, Candidate Validation, Preparation, atomic commit invocation, cleanup/retry, cancellation, and reset. Slice 5 Delivery orchestration and Slice 6 production integration remain unimplemented. The original Structured Route Goal remains a historical BLOCKED record and was not resumed.
 
 - Conversation pipeline migration Phases 1-5 are merged on `master`: pure domain contracts/renderers, shadow transport, authoritative player-candidate validation, atomic player conversation commit, exact compatibility mapping, structured player history/delivery, explicit pre-cutover drain, and browser/CLI sink acknowledgement. Migration feature flags remain default-off with strict dependencies.
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. Phase 5 resolves that identity without positional/text inference and keeps history, live delivery, and acknowledgement separate.
@@ -62,7 +62,7 @@ Last updated: 2026-07-18
   - `npm.cmd run sample`
   - `git diff --check`
   - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
-- Result: 554/554 tests passed. The current Slice 3 change adds 41/41 focused authority-port tests covering the exact three-export module; the strict `replayed | conflict | snapshot` read result with historical replay independent of current actor, turn, phase, version, and winner; exact 22-field current snapshot construction only after `not_found` and live-trigger consistency; detachment/freezing, privacy, and mutation-zero behavior; strict input/reentrancy/destroy rejection; exact version conflict; one atomic `N` to `N+1` commit; complete live-root fingerprint and transaction-ownership revalidation immediately before final replacement; exact commit replay without a second publication; live actor-eligibility rejection; all 3 read and 12 approved pre-publication commit fault stages; public/developer snapshot isolation; and production-route nonconnection. The 182/182 related regression tests, `npm.cmd run sample`, changed-module syntax checks, and `git diff --check` passed. Slice 1 canonical-state foundation and Slice 2 pure projection/authorized-delta translation remain merged. No dependency, package, lockfile, workflow, browser UI, CLI route, production server route, Provider, Delivery, Coordinator cleanup, legacy cutover, or Structured Route wiring changed.
+- Result: 568/568 tests passed. The current Slice 4 change adds 13/13 focused rewritten-route tests plus the Coordinator attempt-terminalization test. They cover exact public surfaces, strict trigger/configuration rejection, authoritative replay/conflict short-circuiting, actual `WerewolfGame` atomic commit and cleanup, cleanup-pending isolation, same-version authority-drift rejection, authentic raw-body rejection, one-active-operation behavior, cancellation, exact three-attempt retry exhaustion, logical deadline, and synchronous timer publication safety. `npm.cmd run sample`, changed-module syntax checks, browser-safe import/source scans, and `git diff --check` passed. Slices 1–3 remain merged. No dependency, package, lockfile, workflow, dispatch, legacy NPC path, feature cutover, Delivery, browser UI, CLI route, or server route changed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -79,9 +79,9 @@ Last updated: 2026-07-18
 
 ## Next Recommended Task
 
-1. Review and merge the current Slice 3 engine-owned narrow authority-port change.
-2. Keep Structured Route/production integration BLOCKED until Slice 3 is reviewed and merged.
-3. After merge, define Slice 4 from the new authoritative baseline; retain the legacy provisional NPC transaction as the active runtime route until that separately approved cutover.
+1. Review the current Slice 4 rewritten Structured Route change independently; it remains production-unconnected.
+2. After Slice 4 is merged, define Slice 5 Delivery orchestration from the new authoritative baseline.
+3. Keep Slice 6 production integration, dispatch cutover, and legacy suppression blocked until their separate Goal is approved.
 
 ## Read This First Next Time
 
@@ -101,7 +101,7 @@ Last updated: 2026-07-18
 - GitHub private repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slice 1 canonical registries and Slice 2 pure projection/authorized-delta translation are merged. Slice 3's engine-owned narrow read and atomic commit operations are implemented in the current change and remain pending review/merge; they are not called by `dispatchPlayerAction()`, the legacy NPC path, Provider, Delivery, browser, CLI, or server. The old Structured Route Goal remains BLOCKED, and Slice 4 production orchestration/cutover has not started.
+- The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slices 1–3 are merged. Slice 4's rewritten Structured Route implementation is present only in the current change and is not imported by `dispatchPlayerAction()`, the legacy NPC path, Delivery, browser, CLI, or server. The original Structured Route Goal remains a historical BLOCKED record; Slice 5 Delivery orchestration and Slice 6 production integration/cutover have not started.
 - Game state is intentionally kept in memory only; save/load is not planned.
 
 ## Working Rule

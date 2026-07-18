@@ -2756,7 +2756,7 @@ Structured Route does not own a generic `readSnapshot`/`compareAndSwap` adapter.
 
 Canonical `reactionPlans` and `npcReactionCommitIdempotencyRecords` are owned by the existing `state.conversation` root. The stored NPC player array remains the only NPC participant source; `participantId`, `participantClass`, and `maySpeak` are engine-derived transaction evidence, not a second persisted participant registry. Existing publication, commit-result, claim, event, and order-counter registries remain shared and are not duplicated.
 
-This documentation decision does not implement the state fields, projection, translator, authority port, or route. Structured Route remains blocked until the canonical-state foundation, pure projection/delta translator, and engine-owned authority port are separately merged.
+Slices 1–3 implement the canonical-state foundation, pure projection/delta translator, and engine-owned authority port. The rewritten Slice 4 route uses the read operation as a strict `replayed | conflict | current snapshot` boundary: replay and conflict construct no current projection, while only a current-applicable snapshot may enter new planning. The original pre-Slice-3 Structured Route Goal remains a historical BLOCKED record and was not resumed. Slice 4 remains production-unconnected; Delivery orchestration and production cutover are later slices.
 
 The pre-provider read-only entrypoint is:
 

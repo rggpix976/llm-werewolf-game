@@ -202,6 +202,31 @@ export function observeNpcReactionCandidate(root, { gameSessionId, reactionPlanI
   return freeze({ schemaVersion: SCHEMA_VERSION, status: "validated", root: copy });
 }
 
+export function terminalizeNpcReactionAttempt(root, {
+  gameSessionId, reactionPlanId, reactionAttemptId, terminalStatus
+}) {
+  validateNpcReactionCoordinatorRoot(root);
+  assertSession(root, gameSessionId);
+  if (!TERMINAL_ATTEMPT_STATUSES.has(terminalStatus) || terminalStatus === "accepted") {
+    fail("invalid_coordinator_state");
+  }
+  const attempt = ownedAttempt(root, reactionPlanId, reactionAttemptId);
+  if (TERMINAL_ATTEMPT_STATUSES.has(attempt.status)) {
+    if (attempt.status !== terminalStatus) fail("invalid_coordinator_state");
+    return freeze({ schemaVersion: SCHEMA_VERSION, status: "already_terminal", root });
+  }
+  const legal = {
+    attempting: ["failed", "timed_out", "aborted"],
+    candidate_received: ["rejected", "aborted"],
+    validated: ["rejected", "aborted"]
+  }[attempt.status];
+  if (!legal?.includes(terminalStatus)) fail("invalid_coordinator_state");
+  const copy = clone(root);
+  copy.reactionAttempts[reactionAttemptId].status = terminalStatus;
+  validateNpcReactionCoordinatorRoot(copy);
+  return freeze({ schemaVersion: SCHEMA_VERSION, status: "terminalized", root: copy });
+}
+
 export function terminalizeNpcReactionIdentityConflict(root, { gameSessionId, reactionPlanId }) {
   validateNpcReactionCoordinatorRoot(root);
   assertSession(root, gameSessionId);
