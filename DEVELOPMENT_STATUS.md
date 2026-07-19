@@ -4,7 +4,7 @@ Last updated: 2026-07-19
 
 ## Current State
 
-- The Phase 6 NPC authority-integration architecture decision and Slices 1–5 are merged. Slice 6 now wires the existing default-off `NPC_STRUCTURED_REACTION_MODE` to the production Player-question boundary: disabled sessions retain the unchanged legacy NPC provider/display path, while enabled sessions exclusively invoke the Structured Route, suppress legacy fallback for that logical reaction, and use eligible committed outcomes only as hints to the delivery orchestrator. Browser and CLI construct their existing safe sink wrappers; the server registers the strict candidate endpoint only while the flag is enabled. Delivery discovery remains controller-owned, authoritative writes remain `WerewolfGame.state`-owned, route/provider failures stay redacted, reset invalidates route/delivery callbacks, and no delivery failure reruns Provider, Validation, Preparation, or Commit. The original Structured Route Goal was not resumed. It was superseded by the rewritten replacement Goal. After the replacement implementation was merged, the obsolete BLOCKED Goal was manually removed from the goal-management system. Its historical context remains in Git history and project documents.
+- The Phase 6 NPC authority-integration architecture decision and Slices 1–6 are merged on `master`; PR #58 was incorporated by the normal two-parent merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572`. Slice 6 wires the existing default-off `NPC_STRUCTURED_REACTION_MODE` to the production Player-question boundary: disabled sessions retain the unchanged legacy NPC provider/display path, while enabled sessions exclusively invoke the Structured Route, suppress legacy fallback for that logical reaction, and use eligible committed outcomes only as hints to the delivery orchestrator. Browser and CLI construct their existing safe sink wrappers; the server registers the strict candidate endpoint only while the flag is enabled. Delivery discovery remains controller-owned, authoritative writes remain `WerewolfGame.state`-owned, route/provider failures stay redacted, reset invalidates route/delivery callbacks, and no delivery failure reruns Provider, Validation, Preparation, or Commit. The original Structured Route Goal was not resumed. It was superseded by the rewritten replacement Goal. After the replacement implementation was merged, the obsolete BLOCKED Goal was manually removed from the goal-management system. Its historical context remains in Git history and project documents.
 
 - Conversation pipeline migration Phases 1-5 are merged on `master`: pure domain contracts/renderers, shadow transport, authoritative player-candidate validation, atomic player conversation commit, exact compatibility mapping, structured player history/delivery, explicit pre-cutover drain, and browser/CLI sink acknowledgement. Migration feature flags remain default-off with strict dependencies.
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. Phase 5 resolves that identity without positional/text inference and keeps history, live delivery, and acknowledgement separate.
@@ -39,7 +39,11 @@ Last updated: 2026-07-19
 - NPC response generation uses an injectable asynchronous provider interface.
 - Added a secure server-side OpenAI response provider using the official Responses API raw HTTP shape.
 - Support for `LLM_PROVIDER=openai` with strict environment variable configuration.
-- Server-side API endpoints: `GET /api/runtime-config` and `POST /api/npc-response`.
+- Server-side API endpoints include:
+  - `GET /api/runtime-config`
+  - `POST /api/npc-response`
+  - `POST /api/interpret-player-input` while the corresponding Interpreter flag is enabled
+  - `POST /api/generate-npc-reaction-candidate` while `NPC_STRUCTURED_REACTION_MODE` is enabled; the endpoint is absent and returns `404` while the flag is disabled
 - Implemented strict server-side request validation with a 64 KiB byte-limit and allowlisted fields.
 - Redaction of private evidence (seer results) when public claim is not allowed.
 - Browser-side `HttpResponseProvider` and `SessionManager` for robust stale response prevention and request cancellation.
@@ -51,7 +55,7 @@ Last updated: 2026-07-19
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 6 inert foundation/projection, browser-safe identity generation, response-provider invariants, diagnostics, configuration, request validation, and API endpoints have automated coverage. The current verified count is recorded below.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 6 canonical foundation/projection, Structured Route, Delivery controller/orchestrator/sinks, production integration, browser-safe identity generation, response-provider invariants, diagnostics, configuration, request validation, and API endpoints have automated coverage. The current verified count is recorded below.
 
 ## Last Verified
 
@@ -61,7 +65,7 @@ Last updated: 2026-07-19
   - `npm.cmd run sample`
   - `git diff --check`
   - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
-- Result: 619/619 tests passed. The Slice 6 production integration suite passes 10/10 and the focused upstream/Provider/production integration suites pass 39/39. Coverage includes exact transmitted Structured Outputs schema composition, all nine proposal variants, strict `oneOf` absence, valid OpenAI response parsing through injected transport, ten Retry-After vectors, one invocation with missing retry evidence, exact integration and authority surfaces, flag-off legacy preservation, flag-on CLI and Browser commit/delivery, legacy suppression, raw Browser transport bytes, feature-gated server registration, replay without delivery, Candidate rejection/provider failure without fallback, observer isolation, malformed/concurrent public actions, reset, privacy/redaction, and existing controller retry/acknowledgement/timer/consumer-generation matrices. `npm.cmd run sample`, changed-module syntax checks, browser-safe import scans, and `git diff --check` passed. No dependency, package, lockfile, or workflow changed. No API key was created or used and no billable OpenAI smoke was run; the existing real OpenAI smoke below predates Slice 6 and is not evidence of the new candidate route.
+- Result: 619/619 local tests passed. The Slice 6 production integration suite passes 10/10 and the focused upstream/Provider/production integration suites pass 39/39. Coverage includes exact transmitted Structured Outputs schema composition, all nine proposal variants, strict `oneOf` absence, valid OpenAI response parsing through injected transport, ten Retry-After vectors, one invocation with missing retry evidence, exact integration and authority surfaces from the canonical foundation through production integration, flag-off legacy preservation, flag-on CLI and Browser commit/delivery, legacy suppression, raw Browser transport bytes, feature-gated server registration, replay without delivery, Candidate rejection/provider failure without fallback, observer isolation, malformed/concurrent public actions, reset, privacy/redaction, and existing controller retry/acknowledgement/timer/consumer-generation matrices. `npm.cmd run sample`, changed-module syntax checks, browser-safe import scans, and `git diff --check` passed. PR #58's `PR Review Bundle` succeeded as a `pull_request` workflow for approved HEAD `544a1dd2fcc7421a2340ba56074251bbe9eaa80e`; no separate workflow run for merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572` is claimed. No dependency, package, lockfile, or workflow changed. No API key was created or used and no billable OpenAI smoke was run; the existing real OpenAI smoke below predates Slice 6 and is not evidence of the new candidate route.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -78,8 +82,8 @@ Last updated: 2026-07-19
 
 ## Next Recommended Task
 
-1. Review the default-off Slice 6 production cutover, legacy suppression, Browser/CLI delivery, and candidate endpoint wiring independently.
-2. Keep the flag disabled for rollback until that review is complete. Persistence/cross-process delivery recovery, authentication, distributed rate limiting, and Phase 7/8 work remain out of scope.
+1. Keep `NPC_STRUCTURED_REACTION_MODE` default-off and define a separate post-merge release-readiness/acceptance-audit Goal before any operational enablement.
+2. That future audit may cover the end-to-end flag-on pseudo/mock path, failure injection, timeout/cancel/reset/late callbacks, duplicate suppression, privacy/security, observability, rollback, and final documentation. This docs-only reconciliation implements none of those items, performs no billable OpenAI smoke, and does not start Phase 7/8. Persistence/cross-process recovery, authentication, and distributed rate limiting remain out of scope.
 
 ## Read This First Next Time
 
@@ -96,10 +100,10 @@ Last updated: 2026-07-19
 ## Current Git/GitHub State
 
 - Local Git repository exists.
-- GitHub private repository exists: `https://github.com/rggpix976/llm-werewolf-game`
+- GitHub public repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slices 1–5 are merged on `master`. Slice 6 is implemented in Draft PR #58 but remains unmerged: `NPC_STRUCTURED_REACTION_MODE` is default-off, disabled sessions preserve the legacy NPC Provider/display path, and enabled sessions select the Structured Route, engine-owned atomic Commit, and canonical Delivery path without a legacy fallback for the same logical reaction. Do not enable the flag until PR #58 is merged and its independent review is complete. The original Structured Route Goal was superseded and its obsolete BLOCKED goal-management record was manually removed.
+- The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slices 1–6 are merged on `master`; the authoritative baseline is merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572`, whose approved PR #58 second parent is `544a1dd2fcc7421a2340ba56074251bbe9eaa80e`. PR #58 is MERGED by a normal two-parent merge commit. `NPC_STRUCTURED_REACTION_MODE` remains default-off: disabled sessions preserve the legacy NPC Provider/display path, while enabled sessions select the Structured Route, engine-owned atomic Commit, and canonical Delivery path without a legacy fallback for the same logical reaction. The original Structured Route Goal was superseded and its obsolete BLOCKED goal-management record was manually removed.
 - Game state is intentionally kept in memory only; save/load is not planned.
 
 ## Working Rule

@@ -110,11 +110,13 @@ Phase 4を有効にすると、検証済みplayer input、AcceptedSpeechAct、se
 
 Phase 5を有効にすると、browser/CLIはrequested consumer modeとしてstructured modeを要求します。初回のOFF→ON切替ではexplicit pre-cutover drainを実行し、必要なlegacy delivery evidenceがすべて揃うまではeffective modeをlegacyのまま維持します。rollbackは`PLAYER_STRUCTURED_CONSUMER_MODE=false`へ戻します。rollbackや切替によってstructured recordsまたはlegacy storageが削除されることはありません。persistence/reload recoveryとmulti-tab coordinationは対象外です。
 
-Phase 6の`NPC_STRUCTURED_REACTION_MODE`はdefault-offです。`false`では既存legacy NPC Provider／表示経路を維持します。`PLAYER_CONVERSATION_COMMIT_MODE=true`を前提として`true`にすると、受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続し、同一logical reactionのlegacy Providerおよびlegacy表示fallbackを抑止します。PR #58のmergeと独立レビューが完了するまでは有効化しません。
+Phase 6の`NPC_STRUCTURED_REACTION_MODE`はdefault-offです。`false`では既存legacy NPC Provider／表示経路を維持します。`PLAYER_CONVERSATION_COMMIT_MODE=true`を前提として`true`にすると、受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続し、同一logical reactionのlegacy Providerおよびlegacy表示fallbackを抑止します。PR #58は2026-07-19に通常のmerge commitで`master`へ取り込み済みですが、flagは安全な既定値として`false`を維持します。有効化は別の明示的な運用判断と検証を経て行います。`false`へのrollbackは将来のreactionをlegacy経路へ戻しますが、既にauthoritative commit済みのstructured publicationは巻き戻しません。
 
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは引き続き実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックのみを使用します。
 
 2026-07-01にリポジトリ所有者によって、制御された実OpenAIスモークテストが1回成功しました。このテストでは、再試行と `pseudo` フォールバックを無効化した状態で、本番のローカルサーバーおよびプロバイダーのパスを介して正確に1回の実リクエストが行われ、正常終了を確認しました。APIキーはコミットされず、検証後にローカルシェル環境から削除されています。これは制御されたローカル環境での統合を確認するものであり、本プロジェクトを本番環境対応（認証や分散レート制限の実装など）とするものではありません。
+
+この2026-07-01の実行はSlice 6より前に行われたものであり、legacy/default-off OpenAI response経路だけを検証しています。Structured Routeが使用する `/api/generate-npc-reaction-candidate`、新しいcandidate schema、canonical Commit／Delivery経路の実OpenAI transportを検証した証拠ではありません。Slice 6 candidate routeのbillable live smokeは未実施です。
 
 ### 手動検証用ツール (Mock Server)
 
@@ -183,7 +185,7 @@ Remove-Item Env:OPENAI_MODEL
 - **フォールバックなし**: `pseudo` モードへの自動フォールバックは無効化されています。
 - **トークン制限**: 最大出力トークン数は120に制限されています。
 - **機密保護**: APIキーや生のレスポンス全文はコンソールに出力されません。
-- **プロダクションパス**: 本番と同じゲーム生成、検証、サーバーロジックを介して実行されます。
+- **プロダクションパス（2026-07-01時点）**: 当時のlegacy/default-offゲーム生成、検証、サーバーロジックを介して実行されます。Slice 6 candidate routeは対象外です。
 
 Julesや自動テスト環境では実APIを呼び出しません。
 
