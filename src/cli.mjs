@@ -2,20 +2,55 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { WerewolfGame } from "./gameEngine.mjs";
 import { parseConfig } from "./config.mjs";
-import { PseudoInterpreterProvider } from "./interpreterTransport.mjs";
+import { PseudoInterpreterProvider, createLocalInterpreterHttpProvider } from "./interpreterTransport.mjs";
 import { sanitizeTerminalText } from "./playerStructuredConsumer.mjs";
 import { consumeLiveActionDisplay, dispatchPlayerActionWithConsumerMode, writeCliPublication } from "./playerDisplaySink.mjs";
+import { createNpcReactionCandidateProvider } from "./npcReactionCandidateProvider.mjs";
+import { createLocalNpcReactionCandidateTransport } from "./npcReactionCandidateTransport.mjs";
+import { createOpenAINpcReactionCandidateInvoker, createPseudoNpcReactionCandidateInvoker } from "./npcReactionCandidateUpstream.mjs";
+import { createNpcCliPublicationSink } from "./npcCliPublicationSink.mjs";
+import { createProductionNpcStructuredDeliveryIntegration } from "./npcProductionIntegration.mjs";
 
 const showDev = process.argv.includes("--show-dev");
 const runtimeConfig = parseConfig(process.env);
+const npcCandidateProvider = createNpcReactionCandidateProvider({
+  invokeProvider: runtimeConfig.provider === "openai"
+    ? createOpenAINpcReactionCandidateInvoker(runtimeConfig.openai)
+    : createPseudoNpcReactionCandidateInvoker()
+});
+let npcServerCorrelationOrder = 0;
 const game = WerewolfGame.create({
   seed: Date.now(),
   shuffleRoles: true,
-  interpreterProvider: new PseudoInterpreterProvider(),
+  interpreterProvider: createLocalInterpreterHttpProvider(new PseudoInterpreterProvider(), { createServerCorrelationId: () => `server-cli-interpreter-${globalThis.crypto.randomUUID()}` }),
   interpreterValidationEnabled: runtimeConfig.interpreterValidationMode,
   playerConversationCommitEnabled: runtimeConfig.playerConversationCommitMode,
   playerStructuredConsumerEnabled: runtimeConfig.playerStructuredConsumerMode,
-  npcStructuredReactionEnabled: runtimeConfig.npcStructuredReactionMode
+  npcStructuredReactionEnabled: runtimeConfig.npcStructuredReactionMode,
+  createNpcStructuredProductionIntegration: ({ gameSessionId, authorityPort, deliveryReadPort }) => {
+    const sink = createNpcCliPublicationSink({
+      write: async ({ text }) => { if (text) console.log(`\n${text}`); },
+      failureGuarantee: "unknown_on_failure"
+    });
+    return createProductionNpcStructuredDeliveryIntegration({
+      gameSessionId,
+      authorityPort,
+      deliveryReadPort,
+      candidateTransport: createLocalNpcReactionCandidateTransport({
+        provider: npcCandidateProvider,
+        createServerCorrelationId: () => `server-cli-${++npcServerCorrelationOrder}`
+      }),
+      sink,
+      consumer: Object.freeze({ consumerId: "cli-npc-main", sinkType: "cli" }),
+      createId: () => globalThis.crypto.randomUUID(),
+      nowUtc: () => new Date().toISOString(),
+      nowMonotonicMs: () => Math.floor(globalThis.performance.now()),
+      scheduleTimer: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+      cancelTimer: (handle) => globalThis.clearTimeout(handle),
+      createAbortController: () => new AbortController(),
+      observer: () => {}
+    });
+  }
 });
 
 let printedLogIndex = 0;
@@ -111,6 +146,7 @@ while (true) {
 }
 
 rl.close();
+game.destroy();
 
 function printIntro() {
   console.log("LLM人狼 最小プロトタイプ");

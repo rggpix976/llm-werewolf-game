@@ -11,7 +11,23 @@ function providerError(code, message, { retryable = false, retryAfterMs } = {}) 
 
 export class PseudoInterpreterProvider {
   constructor(options = {}) { this.name = options.name ?? "pseudo"; this.now = options.now ?? Date.now; }
-  async interpretPlayerInput(request, { signal } = {}) { validateInterpreterRequest(request); if (signal?.aborted) throw signal.reason; const started = this.now(), modelOutput = { schemaVersion: 1, alternatives: [{ alternativeId: "alternative-1", speechActs: [{ type: "non_game_statement", sourceSpan: { start: 0, end: [...request.rawText].length } }], confidence: 1 }] }, result = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, modelOutput, diagnostics: { providerName: this.name, model: "deterministic-interpreter-v1", attemptCount: 1, elapsedMs: Math.max(0, this.now() - started) } }; return validateInterpreterProviderResult(result, request); }
+  async interpretPlayerInput(request, { signal, targetNpcId } = {}) { validateInterpreterRequest(request); if (signal?.aborted) throw signal.reason; const started = this.now(), target = request.publicRoster.some((entry) => entry.playerId === targetNpcId && entry.playerId !== request.playerContext.playerId) ? targetNpcId : null, speechAct = target ? { type: "question", targetId: target, topic: "opinion", sourceSpan: { start: 0, end: [...request.rawText].length } } : { type: "non_game_statement", sourceSpan: { start: 0, end: [...request.rawText].length } }, modelOutput = { schemaVersion: 1, alternatives: [{ alternativeId: "alternative-1", speechActs: [speechAct], confidence: 1 }] }, result = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, modelOutput, diagnostics: { providerName: this.name, model: "deterministic-interpreter-v1", attemptCount: 1, elapsedMs: Math.max(0, this.now() - started) } }; return validateInterpreterProviderResult(result, request); }
+}
+
+export function createLocalInterpreterHttpProvider(provider, { createServerCorrelationId } = {}) {
+  if (!provider || typeof provider.interpretPlayerInput !== "function" || typeof createServerCorrelationId !== "function") throw new TypeError("Invalid local interpreter transport dependency.");
+  return Object.freeze({
+    async interpretPlayerInput(request, options = {}) {
+      const result = await provider.interpretPlayerInput(request, options);
+      return Object.freeze({
+        schemaVersion: 1,
+        requestId: request.requestId,
+        correlationId: request.correlationId,
+        serverCorrelationId: createServerCorrelationId(),
+        result
+      });
+    }
+  });
 }
 
 export class OpenAIInterpreterProvider {

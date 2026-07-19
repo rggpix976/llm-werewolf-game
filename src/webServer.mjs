@@ -11,6 +11,8 @@ import { validateNpcResponseRequest } from "./validator.mjs";
 import { validateInterpreterHttpResponse, validateInterpreterRequest } from "./conversation/contracts.mjs";
 import { sha256Fingerprint } from "./conversation/ids.mjs";
 import { OpenAIInterpreterProvider, PseudoInterpreterProvider } from "./interpreterTransport.mjs";
+import { createNpcReactionCandidateHttpHandler, createNpcReactionCandidateProvider } from "./npcReactionCandidateProvider.mjs";
+import { createOpenAINpcReactionCandidateInvoker, createPseudoNpcReactionCandidateInvoker } from "./npcReactionCandidateUpstream.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -35,6 +37,12 @@ export function createRequestHandler(options = {}) {
   const rateLimiter = options.rateLimiter || createRateLimiter(config);
   const interpreterRateLimiter = options.interpreterRateLimiter || createRateLimiter(config);
   const interpreterProvider = config.interpreterShadowMode || config.interpreterValidationMode ? (options.interpreterProvider || createInterpreterProvider(config)) : null;
+  const candidateHandler = config.npcStructuredReactionMode
+    ? createNpcReactionCandidateHttpHandler({
+        provider: options.npcReactionCandidateProvider || createCandidateProvider(config),
+        createServerCorrelationId: () => `server-${randomUUID()}`
+      })
+    : null;
   const interpreterRequests = new Map();
 
   return async (request, response) => {
@@ -49,6 +57,11 @@ export function createRequestHandler(options = {}) {
 
       if (pathname === "/api/npc-response" && request.method === "POST") {
         return await handleNpcResponse(request, response, provider, rateLimiter);
+      }
+
+      if (pathname === "/api/generate-npc-reaction-candidate" && request.method === "POST") {
+        if (!candidateHandler) { response.writeHead(404, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify({ error: "Not found" })); return; }
+        return await handleNpcCandidateRequest(request, response, candidateHandler);
       }
 
       if (pathname === "/api/interpret-player-input" && request.method === "POST") {
@@ -95,6 +108,54 @@ export function createRequestHandler(options = {}) {
       sendError(response, error.status || 500, error.message || "Internal server error", error.type, error.diagnostics);
     }
   };
+}
+
+async function handleNpcCandidateRequest(request, response, handler) {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  const onClose = () => { if (!response.writableEnded) controller.abort(); };
+  request.on("aborted", onAbort);
+  response.on("close", onClose);
+  try {
+    const bodyBytes = await readRawBody(request, 65_537);
+    const result = await handler.handle({
+      method: "POST",
+      path: "/api/generate-npc-reaction-candidate",
+      contentTypeHeader: request.headers["content-type"] ?? null,
+      contentEncodingHeader: request.headers["content-encoding"] ?? null,
+      bodyBytes
+    }, { signal: controller.signal });
+    if (controller.signal.aborted || response.writableEnded || response.destroyed) return;
+    response.writeHead(result.status, {
+      "Content-Type": result.headers["content-type"],
+      "Content-Encoding": result.headers["content-encoding"],
+      "Cache-Control": "no-store"
+    });
+    response.end(JSON.stringify(result.body));
+  } catch (error) {
+    if (!controller.signal.aborted && !response.writableEnded && !response.destroyed) {
+      response.writeHead(error?.status === 413 ? 413 : 400, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(JSON.stringify({ schemaVersion: 1, requestId: null, correlationId: `server-${randomUUID()}`, error: { code: error?.status === 413 ? "body_too_large" : "malformed_json", retryable: false } }));
+    }
+  } finally {
+    request.removeListener("aborted", onAbort);
+    response.removeListener("close", onClose);
+  }
+}
+
+async function readRawBody(request, limit) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+    length += bytes.byteLength;
+    if (length > limit) throw createHttpError(413, "Request body too large");
+    chunks.push(bytes);
+  }
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+  return body;
 }
 
 async function handleInterpreterRequest(request, response, provider, rateLimiter, requestIndex) {
@@ -312,6 +373,13 @@ function createProvider(config) {
 }
 
 function createInterpreterProvider(config) { if (config.provider === "openai") return new OpenAIInterpreterProvider(config.openai); return new PseudoInterpreterProvider(); }
+
+function createCandidateProvider(config) {
+  const invokeProvider = config.provider === "openai"
+    ? createOpenAINpcReactionCandidateInvoker(config.openai)
+    : createPseudoNpcReactionCandidateInvoker();
+  return createNpcReactionCandidateProvider({ invokeProvider });
+}
 
 function createRateLimiter(config) {
   const maxPerMinute = config.openai?.maxRequestsPerMinute || 60;
