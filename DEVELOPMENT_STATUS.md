@@ -39,7 +39,11 @@ Last updated: 2026-07-19
 - NPC response generation uses an injectable asynchronous provider interface.
 - Added a secure server-side OpenAI response provider using the official Responses API raw HTTP shape.
 - Support for `LLM_PROVIDER=openai` with strict environment variable configuration.
-- Server-side API endpoints: `GET /api/runtime-config` and `POST /api/npc-response`.
+- Server-side API endpoints include:
+  - `GET /api/runtime-config`
+  - `POST /api/npc-response`
+  - `POST /api/interpret-player-input` while the corresponding Interpreter flag is enabled
+  - `POST /api/generate-npc-reaction-candidate` while `NPC_STRUCTURED_REACTION_MODE` is enabled; the endpoint is absent and returns `404` while the flag is disabled
 - Implemented strict server-side request validation with a 64 KiB byte-limit and allowlisted fields.
 - Redaction of private evidence (seer results) when public claim is not allowed.
 - Browser-side `HttpResponseProvider` and `SessionManager` for robust stale response prevention and request cancellation.
@@ -51,7 +55,7 @@ Last updated: 2026-07-19
 - A first browser UI adapter is available through `npm.cmd run web`.
 - **Developer Mode** is implemented in the browser UI, providing detailed diagnostics including raw Responses API status, error details, and fallback status.
 - Player-facing logs and developer logs are separated.
-- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 6 inert foundation/projection, browser-safe identity generation, response-provider invariants, diagnostics, configuration, request validation, and API endpoints have automated coverage. The current verified count is recorded below.
+- Core game, conversation contracts, Phase 2-5 migration boundaries, Phase 6 canonical foundation/projection, Structured Route, Delivery controller/orchestrator/sinks, production integration, browser-safe identity generation, response-provider invariants, diagnostics, configuration, request validation, and API endpoints have automated coverage. The current verified count is recorded below.
 
 ## Last Verified
 
