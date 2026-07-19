@@ -66,6 +66,50 @@ export class HttpResponseProvider {
       if (this.sessionManager) this.sessionManager.completePendingRequest(request.requestId, terminalStatus);
     }
   }
+
+  async generateCandidateTransport(request, options = {}) {
+    const controller = new AbortController();
+    const onExternalAbort = () => controller.abort(options.signal.reason);
+    if (options.signal?.aborted) controller.abort(options.signal.reason);
+    else options.signal?.addEventListener("abort", onExternalAbort, { once: true });
+    this.sessionManager?.registerRequest(controller);
+    try {
+      const response = await (this.fetch ?? globalThis.fetch)("/api/generate-npc-reaction-candidate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(request),
+        signal: controller.signal
+      });
+      const bodyBytes = new Uint8Array(await response.arrayBuffer());
+      if (response.status === 200) {
+        return Object.freeze({
+          schemaVersion: 1,
+          status: "success",
+          transportEvidence: Object.freeze({
+            schemaVersion: 1,
+            evidenceType: "npc_reaction_candidate_http_success",
+            httpStatus: 200,
+            contentTypeHeader: response.headers.get("content-type"),
+            contentEncodingHeader: response.headers.get("content-encoding"),
+            bodyBytes
+          })
+        });
+      }
+      let body = null;
+      try { body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bodyBytes)); } catch {}
+      return responseToTransport({
+        status: response.status,
+        headers: {
+          "content-type": response.headers.get("content-type"),
+          "content-encoding": response.headers.get("content-encoding")
+        },
+        body
+      });
+    } finally {
+      options.signal?.removeEventListener("abort", onExternalAbort);
+      this.sessionManager?.unregisterRequest(controller);
+    }
+  }
 }
 
 /**
@@ -132,3 +176,4 @@ export class SessionManager {
   }
 }
 import { validateErrorEnvelope, validateInterpreterHttpResponse, validateInterpreterRequest, validatePendingConversationRequest, validateShadowInterpreterBinding, validateShadowPlayerInputRecord } from "../src/conversation/contracts.mjs";
+import { responseToTransport } from "../src/npcReactionCandidateTransport.mjs";

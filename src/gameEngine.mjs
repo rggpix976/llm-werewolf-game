@@ -160,6 +160,29 @@ export class WerewolfGame {
       }))
     });
     game.addDeveloperLog("initial_player_states", game.createDeveloperSnapshot());
+    if (game.npcStructuredReactionEnabled) {
+      if (typeof options.createNpcStructuredProductionIntegration !== "function") {
+        throw typedError("npc_structured_integration_required");
+      }
+      const authorityPort = Object.freeze({
+        readNpcStructuredReactionSnapshot: game.readNpcStructuredReactionSnapshot.bind(game),
+        commitPreparedNpcReactionAtomically: game.commitPreparedNpcReactionAtomically.bind(game)
+      });
+      const deliveryReadPort = Object.freeze({
+        listCommittedNpcPublicationGraphs: game.listCommittedNpcPublicationGraphs.bind(game),
+        getCanonicalRenderingContext: game.getCanonicalRenderingContext.bind(game)
+      });
+      const integration = options.createNpcStructuredProductionIntegration(Object.freeze({
+        gameSessionId: game.state.gameSessionId,
+        authorityPort,
+        deliveryReadPort
+      }));
+      if (!integration || Reflect.ownKeys(integration).length !== 2
+          || typeof integration.executeNpcReaction !== "function" || typeof integration.reset !== "function") {
+        throw typedError("invalid_npc_structured_integration");
+      }
+      game.npcStructuredProductionIntegration = integration;
+    }
     return game;
   }
 
@@ -185,6 +208,7 @@ export class WerewolfGame {
     this._commandInProgress = false;
     this.npcAuthorityCommitInProgress = false;
     this.npcAuthorityCommitOwner = null;
+    this.npcStructuredProductionIntegration = null;
     this._destroyed = false;
   }
 
@@ -346,6 +370,19 @@ export class WerewolfGame {
     validateCommittedConversationGraph(this._conversationGraph(working.state)); this.phase4FaultInjector("mapping_graph_validation");
     working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
     this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; validateNpcAuthoritativeStateFoundation(working.state); commitState(this.state, working.state);
+    if (this.npcStructuredReactionEnabled) {
+      const structuredNpc = await this.npcStructuredProductionIntegration.executeNpcReaction(Object.freeze({
+        schemaVersion: 1,
+        gameSessionId: this.state.gameSessionId,
+        triggerRequestId: delta.requestId,
+        originatingInputRecordId: delta.inputRecordId
+      }));
+      return {
+        responded: structuredNpc.routeStatus === "committed" || structuredNpc.routeStatus === "committed_cleanup_pending",
+        structuredNpc,
+        conversationCommitResult: structuredClone(prepared.result)
+      };
+    }
     const reactionBinding = Object.freeze({ gameSessionId: this.state.gameSessionId, turnId: this.state.turnId, turnOrder: this.state.turnOrder, preconditionPhase: this.state.phase, preconditionStateVersion: this.state.stateVersion, targetNpcId: target.id, requestId: delta.requestId, correlationId: delta.correlationId, inputRecordId: delta.inputRecordId, requestFingerprint: delta.requestFingerprint });
     const controller = new AbortController(), active = { binding: reactionBinding, controller }; this.activeNpcReaction = active;
     try {
@@ -368,6 +405,42 @@ export class WerewolfGame {
   }
 
   _conversationGraph(state = this.state) { return { ...state.conversation, gameSessionId: state.gameSessionId, legacyPlayerLog: state.playerLog }; }
+
+  listCommittedNpcPublicationGraphs({ gameSessionId } = {}) {
+    if (this._destroyed || gameSessionId !== this.state.gameSessionId) throw typedError("stale_session");
+    validateNpcAuthoritativeStateFoundation(this.state);
+    validateCommittedConversationGraph(this._conversationGraph());
+    const conversation = this.state.conversation;
+    const graphs = conversation.npcReactionCommitIdempotencyRecords.map((idempotencyRecord) => {
+      const reactionPlan = exactOne(conversation.reactionPlans, "reactionPlanId", idempotencyRecord.reactionPlanId);
+      const commitResult = exactOne(conversation.commitResults.filter((value) => value.commitType === "npc_reaction"), "requestId", idempotencyRecord.commitResultRequestId);
+      const publication = exactOne(conversation.publications, "publicationId", idempotencyRecord.npcPublicationId);
+      const claims = commitResult.createdClaimIds.map((id) => exactOne(conversation.claims, "claimId", id));
+      const events = commitResult.createdEventIds.map((id) => exactOne(conversation.events, "eventId", id));
+      const graph = {
+        schemaVersion: 1,
+        contextType: "committed_graph",
+        reactionPlan,
+        idempotencyRecord,
+        commitResult,
+        publication,
+        claims,
+        events,
+        segments: reactionPlan.canonicalSegments
+      };
+      validateReactionPlanReferences(reactionPlan, graph);
+      return structuredClone(graph);
+    }).sort((left, right) => left.publication.publicationSlotOrder - right.publication.publicationSlotOrder);
+    return deepFreeze(graphs);
+  }
+
+  getCanonicalRenderingContext({ gameSessionId, publicationId } = {}) {
+    if (this._destroyed || gameSessionId !== this.state.gameSessionId
+        || typeof publicationId !== "string" || !ID_PATTERN.test(publicationId)) throw typedError("stale_session");
+    const publication = exactOne(this.state.conversation.publications, "publicationId", publicationId);
+    if (publication.recordType !== "npc_canonical_published") throw typedError("invalid_npc_publication");
+    return deepFreeze({ locale: publication.locale, publicParticipantsById: this._publicParticipantsById() });
+  }
 
   _assertReplayCompatibilityMapping(publicationId) {
     const matches = this.state.conversation.playerLegacyDisplayCompatibilityRecords.filter((record) => record.publicationId === publicationId);
@@ -592,7 +665,7 @@ export class WerewolfGame {
     const outcome = validatePhase3Response(response, pending.binding, this.state); pending.responseFingerprint = fingerprint; return outcome;
   }
 
-  destroy() { this._destroyed = true; this.playerPublicationDeliveryController.invalidate(); for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
+  destroy() { this._destroyed = true; this.playerPublicationDeliveryController.invalidate(); try { this.npcStructuredProductionIntegration?.reset(); } catch {} for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
 
   async handlePlayerQuestion(targetIdOrName, playerInput, options = {}) {
     if (this.state.winner) {
@@ -1246,11 +1319,12 @@ function isNpcStructuredTriggerCurrentlyApplicable(state, trigger) {
   return trigger.input.turnId === state.turnId
     && trigger.result.preconditionStateVersion === trigger.input.capturedStateVersion
     && trigger.result.resultingStateVersion === state.stateVersion
+    && state.phase === "player_question"
     && question.acceptedTurnId === state.turnId
     && question.acceptedStateVersion === trigger.result.preconditionStateVersion
-    && question.acceptedPhase === state.phase
+    && typeof question.acceptedPhase === "string"
     && trigger.events.every((event) => event.turnId === state.turnId
-      && event.stateVersion === state.stateVersion && event.occurredPhase === state.phase)
+      && event.stateVersion === state.stateVersion && event.occurredPhase === question.acceptedPhase)
     && state.players.some((player) => player.id === trigger.targetNpcId);
 }
 
@@ -1342,19 +1416,24 @@ function captureNpcAuthorityLivePrecondition(state) {
     turnId: state.turnId,
     turnOrder: state.turnOrder,
     phase: state.phase,
-    rootFingerprint: sha256Fingerprint(state)
+    rootFingerprint: npcAuthorityRootFingerprint(state)
   });
 }
 
 function assertNpcAuthorityLivePrecondition(game, expected, transactionOwner) {
   const state = game.state;
   let rootFingerprint;
-  try { rootFingerprint = sha256Fingerprint(state); }
+  try { rootFingerprint = npcAuthorityRootFingerprint(state); }
   catch { throw npcAuthorityInvariant("invalid_npc_structured_state_replacement"); }
   if (game._destroyed || game.npcAuthorityCommitInProgress !== true || game.npcAuthorityCommitOwner !== transactionOwner
     || state.gameSessionId !== expected.gameSessionId || state.stateVersion !== expected.stateVersion
     || state.turnId !== expected.turnId || state.turnOrder !== expected.turnOrder || state.phase !== expected.phase
     || rootFingerprint !== expected.rootFingerprint) throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
+}
+
+function npcAuthorityRootFingerprint(state) {
+  const { rng, ...plain } = state;
+  return sha256Fingerprint({ ...plain, rngState: rng?.state });
 }
 
 function buildNpcPreparationAuthorityContext(state, actor, requestedActorId = actor?.id) {
@@ -1623,6 +1702,7 @@ function commitState(target, source) {
   Object.assign(target, preparedState); target.players = publishedPlayers.map(({ current }) => current); rng.state = source.rng.state; target.rng = rng;
 }
 function typedError(code) { const error = new Error(code); error.code = code; return error; }
+function exactOne(values, field, identity) { const matches = values.filter((value) => value?.[field] === identity); if (matches.length !== 1) throw typedError("invalid_npc_committed_graph"); return matches[0]; }
 function deepFreeze(value) { Object.freeze(value); for (const child of Object.values(value)) if (child && typeof child === "object" && !Object.isFrozen(child)) deepFreeze(child); return value; }
 function abortError() { const error = new Error("Aborted"); error.name = "AbortError"; return error; }
 

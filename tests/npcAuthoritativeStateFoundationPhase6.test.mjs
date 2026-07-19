@@ -30,6 +30,10 @@ function createGame(options = {}) {
     scenario: "sample",
     shuffleRoles: false,
     createId: ids(),
+    createNpcStructuredProductionIntegration: options.npcStructuredReactionEnabled === true ? () => Object.freeze({
+      async executeNpcReaction() { return Object.freeze({ routeStatus: "route_failed" }); },
+      reset() {}
+    }) : undefined,
     ...options
   });
 }

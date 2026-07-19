@@ -18,7 +18,7 @@ import {
   validateReactionAttemptFoundation
 } from "../src/npcReactionFoundation.mjs";
 
-test("Phase 6 flag defaults off, requires Phase 4, and is public but inert", async () => {
+test("Phase 6 flag defaults off, requires Phase 4, and selects the production integration", async () => {
   const defaults = parseConfig({});
   assert.equal(defaults.npcStructuredReactionMode, false);
   assert.equal(getRuntimeConfig(defaults).npcStructuredReactionMode, false);
@@ -46,14 +46,14 @@ test("Phase 6 flag defaults off, requires Phase 4, and is public but inert", asy
   const enabledRun = await runCompletedQuestion(true);
   assert.equal(disabledRun.game.npcStructuredReactionEnabled, false);
   assert.equal(enabledRun.game.npcStructuredReactionEnabled, true);
-  assert.deepEqual(publicState(enabledRun.game), publicState(disabledRun.game));
-  assert.deepEqual(enabledRun.providerRequests, disabledRun.providerRequests);
-  assert.equal(enabledRun.game.state.stateVersion, 2);
-  assert.equal(enabledRun.game.state.conversation.publications.length, disabledRun.game.state.conversation.publications.length);
+  assert.equal(disabledRun.providerRequests.length, 1);
+  assert.equal(enabledRun.providerRequests.length, 0);
+  assert.equal(disabledRun.game.state.stateVersion, 2);
+  assert.equal(enabledRun.game.state.stateVersion, 1);
 });
 
 test("engine-owned logical and attempt identities are separate, immutable, and mutation-free", async () => {
-  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: true });
+  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false });
   const trigger = pending.game.state.conversation.commitResults.at(-1);
   const before = authoritativeSnapshot(pending.game);
   const foundation = pending.game.createNpcReactionFoundation("npc1", trigger.requestId);
@@ -113,7 +113,7 @@ test("identity factories ignore caller-suggested authoritative IDs and reject in
 });
 
 test("known-information projection is deterministic, strict, isolated, and allowlisted", async () => {
-  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: true, decorate(game) {
+  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false, decorate(game) {
     const actor = game.getPlayer("npc1");
     actor.knownInfo.push({ day: 1, type: "seer_result", visibility: "private", shareable: false, targetId: "npc3", targetName: "Chika", result: "werewolf", text: "ACTOR_PRIVATE_RESULT_TEXT" });
     actor.privateMemory.push({ type: "secret", text: "ACTOR_PRIVATE_MEMORY_SECRET" });
@@ -178,7 +178,7 @@ test("known-information projection is deterministic, strict, isolated, and allow
 });
 
 test("public vote projection uses only structured vote declarations with authoritative ordering and bounds", async () => {
-  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: true });
+  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false });
   const trigger = pending.game.state.conversation.commitResults.at(-1);
   const snapshot = authoritativeSnapshot(pending.game);
   const base = snapshot.conversation.events[0];
@@ -218,7 +218,7 @@ test("public vote projection uses only structured vote declarations with authori
 });
 
 test("execution and attack-death categories reject legacy synthesis and enforce strict public shapes", async () => {
-  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: true });
+  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false });
   const trigger = pending.game.state.conversation.commitResults.at(-1);
   const snapshot = authoritativeSnapshot(pending.game);
   snapshot.publicInfo.push({ type: "execution", playerId: "npc2", text: "LEGACY_EXECUTION_TEXT", hiddenRole: "werewolf" });
@@ -250,7 +250,7 @@ test("execution and attack-death categories reject legacy synthesis and enforce 
 });
 
 test("triggering input is exact, bounded, detached, and excludes unrelated input history", async () => {
-  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: true });
+  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false });
   const trigger = pending.game.state.conversation.commitResults.at(-1);
   const snapshot = authoritativeSnapshot(pending.game);
   const triggerInput = snapshot.conversation.inputRecords.find((record) => record.inputRecordId === trigger.inputRecordId);
@@ -279,7 +279,7 @@ test("triggering input is exact, bounded, detached, and excludes unrelated input
 });
 
 test("public projection fails closed on malformed, duplicate, name-only, and unknown references", async () => {
-  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: true });
+  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false });
   const trigger = pending.game.state.conversation.commitResults.at(-1);
   const original = authoritativeSnapshot(pending.game);
   const base = original.conversation.events[0];
@@ -315,7 +315,7 @@ test("public projection fails closed on malformed, duplicate, name-only, and unk
 });
 
 test("known-information projection rejects unknown, ineligible, stale, and unsupported actors without leaking state", async () => {
-  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: true });
+  const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false });
   const trigger = pending.game.state.conversation.commitResults.at(-1);
   const snapshot = authoritativeSnapshot(pending.game);
   assert.throws(() => buildNpcKnownInformationProjection("missing", trigger.requestId, snapshot), hasCode("actor_not_found"));
@@ -371,6 +371,10 @@ function createGame({ npcStructuredReactionEnabled, responseProvider }) {
     playerConversationCommitEnabled: true,
     playerStructuredConsumerEnabled: false,
     npcStructuredReactionEnabled,
+    createNpcStructuredProductionIntegration: npcStructuredReactionEnabled ? () => Object.freeze({
+      async executeNpcReaction() { return Object.freeze({ routeStatus: "route_failed" }); },
+      reset() {}
+    }) : undefined,
     interpreterProvider: interpreter(),
     responseProvider
   });
