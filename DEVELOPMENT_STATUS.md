@@ -1,10 +1,10 @@
 # Development Status
 
-Last updated: 2026-07-18
+Last updated: 2026-07-19
 
 ## Current State
 
-- The Phase 6 NPC authority-integration architecture decision is accepted. Slices 1–3 are merged: canonical NPC registries live in the sole `WerewolfGame.state` authority, pure projection/authorized-delta translation is available, and the engine owns the exact narrow read/atomic-commit port. Slice 4's rewritten, production-unconnected Structured Route is implemented in the current change and pending merge. It uses only those two authority operations and adds Coordinator planning, bounded provider attempts/deadline, authentic transport evidence, Candidate Validation, Preparation, atomic commit invocation, cleanup/retry, cancellation, and reset. Slice 5 Delivery orchestration and Slice 6 production integration remain unimplemented. The original Structured Route Goal remains a historical BLOCKED record and was not resumed.
+- The Phase 6 NPC authority-integration architecture decision is accepted and Slices 1–4 are merged. The current Slice 5 change adds one production-unconnected NPC publication-delivery orchestrator over the existing controller and browser/CLI sink boundaries. It treats eligible Structured Route results only as pump hints, discovers the canonical pending head through the controller, retains opaque retry authority privately, supports explicit sink and acknowledgement-only retry, consumer replacement, reset, and frozen redacted summaries, and never mutates authoritative state. Slice 6 production integration/cutover remains unimplemented. The original Structured Route Goal was not resumed; it was superseded by the rewritten replacement Goal, and the obsolete BLOCKED Goal was manually removed from the goal-management system.
 
 - Conversation pipeline migration Phases 1-5 are merged on `master`: pure domain contracts/renderers, shadow transport, authoritative player-candidate validation, atomic player conversation commit, exact compatibility mapping, structured player history/delivery, explicit pre-cutover drain, and browser/CLI sink acknowledgement. Migration feature flags remain default-off with strict dependencies.
 - Phase 4 writes exactly one strict `PlayerLegacyDisplayCompatibilityRecord` for each structured player publication and unchanged legacy entry in the same atomic `N -> N+1` transaction. Phase 5 resolves that identity without positional/text inference and keeps history, live delivery, and acknowledgement separate.
@@ -62,7 +62,7 @@ Last updated: 2026-07-18
   - `npm.cmd run sample`
   - `git diff --check`
   - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
-- Result: 581/581 tests passed. The current Slice 4 change includes 26/26 focused rewritten-route tests plus the 19/19 Coordinator suite. They cover exact public surfaces, strict trigger/configuration rejection, authoritative replay/conflict short-circuiting, actual `WerewolfGame` atomic commit and cleanup, cleanup-pending isolation, same-version authority-drift rejection, authentic raw-body rejection, one-active-operation behavior, cancellation, exact three-attempt retry exhaustion, logical deadline, synchronous timer publication safety, transactional planning rollback for every clock/timer registration failure, observer isolation, malformed provider/authority/commit boundaries, legal Coordinator recovery, late-callback suppression, and route reuse after every injected fault. `npm.cmd run sample`, changed-module syntax checks, browser-safe import/source scans, and `git diff --check` passed. Slices 1–3 remain merged. No dependency, package, lockfile, workflow, dispatch, legacy NPC path, feature cutover, Delivery, browser UI, CLI route, or server route changed.
+- Result: 597/597 tests passed. The current Slice 5 change includes 16/16 focused delivery-orchestrator tests, and the combined Delivery, sink-wrapper, Structured Route, and Coordinator suites pass 132/132. Coverage includes exact factory/public surfaces, eligible route hints versus controller-owned discovery, explicit pump, repeat-sink and acknowledgement-only retry, retry exhaustion, ambiguous terminal failure, consumer replacement, reset/late completion, synchronous controller timer ownership, observer isolation, malformed dependency results, frozen redacted output, and production-import isolation. `npm.cmd run sample`, changed-module syntax checks, browser-safe import/source scans, and `git diff --check` passed. Slices 1–4 remain merged. No dependency, package, lockfile, workflow, dispatch, legacy NPC path, feature cutover, `WerewolfGame`, browser UI, CLI route, or server route changed.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -79,9 +79,8 @@ Last updated: 2026-07-18
 
 ## Next Recommended Task
 
-1. Review the current Slice 4 rewritten Structured Route change independently; it remains production-unconnected.
-2. After Slice 4 is merged, define Slice 5 Delivery orchestration from the new authoritative baseline.
-3. Keep Slice 6 production integration, dispatch cutover, and legacy suppression blocked until their separate Goal is approved.
+1. Review the current Slice 5 production-unconnected NPC publication-delivery orchestration independently.
+2. Keep Slice 6 production integration, dispatch cutover, and legacy suppression blocked until their separate Goal is approved.
 
 ## Read This First Next Time
 
@@ -101,7 +100,7 @@ Last updated: 2026-07-18
 - GitHub private repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slices 1–3 are merged. Slice 4's rewritten Structured Route implementation is present only in the current change and is not imported by `dispatchPlayerAction()`, the legacy NPC path, Delivery, browser, CLI, or server. The original Structured Route Goal remains a historical BLOCKED record; Slice 5 Delivery orchestration and Slice 6 production integration/cutover have not started.
+- The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slices 1–4 are merged. Slice 5's delivery orchestrator exists only in the current change and is not imported by `dispatchPlayerAction()`, the legacy NPC path, Structured Route, browser, CLI, server, or `WerewolfGame`. Slice 6 production integration/cutover has not started. The original Structured Route Goal was superseded and its obsolete BLOCKED goal-management record was manually removed.
 - Game state is intentionally kept in memory only; save/load is not planned.
 
 ## Working Rule
