@@ -110,7 +110,7 @@ Phase 4を有効にすると、検証済みplayer input、AcceptedSpeechAct、se
 
 Phase 5を有効にすると、browser/CLIはrequested consumer modeとしてstructured modeを要求します。初回のOFF→ON切替ではexplicit pre-cutover drainを実行し、必要なlegacy delivery evidenceがすべて揃うまではeffective modeをlegacyのまま維持します。rollbackは`PLAYER_STRUCTURED_CONSUMER_MODE=false`へ戻します。rollbackや切替によってstructured recordsまたはlegacy storageが削除されることはありません。persistence/reload recoveryとmulti-tab coordinationは対象外です。
 
-Phase 6の`NPC_STRUCTURED_REACTION_MODE`はdefault-offです。`false`では既存legacy NPC Provider／表示経路を維持します。`PLAYER_CONVERSATION_COMMIT_MODE=true`を前提として`true`にすると、受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続し、同一logical reactionのlegacy Providerおよびlegacy表示fallbackを抑止します。PR #58のmergeと独立レビューが完了するまでは有効化しません。
+Phase 6の`NPC_STRUCTURED_REACTION_MODE`はdefault-offです。`false`では既存legacy NPC Provider／表示経路を維持します。`PLAYER_CONVERSATION_COMMIT_MODE=true`を前提として`true`にすると、受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続し、同一logical reactionのlegacy Providerおよびlegacy表示fallbackを抑止します。PR #58は2026-07-19に通常のmerge commitで`master`へ取り込み済みですが、flagは安全な既定値として`false`を維持します。有効化は別の明示的な運用判断と検証を経て行います。`false`へのrollbackは将来のreactionをlegacy経路へ戻しますが、既にauthoritative commit済みのstructured publicationは巻き戻しません。
 
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは引き続き実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックのみを使用します。
 
