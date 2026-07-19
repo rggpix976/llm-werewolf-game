@@ -9,6 +9,7 @@ import {
   createNpcReactionCandidateHttpHandler,
   createNpcReactionCandidateProvider
 } from "../src/npcReactionCandidateProvider.mjs";
+import { createOpenAINpcReactionCandidateInvoker } from "../src/npcReactionCandidateUpstream.mjs";
 
 const REQUEST_FIELDS = [
   "schemaVersion", "operation", "gameSessionId", "reactionPlanId", "reactionAttemptId", "requestId",
@@ -280,6 +281,103 @@ test("reserved candidate kinds remain candidate-validation ownership without aut
     assert.equal(validation.rejection.reasonCode, "unsupported_in_phase6");
     assert.equal(validation.rejection.stage, "structure");
     assert.deepEqual(state, before);
+  }
+});
+
+test("OpenAI candidate transport sends only supported nested anyOf variants", async () => {
+  const request = requestFixture();
+  const before = structuredClone(request);
+  const candidate = candidateFixture();
+  let fetchCalls = 0;
+  let sentBody;
+  const invoke = createOpenAINpcReactionCandidateInvoker({
+    apiKey: "unit-test-credential",
+    model: "test-model",
+    now: () => 0,
+    fetch: async (_url, options) => {
+      fetchCalls += 1;
+      sentBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        async json() {
+          return { status: "completed", output_text: JSON.stringify(candidate) };
+        }
+      };
+    }
+  });
+
+  const result = await invoke(request);
+  const format = sentBody.text.format;
+  const variants = format.schema.properties.proposals.items.anyOf;
+  assert.equal(fetchCalls, 1);
+  assert.equal(format.strict, true);
+  assert.equal(countJsonKey(format.schema, "oneOf"), 0);
+  assert.equal(countJsonKey(format.schema, "anyOf"), 1);
+  assert.deepEqual(variants.map((variant) => variant.properties.proposalType.const), [
+    "suspicion", "vote_declaration", "role_claim", "result_claim",
+    "commentary", "answer", "acknowledgement", "decline", "clarification"
+  ]);
+  for (const variant of variants) {
+    assert.equal(variant.type, "object");
+    assert.equal(variant.additionalProperties, false);
+    assert.equal(variant.required.includes("proposalType"), true);
+  }
+  assert.deepEqual(variants.slice(0, 4).map((variant) => variant.required), [
+    ["proposalType", "targetId"],
+    ["proposalType", "targetId"],
+    ["proposalType", "claimedRole"],
+    ["proposalType", "targetId", "result"]
+  ]);
+  assert.deepEqual(result.candidate, candidate);
+  assert.deepEqual(request, before);
+});
+
+test("OpenAI Retry-After accepts only explicit bounded delta-seconds without hidden invocation", async (t) => {
+  const vectors = [
+    ["missing", null, false],
+    ["empty", "", false],
+    ["malformed", "later", false],
+    ["negative", "-1", false],
+    ["decimal", "0.5", false],
+    ["unsafe integer", "9007199254740992", false],
+    ["above maximum", "3", false],
+    ["HTTP-date", "Sun, 19 Jul 2026 00:00:01 GMT", false],
+    ["explicit zero", "0", true],
+    ["bounded integer", "1", true]
+  ];
+
+  for (const [name, rawRetryAfter, retryable] of vectors) {
+    await t.test(name, async () => {
+      let fetchCalls = 0;
+      const invoke = createOpenAINpcReactionCandidateInvoker({
+        apiKey: "unit-test-credential",
+        model: "test-model",
+        now: () => 0,
+        fetch: async () => {
+          fetchCalls += 1;
+          return {
+            ok: false,
+            status: 429,
+            headers: { get: (headerName) => headerName === "retry-after" ? rawRetryAfter : null }
+          };
+        }
+      });
+      const provider = createNpcReactionCandidateProvider({
+        invokeProvider: invoke,
+        now: () => 0,
+        setTimeout: () => 1,
+        clearTimeout: () => {}
+      });
+      await assert.rejects(provider.generateCandidate(requestFixture()), (error) => {
+        assert.equal(error.name, "NpcReactionCandidateProviderError");
+        assert.equal(error.code, "rate_limited");
+        assert.equal(error.retryable, retryable);
+        return true;
+      });
+      assert.equal(fetchCalls, 1);
+    });
   }
 });
 
@@ -629,6 +727,15 @@ test("provider module remains browser-safe, isolated, and exposes only closed er
   assert.equal(source.includes("fallback"), false);
   assert.equal(source.includes("runProviderWithRetry"), false);
 });
+
+function countJsonKey(value, key) {
+  if (Array.isArray(value)) return value.reduce((count, item) => count + countJsonKey(item, key), 0);
+  if (!value || typeof value !== "object") return 0;
+  return Object.entries(value).reduce(
+    (count, [field, nested]) => count + (field === key ? 1 : 0) + countJsonKey(nested, key),
+    0
+  );
+}
 
 function utf8Length(value) {
   return new TextEncoder().encode(value).byteLength;

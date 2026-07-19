@@ -1,3 +1,5 @@
+const MAXIMUM_RETRY_AFTER_SECONDS = 2;
+
 const CANDIDATE_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -7,7 +9,7 @@ const CANDIDATE_SCHEMA = Object.freeze({
     proposals: {
       type: "array", minItems: 1, maxItems: 16,
       items: {
-        oneOf: [
+        anyOf: [
           proposal("suspicion", { targetId: idSchema() }, ["targetId"]),
           proposal("vote_declaration", { targetId: idSchema() }, ["targetId"]),
           proposal("role_claim", { claimedRole: { enum: ["seer", "werewolf", "citizen"] } }, ["claimedRole"]),
@@ -91,9 +93,11 @@ export function createOpenAINpcReactionCandidateInvoker(options = {}) {
       throw upstreamError("provider_unavailable", { retryable: true });
     }
     if (!response.ok) {
-      const retryAfter = Number(response.headers.get("retry-after"));
       if (response.status === 401 || response.status === 403) throw upstreamError("provider_auth_failure", { status: response.status });
-      if (response.status === 429) throw upstreamError("rate_limited", { status: 429, retryAfterMs: Number.isFinite(retryAfter) ? retryAfter * 1000 : undefined });
+      if (response.status === 429) throw upstreamError("rate_limited", {
+        status: 429,
+        retryAfterMs: parseRetryAfterMs(response.headers)
+      });
       if (response.status >= 500) throw upstreamError("provider_unavailable", { status: response.status, retryable: false });
       throw upstreamError("invalid_transport_response", { status: response.status });
     }
@@ -107,6 +111,19 @@ export function createOpenAINpcReactionCandidateInvoker(options = {}) {
       providerName: "openai", model, attemptCount: 1, elapsedMs: Math.max(0, now() - started)
     });
   };
+}
+
+function parseRetryAfterMs(headers) {
+  let raw;
+  try {
+    raw = typeof headers?.get === "function" ? headers.get("retry-after") : null;
+  } catch {
+    return undefined;
+  }
+  if (typeof raw !== "string" || !/^\d+$/u.test(raw)) return undefined;
+  const seconds = Number(raw);
+  if (!Number.isSafeInteger(seconds) || seconds > MAXIMUM_RETRY_AFTER_SECONDS) return undefined;
+  return seconds * 1_000;
 }
 
 function upstreamError(code, fields = {}) {
