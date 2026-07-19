@@ -5,7 +5,10 @@ import { WerewolfGame } from "../src/gameEngine.mjs";
 import { PseudoInterpreterProvider, createLocalInterpreterHttpProvider } from "../src/interpreterTransport.mjs";
 import { createNpcReactionCandidateProvider } from "../src/npcReactionCandidateProvider.mjs";
 import { createLocalNpcReactionCandidateTransport } from "../src/npcReactionCandidateTransport.mjs";
-import { createPseudoNpcReactionCandidateInvoker } from "../src/npcReactionCandidateUpstream.mjs";
+import {
+  createOpenAINpcReactionCandidateInvoker,
+  createPseudoNpcReactionCandidateInvoker
+} from "../src/npcReactionCandidateUpstream.mjs";
 import { createNpcCliPublicationSink } from "../src/npcCliPublicationSink.mjs";
 import { createNpcBrowserPublicationSink } from "../src/npcBrowserPublicationSink.mjs";
 import { createProductionNpcStructuredDeliveryIntegration } from "../src/npcProductionIntegration.mjs";
@@ -146,6 +149,65 @@ test("authoritative replay never pumps delivery or repeats the legacy or CLI sin
   assert.equal(writes.length, 1);
   assert.equal(legacyCalls, 0);
   assert.equal(game.state.stateVersion, 2);
+});
+
+test("candidate budget survives game reset while authoritative replay consumes no fetch", async () => {
+  let fetchCalls = 0;
+  const invokeProvider = createOpenAINpcReactionCandidateInvoker({
+    apiKey: "unit-test-credential",
+    maxRequestsPerMinute: 1,
+    maxConcurrentRequests: 1,
+    now: () => 0,
+    fetch: async (_url, options) => {
+      fetchCalls += 1;
+      const body = JSON.parse(options.body);
+      const request = JSON.parse(body.input[0].content[0].text);
+      const targetId = request.knownInformation.constraints.allowedLivingTargetIds[0];
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        async json() {
+          return {
+            status: "completed",
+            output_text: JSON.stringify({
+              schemaVersion: 1,
+              proposals: [{ proposalType: "suspicion", targetId }]
+            })
+          };
+        }
+      };
+    }
+  });
+  const firstGame = enabledGame({ invokeProvider });
+  const action = await firstGame.dispatchPlayerAction({
+    type: "ask_npc",
+    targetId: "npc1",
+    input: "Who do you suspect?"
+  });
+  assert.equal(action.result.structuredNpc.routeStatus, "committed");
+  assert.equal(fetchCalls, 1);
+  const playerResult = action.result.conversationCommitResult;
+  const replay = await firstGame.npcStructuredProductionIntegration.executeNpcReaction({
+    schemaVersion: 1,
+    gameSessionId: firstGame.state.gameSessionId,
+    triggerRequestId: playerResult.requestId,
+    originatingInputRecordId: playerResult.inputRecordId
+  });
+  assert.equal(replay.routeStatus, "replayed");
+  assert.equal(fetchCalls, 1);
+  firstGame.destroy();
+
+  const secondGame = enabledGame({ invokeProvider });
+  const secondAction = await secondGame.dispatchPlayerAction({
+    type: "ask_npc",
+    targetId: "npc1",
+    input: "Who do you suspect?"
+  });
+  assert.equal(secondAction.result.structuredNpc.legacySuppressed, true);
+  assert.notEqual(secondAction.result.structuredNpc.routeStatus, "committed");
+  assert.equal(fetchCalls, 1);
+  secondGame.destroy();
 });
 
 test("candidate rejection and observer failure never enable legacy fallback", async () => {

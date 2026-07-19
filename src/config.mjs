@@ -36,6 +36,7 @@ export function parseConfig(env = process.env) {
       maxRetries: parseStrictInt(env.OPENAI_MAX_RETRIES, 1, "OPENAI_MAX_RETRIES", 0, 5),
       maxOutputTokens: parseStrictInt(env.OPENAI_MAX_OUTPUT_TOKENS, 220, "OPENAI_MAX_OUTPUT_TOKENS", 1, 4096),
       maxRequestsPerMinute: parseStrictInt(env.OPENAI_MAX_REQUESTS_PER_MINUTE, 10, "OPENAI_MAX_REQUESTS_PER_MINUTE", 1, 60),
+      maxConcurrentRequests: parseStrictInt(env.OPENAI_MAX_CONCURRENT_REQUESTS, 1, "OPENAI_MAX_CONCURRENT_REQUESTS", 1, 8),
       fallbackToPseudo: parseBoolean(env.OPENAI_FALLBACK_TO_PSEUDO, true, "OPENAI_FALLBACK_TO_PSEUDO")
     };
   }

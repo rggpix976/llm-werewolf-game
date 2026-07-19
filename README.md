@@ -66,7 +66,7 @@ Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory s
 - OpenAI Responses APIをサーバー経由で呼び出します
 - 環境変数で有効化し、APIキーが必要です
 - APIキーはブラウザへ送信されず、サーバー側で安全に管理されます
-- プロセス内でのレート制限と同時実行数制限が適用されます
+- 既存legacy応答経路には従来のプロセス内制限が適用されます。Structured RouteのOpenAI candidate経路には、別のprocess-localなrolling request上限と同時実行上限が適用されます
 - 既存legacy NPC経路では、ネットワークエラー等の一時的な失敗時に `pseudo` モードへのフォールバックが可能です。`NPC_STRUCTURED_REACTION_MODE=true`のStructured Routeではこのfallbackを使用しません
 
 起動例 (PowerShell):
@@ -96,13 +96,16 @@ LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 - `OPENAI_TIMEOUT_MS`: タイムアウト時間 (ms) (デフォルト: `15000`)
 - `OPENAI_MAX_RETRIES`: 失敗時の再試行回数 (デフォルト: `1`)
 - `OPENAI_MAX_OUTPUT_TOKENS`: 最大出力トークン数 (デフォルト: `220`)
-- `OPENAI_MAX_REQUESTS_PER_MINUTE`: 1分間あたりの最大リクエスト数 (デフォルト: `10`)
+- `OPENAI_MAX_REQUESTS_PER_MINUTE`: 1分間あたりの最大リクエスト数 (デフォルト: `10`)。OpenAI candidate invokerではactual fetch開始を60秒rolling windowで数えます
+- `OPENAI_MAX_CONCURRENT_REQUESTS`: OpenAI candidate fetchの同時実行上限 (デフォルト: `1`、範囲: `1..8`)
 - `OPENAI_FALLBACK_TO_PSEUDO`: 既存legacy NPC経路で一時的なエラー時に `pseudo` モードへ切り替えるか (デフォルト: `true`)。Structured Routeには適用されません
 - `INTERPRETER_SHADOW_MODE`: Phase 2 shadow transportを有効化する（デフォルト: `false`）
 - `INTERPRETER_VALIDATION_MODE`: Phase 3 authoritative candidate validationを有効化する（デフォルト: `false`）
 - `PLAYER_CONVERSATION_COMMIT_MODE`: Phase 4 atomic player conversation commitを有効化する（デフォルト: `false`、`INTERPRETER_VALIDATION_MODE=true`が必須）
 - `PLAYER_STRUCTURED_CONSUMER_MODE`: Phase 5のbrowser/CLI requested consumer modeを選択する（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）
 - `NPC_STRUCTURED_REACTION_MODE`: Phase 6 structured NPC reaction routeのproduction cutover flag（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）。`false`では既存legacy NPC Provider／表示経路を維持し、`true`では受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続します。同一logical reactionについてlegacy Providerおよびlegacy表示fallbackは実行しません
+
+Structured RouteのOpenAI candidate budgetはinvoker instanceが所有します。Browser serverでは同一server processのcandidate requestsが1 budgetを共有し、CLIでは同一CLI processのcandidate attemptsが1 budgetを共有します。別process間では共有せず、game resetやBrowser New Gameではresetされず、process restartでのみ再初期化されます。`OPENAI_MAX_OUTPUT_TOKENS`はcandidate Responses API requestのtop-level `max_output_tokens`へそのまま適用されます。Budget denialはqueue、automatic wait、hidden retry、synthetic `Retry-After`、pseudo fallbackなしで即時fail closedします。`NPC_STRUCTURED_REACTION_MODE`はdefault-offのままであり、このcandidate経路のbillable live smokeは未実施です。
 
 Phase 3はvalidationとredacted diagnosticsのみを行い、Interpreter結果をゲームへ適用しません。両方のInterpreter flagが`true`の場合はPhase 3だけが1リクエストを送り、Phase 2 shadow送信は抑止されます。Phase 3をrollbackするには`INTERPRETER_VALIDATION_MODE=false`へ戻します。authoritative session/turn/version lifecycleはengine invariantとしてflagに依存せず維持され、データmigrationは不要です。
 
