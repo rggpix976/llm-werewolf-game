@@ -67,7 +67,7 @@ Then open `http://127.0.0.1:4173/`. The browser UI starts a separate in-memory s
 - 環境変数で有効化し、APIキーが必要です
 - APIキーはブラウザへ送信されず、サーバー側で安全に管理されます
 - プロセス内でのレート制限と同時実行数制限が適用されます
-- ネットワークエラー等の一時的な失敗時には `pseudo` モードへのフォールバックが可能です
+- 既存legacy NPC経路では、ネットワークエラー等の一時的な失敗時に `pseudo` モードへのフォールバックが可能です。`NPC_STRUCTURED_REACTION_MODE=true`のStructured Routeではこのfallbackを使用しません
 
 起動例 (PowerShell):
 
@@ -97,18 +97,20 @@ LLM_PROVIDER=openai OPENAI_API_KEY="sk-..." npm run web
 - `OPENAI_MAX_RETRIES`: 失敗時の再試行回数 (デフォルト: `1`)
 - `OPENAI_MAX_OUTPUT_TOKENS`: 最大出力トークン数 (デフォルト: `220`)
 - `OPENAI_MAX_REQUESTS_PER_MINUTE`: 1分間あたりの最大リクエスト数 (デフォルト: `10`)
-- `OPENAI_FALLBACK_TO_PSEUDO`: 一時的なエラー時に `pseudo` モードへ切り替えるか (デフォルト: `true`)
+- `OPENAI_FALLBACK_TO_PSEUDO`: 既存legacy NPC経路で一時的なエラー時に `pseudo` モードへ切り替えるか (デフォルト: `true`)。Structured Routeには適用されません
 - `INTERPRETER_SHADOW_MODE`: Phase 2 shadow transportを有効化する（デフォルト: `false`）
 - `INTERPRETER_VALIDATION_MODE`: Phase 3 authoritative candidate validationを有効化する（デフォルト: `false`）
 - `PLAYER_CONVERSATION_COMMIT_MODE`: Phase 4 atomic player conversation commitを有効化する（デフォルト: `false`、`INTERPRETER_VALIDATION_MODE=true`が必須）
 - `PLAYER_STRUCTURED_CONSUMER_MODE`: Phase 5のbrowser/CLI requested consumer modeを選択する（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）
-- `NPC_STRUCTURED_REACTION_MODE`: Phase 6 structured NPC reaction route用の基盤flag（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）。現段階ではbrowser/CLIのengine instanceへ値を渡すだけで、provider、commit、publicationの経路は変更しない
+- `NPC_STRUCTURED_REACTION_MODE`: Phase 6 structured NPC reaction routeのproduction cutover flag（デフォルト: `false`、`PLAYER_CONVERSATION_COMMIT_MODE=true`が必須）。`false`では既存legacy NPC Provider／表示経路を維持し、`true`では受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続します。同一logical reactionについてlegacy Providerおよびlegacy表示fallbackは実行しません
 
 Phase 3はvalidationとredacted diagnosticsのみを行い、Interpreter結果をゲームへ適用しません。両方のInterpreter flagが`true`の場合はPhase 3だけが1リクエストを送り、Phase 2 shadow送信は抑止されます。Phase 3をrollbackするには`INTERPRETER_VALIDATION_MODE=false`へ戻します。authoritative session/turn/version lifecycleはengine invariantとしてflagに依存せず維持され、データmigrationは不要です。
 
 Phase 4を有効にすると、検証済みplayer input、AcceptedSpeechAct、semantic event、canonical claim、display plan、publication、legacy player表示entry、idempotency resultを1回の`N -> N+1` transactionで保存します。その後の既存NPC response effectsは成功時だけ別の`N+1 -> N+2` transactionで公開されます。structured publicationはPhase 4では表示consumerに接続されず、legacy entryだけがvisible triggerです。rollbackは`PLAYER_CONVERSATION_COMMIT_MODE=false`へ戻します。既存structured recordは保持され、backfillやdata migrationは不要です。
 
 Phase 5を有効にすると、browser/CLIはrequested consumer modeとしてstructured modeを要求します。初回のOFF→ON切替ではexplicit pre-cutover drainを実行し、必要なlegacy delivery evidenceがすべて揃うまではeffective modeをlegacyのまま維持します。rollbackは`PLAYER_STRUCTURED_CONSUMER_MODE=false`へ戻します。rollbackや切替によってstructured recordsまたはlegacy storageが削除されることはありません。persistence/reload recoveryとmulti-tab coordinationは対象外です。
+
+Phase 6の`NPC_STRUCTURED_REACTION_MODE`はdefault-offです。`false`では既存legacy NPC Provider／表示経路を維持します。`PLAYER_CONVERSATION_COMMIT_MODE=true`を前提として`true`にすると、受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続し、同一logical reactionのlegacy Providerおよびlegacy表示fallbackを抑止します。PR #58のmergeと独立レビューが完了するまでは有効化しません。
 
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは引き続き実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックのみを使用します。
 
