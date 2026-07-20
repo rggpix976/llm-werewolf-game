@@ -177,8 +177,7 @@ export class WerewolfGame {
         authorityPort,
         deliveryReadPort
       }));
-      if (!integration || Reflect.ownKeys(integration).length !== 2
-          || typeof integration.executeNpcReaction !== "function" || typeof integration.reset !== "function") {
+      if (!exactNpcStructuredIntegration(integration)) {
         throw typedError("invalid_npc_structured_integration");
       }
       game.npcStructuredProductionIntegration = integration;
@@ -209,6 +208,8 @@ export class WerewolfGame {
     this.npcAuthorityCommitInProgress = false;
     this.npcAuthorityCommitOwner = null;
     this.npcStructuredProductionIntegration = null;
+    this._npcStructuredDeliveryHandoff = null;
+    this._npcStructuredDeliveryGeneration = 0;
     this._destroyed = false;
   }
 
@@ -290,6 +291,9 @@ export class WerewolfGame {
     const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
     if (action.type === "get_state") return this._actionResult(action.type, null, logCursor);
     if (action.type === "ask_npc" && action.replayRequestId) return this._replayPlayerConversation(action, logCursor);
+    if (["pending_player_display", "in_progress"].includes(this._npcStructuredDeliveryHandoff?.state)) {
+      throw typedError("input_in_progress");
+    }
     if (this.playerPublicationDeliveryController.modeState().transitionStatus === "draining_pre_cutover") throw typedError("consumer_mode_transition_pending");
     const rejected = this._validateCommand(action); if (rejected) return this._actionResult(action.type, rejected, logCursor);
     if (this._commandInProgress) throw typedError("input_in_progress");
@@ -377,6 +381,23 @@ export class WerewolfGame {
         triggerRequestId: delta.requestId,
         originatingInputRecordId: delta.inputRecordId
       }));
+      if (["committed", "committed_cleanup_pending"].includes(structuredNpc.routeStatus)
+          && structuredNpc.deliveryStatus === "pending_player_display") {
+        if (["pending_player_display", "in_progress"].includes(this._npcStructuredDeliveryHandoff?.state)) {
+          throw typedError("input_in_progress");
+        }
+        this._npcStructuredDeliveryHandoff = {
+          schemaVersion: 1,
+          generation: this._npcStructuredDeliveryGeneration,
+          gameSessionId: this.state.gameSessionId,
+          playerPublicationId: prepared.result.playerPublicationId,
+          triggerRequestId: delta.requestId,
+          originatingInputRecordId: delta.inputRecordId,
+          routeStatus: structuredNpc.routeStatus,
+          state: "pending_player_display",
+          finalResult: structuredNpc
+        };
+      }
       return {
         responded: structuredNpc.routeStatus === "committed" || structuredNpc.routeStatus === "committed_cleanup_pending",
         structuredNpc,
@@ -392,6 +413,41 @@ export class WerewolfGame {
       this.phase4FaultInjector("npc_final_state_replacement"); npcWorking.state.stateVersion = preconditionVersion + 2; validateNpcAuthoritativeStateFoundation(npcWorking.state); commitState(this.state, npcWorking.state);
       return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
     } finally { if (this.activeNpcReaction === active) this.activeNpcReaction = null; }
+  }
+
+  async completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input) {
+    validateNpcStructuredDeliveryHandoffInput(input);
+    if (this._destroyed || input.gameSessionId !== this.state.gameSessionId) throw typedError("stale_session");
+    const handoff = this._npcStructuredDeliveryHandoff;
+    if (!handoff || handoff.generation !== this._npcStructuredDeliveryGeneration
+        || handoff.gameSessionId !== this.state.gameSessionId) throw typedError("publication_not_found");
+    if (input.playerPublicationId !== handoff.playerPublicationId) throw typedError("publication_not_found");
+    if (handoff.state === "settled") return handoff.finalResult;
+    if (handoff.state === "abandoned") throw typedError("stale_session");
+    if (handoff.state === "in_progress") throw typedError("input_in_progress");
+    const playerDeliveryState = this.playerPublicationDeliveryController.stateFor(handoff.playerPublicationId);
+    if (!["acknowledged", "evidence_recorded"].includes(playerDeliveryState)) return handoff.finalResult;
+
+    handoff.state = "in_progress";
+    try {
+      const result = await this.npcStructuredProductionIntegration.pumpNpcPublicationAfterPlayerDisplay(Object.freeze({
+        schemaVersion: 1,
+        gameSessionId: this.state.gameSessionId
+      }));
+      if (this._destroyed || this._npcStructuredDeliveryHandoff !== handoff
+          || handoff.generation !== this._npcStructuredDeliveryGeneration || handoff.state === "abandoned") {
+        return result;
+      }
+      handoff.finalResult = result;
+      handoff.state = "settled";
+      return result;
+    } catch (error) {
+      if (!this._destroyed && this._npcStructuredDeliveryHandoff === handoff
+          && handoff.generation === this._npcStructuredDeliveryGeneration && handoff.state === "in_progress") {
+        handoff.state = "pending_player_display";
+      }
+      throw error;
+    }
   }
 
   _assertPlayerCommitCas(interpreted, delta, targetNpcId, version, playerCommitRegistryFingerprint) {
@@ -665,7 +721,7 @@ export class WerewolfGame {
     const outcome = validatePhase3Response(response, pending.binding, this.state); pending.responseFingerprint = fingerprint; return outcome;
   }
 
-  destroy() { this._destroyed = true; this.playerPublicationDeliveryController.invalidate(); try { this.npcStructuredProductionIntegration?.reset(); } catch {} for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
+  destroy() { this._destroyed = true; this._npcStructuredDeliveryGeneration += 1; if (this._npcStructuredDeliveryHandoff && this._npcStructuredDeliveryHandoff.state !== "settled") this._npcStructuredDeliveryHandoff.state = "abandoned"; this.playerPublicationDeliveryController.invalidate(); try { this.npcStructuredProductionIntegration?.reset(); } catch {} for (const pending of this.pendingInterpreterRequests.values()) { pending.status = "aborting"; pending.controller.abort(abortError()); } this.activeNpcReaction?.controller.abort(abortError()); }
 
   async handlePlayerQuestion(targetIdOrName, playerInput, options = {}) {
     if (this.state.winner) {
@@ -1687,6 +1743,36 @@ function createConversationPolicy(role) {
 
 function cloneState(state) { const { rng, ...plain } = state, clonedRng = new SeededRandom(0); clonedRng.state = rng.state; return { ...structuredClone(plain), rng: clonedRng }; }
 function engineId(prefix, createId) { const value = `${prefix}-${createId()}`; if (!ID_PATTERN.test(value)) throw typedError("invalid_engine_id"); return value; }
+function exactNpcStructuredIntegration(value) {
+  const fields = ["executeNpcReaction", "pumpNpcPublicationAfterPlayerDisplay", "reset"];
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return false;
+  const keys = Reflect.ownKeys(value);
+  return keys.length === fields.length && keys.every((key) => typeof key === "string")
+    && fields.every((field) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, field);
+      return descriptor?.enumerable === true && Object.hasOwn(descriptor, "value")
+        && typeof descriptor.value === "function";
+    });
+}
+function validateNpcStructuredDeliveryHandoffInput(value) {
+  const fields = ["schemaVersion", "gameSessionId", "playerPublicationId"];
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+      || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new TypeError("Invalid NPC structured delivery handoff input.");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== fields.length || keys.some((key) => typeof key !== "string")
+      || !fields.every((field) => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, field);
+        return descriptor?.enumerable === true && Object.hasOwn(descriptor, "value");
+      })
+      || value.schemaVersion !== 1 || !ID_PATTERN.test(value.gameSessionId ?? "")
+      || !ID_PATTERN.test(value.playerPublicationId ?? "")) {
+    throw new TypeError("Invalid NPC structured delivery handoff input.");
+  }
+  return value;
+}
 function commitState(target, source) {
   const currentPlayers = new Map(target.players.map((player) => [player.id, player]));
   const preparedPlayers = source.players.map((player) => structuredClone(player));

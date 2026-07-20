@@ -373,6 +373,7 @@ function createGame({ npcStructuredReactionEnabled, responseProvider }) {
     npcStructuredReactionEnabled,
     createNpcStructuredProductionIntegration: npcStructuredReactionEnabled ? () => Object.freeze({
       async executeNpcReaction() { return Object.freeze({ routeStatus: "route_failed" }); },
+      async pumpNpcPublicationAfterPlayerDisplay() { return Object.freeze({ deliveryStatus: "pending_none" }); },
       reset() {}
     }) : undefined,
     interpreterProvider: interpreter(),

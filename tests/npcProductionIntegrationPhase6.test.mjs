@@ -12,14 +12,17 @@ import {
 import { createNpcCliPublicationSink } from "../src/npcCliPublicationSink.mjs";
 import { createNpcBrowserPublicationSink } from "../src/npcBrowserPublicationSink.mjs";
 import { createProductionNpcStructuredDeliveryIntegration } from "../src/npcProductionIntegration.mjs";
+import { consumeLiveActionDisplay } from "../src/playerDisplaySink.mjs";
 import { HttpResponseProvider } from "../public/httpResponseProvider.mjs";
 import { createWebServer } from "../src/webServer.mjs";
 
-test("production integration has an exact two-method public surface and strict dependencies", () => {
+test("production integration has an exact three-method public surface and strict dependencies", () => {
   assert.throws(() => createProductionNpcStructuredDeliveryIntegration({}), TypeError);
   assert.throws(() => enabledGame({ extraFactoryField: true }), /npc_structured_integration_required|Invalid/);
   const game = enabledGame();
-  assert.deepEqual(Reflect.ownKeys(game.npcStructuredProductionIntegration), ["executeNpcReaction", "reset"]);
+  assert.deepEqual(Reflect.ownKeys(game.npcStructuredProductionIntegration), [
+    "executeNpcReaction", "pumpNpcPublicationAfterPlayerDisplay", "reset"
+  ]);
   game.destroy();
 });
 
@@ -89,7 +92,10 @@ test("flag enabled commits and delivers once through CLI while suppressing legac
   assert.equal(action.result.structuredNpc.legacySuppressed, true);
   assert.equal(action.result.structuredNpc.legacyUsed, false);
   assert.equal(action.result.structuredNpc.routeStatus, "committed");
-  assert.equal(action.result.structuredNpc.deliveryStatus, "delivered");
+  assert.equal(action.result.structuredNpc.deliveryStatus, "pending_player_display");
+  assert.equal(writes.length, 0);
+  const completed = await completePlayerThenNpc(game, action);
+  assert.equal(completed.deliveryStatus, "delivered");
   assert.equal(writes.length, 1);
   assert.equal(game.state.stateVersion, 2);
   assert.equal(game.state.conversation.reactionPlans.length, 1);
@@ -105,7 +111,10 @@ test("browser production sink attaches canonical text exactly once and reset pre
   const dom = fakeDom();
   const game = enabledGame({ sinkType: "browser", dom });
   const action = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Who do you suspect?" });
-  assert.equal(action.result.structuredNpc.deliveryStatus, "delivered");
+  assert.equal(action.result.structuredNpc.deliveryStatus, "pending_player_display");
+  assert.equal(dom.container.children.length, 0);
+  const completed = await completePlayerThenNpc(game, action);
+  assert.equal(completed.deliveryStatus, "delivered");
   assert.equal(dom.container.children.length, 1);
   assert.equal(dom.container.children[0].childNodes.length, 1);
   assert.equal(dom.container.children[0].childNodes[0].nodeType, 3);
@@ -137,6 +146,7 @@ test("authoritative replay never pumps delivery or repeats the legacy or CLI sin
     responseProvider: { async generateResponse() { legacyCalls += 1; throw new Error("legacy must not run"); } }
   });
   const action = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Who do you suspect?" });
+  await completePlayerThenNpc(game, action);
   const playerResult = action.result.conversationCommitResult;
   const replay = await game.npcStructuredProductionIntegration.executeNpcReaction({
     schemaVersion: 1,
@@ -287,6 +297,22 @@ function enabledGame({ writes = [], sinkType = "cli", dom = null, responseProvid
 
 function ids(prefix) { let order = 0; return () => `${prefix}-${++order}`; }
 function localInterpreter() { let order = 0; return createLocalInterpreterHttpProvider(new PseudoInterpreterProvider(), { createServerCorrelationId: () => `server-interpreter-${++order}` }); }
+async function completePlayerThenNpc(game, action) {
+  await consumeLiveActionDisplay({
+    game,
+    action,
+    consumerId: "test-player",
+    sinkType: "cli",
+    bookkeeping: new Map(),
+    writeStructured: async () => {},
+    writeLegacy: async () => {}
+  });
+  return game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay({
+    schemaVersion: 1,
+    gameSessionId: game.state.gameSessionId,
+    playerPublicationId: action.result.conversationCommitResult.playerPublicationId
+  });
+}
 
 function fakeDom() {
   const container = {

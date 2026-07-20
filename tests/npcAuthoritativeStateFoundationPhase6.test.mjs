@@ -32,6 +32,7 @@ function createGame(options = {}) {
     createId: ids(),
     createNpcStructuredProductionIntegration: options.npcStructuredReactionEnabled === true ? () => Object.freeze({
       async executeNpcReaction() { return Object.freeze({ routeStatus: "route_failed" }); },
+      async pumpNpcPublicationAfterPlayerDisplay() { return Object.freeze({ deliveryStatus: "pending_none" }); },
       reset() {}
     }) : undefined,
     ...options

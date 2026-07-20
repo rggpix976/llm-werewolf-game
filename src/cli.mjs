@@ -186,7 +186,16 @@ function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
 async function printNewPlayerLog(action = null) {
   const write = writeCliEntry;
   const liveEntries = action?.livePlayerDisplayEntries ?? game.state.playerLog.slice(printedLogIndex).map((entry) => ({ kind: "legacy_display", entry }));
-  if (action) await consumeLiveActionDisplay({ game, action, consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: write, writeLegacy: write });
+  if (action) {
+    await consumeLiveActionDisplay({ game, action, consumerId: "cli-main", sinkType: "cli", bookkeeping: cliPublicationBookkeeping, writeStructured: write, writeLegacy: write });
+    if (action.result?.structuredNpc?.deliveryStatus === "pending_player_display") {
+      await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay({
+        schemaVersion: 1,
+        gameSessionId: game.state.gameSessionId,
+        playerPublicationId: action.result.conversationCommitResult.playerPublicationId
+      });
+    }
+  }
   else { for (const envelope of liveEntries) await write(envelope.entry); }
   printedLogIndex = game.state.playerLog.length;
 }

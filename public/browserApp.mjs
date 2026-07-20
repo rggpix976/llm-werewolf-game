@@ -120,8 +120,12 @@ elements.nightButton.addEventListener("click", async () => {
 });
 
 function startNewGame() {
+  const nextGameId = sessionManager.startNewGame();
   game?.destroy?.();
-  currentGameId = sessionManager.startNewGame();
+  for (const node of elements.logList.querySelectorAll("[data-npc-publication-id]")) node.remove();
+  npcPublicationDomBookkeeping.clear();
+  playerPublicationDomBookkeeping.clear();
+  currentGameId = nextGameId;
 
   // Always use HttpResponseProvider, delegate selection to server
   const responseProvider = new HttpResponseProvider({
@@ -130,6 +134,7 @@ function startNewGame() {
   interpreterShadowClient = shouldObserveInterpreterShadow(runtimeConfig) ? new InterpreterShadowClient({ provider: responseProvider, sessionManager, observer: (entry) => { shadowObservations = [...shadowObservations.slice(-99), Object.freeze({ ...entry })]; } }) : null;
   shadowObservations = [];
 
+  const capturedGameId = currentGameId;
   game = WerewolfGame.create({
     seed: Date.now(),
     shuffleRoles: true,
@@ -143,13 +148,14 @@ function startNewGame() {
     npcStructuredReactionEnabled: runtimeConfig?.npcStructuredReactionMode === true,
     createNpcStructuredProductionIntegration: ({ gameSessionId, authorityPort, deliveryReadPort }) => {
       const sink = createNpcBrowserPublicationSink({
-        getConversationContainer: () => elements.logList,
+        getConversationContainer: () => sessionManager.isCurrentGame(capturedGameId) ? elements.logList : null,
         createTextNode: (text) => document.createTextNode(text),
         createMessageNode: ({ textNode, publicationId, deliveryAttemptId }) => {
           const node = document.createElement("div");
           node.className = "log-entry npc-canonical-publication";
           node.dataset.npcPublicationId = publicationId;
           node.dataset.deliveryAttemptId = deliveryAttemptId;
+          node.dataset.browserGameId = String(capturedGameId);
           node.append(textNode);
           return node;
         }
@@ -175,8 +181,6 @@ function startNewGame() {
   snapshot = game.getPublicSnapshot();
   logCursor = snapshot.playerLog.length;
   playerFacingLog = structuredClone(snapshot.playerLog);
-  playerPublicationDomBookkeeping = new Map();
-  npcPublicationDomBookkeeping = new Map();
   devLogCursor = 0;
   devLogEntries = [];
   devLogFilterKind = "";
@@ -202,6 +206,15 @@ async function dispatch(action) {
 
     render(result.publicSnapshot);
     if (result.livePlayerDisplayEntries.length) await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured, writeLegacy });
+    if (!sessionManager.isCurrentGame(gameIdAtStart)) return null;
+    if (result.result?.structuredNpc?.deliveryStatus === "pending_player_display") {
+      await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay({
+        schemaVersion: 1,
+        gameSessionId: game.state.gameSessionId,
+        playerPublicationId: result.result.conversationCommitResult.playerPublicationId
+      });
+    }
+    if (!sessionManager.isCurrentGame(gameIdAtStart)) return null;
     captureNpcPublicationNodes();
     renderLogs();
     logCursor = result.nextLogCursor;
@@ -630,13 +643,18 @@ function renderTargetOptions() {
 function renderLogs() {
   const entries = playerFacingLog;
   const npcNodes = [...elements.logList.querySelectorAll("[data-npc-publication-id]")];
+  const currentNpcNodes = npcNodes.filter((node) => {
+    const stored = npcPublicationDomBookkeeping.get(node.dataset.npcPublicationId);
+    const current = node.dataset.browserGameId === String(currentGameId) && stored?.node === node;
+    if (!current) node.remove();
+    return current;
+  });
   if (!entries.length) {
-    elements.logList.replaceChildren(...(npcNodes.length ? npcNodes : [createEmptyState("No log entries")]));
+    elements.logList.replaceChildren(...(currentNpcNodes.length ? currentNpcNodes : [createEmptyState("No log entries")]));
     return;
   }
 
   reconcileBrowserPublicationNodes({ document, container: elements.logList, entries, formatPhase });
-  const untrackedNpcNodes = npcNodes.filter((node) => !npcPublicationDomBookkeeping.has(node.dataset.npcPublicationId));
   const playerNodes = [...elements.logList.querySelectorAll("[data-publication-id]")];
   const merged = [];
   appendNpcNodesAfterPlayerCount(merged, 0);
@@ -644,7 +662,6 @@ function renderLogs() {
     merged.push(node);
     appendNpcNodesAfterPlayerCount(merged, index + 1);
   });
-  merged.push(...untrackedNpcNodes);
   elements.logList.replaceChildren(...merged);
   elements.logList.scrollTop = elements.logList.scrollHeight;
   const nodesByPublication = new Map([...elements.logList.querySelectorAll("[data-publication-id]")].map((node) => [node.dataset.publicationId, node]));
@@ -656,6 +673,10 @@ function renderLogs() {
 
 function captureNpcPublicationNodes() {
   for (const node of elements.logList.querySelectorAll("[data-npc-publication-id]")) {
+    if (node.dataset.browserGameId !== String(currentGameId)) {
+      node.remove();
+      continue;
+    }
     const publicationId = node.dataset.npcPublicationId;
     if (!npcPublicationDomBookkeeping.has(publicationId)) {
       npcPublicationDomBookkeeping.set(publicationId, { node, afterPlayerCount: playerFacingLog.length });
