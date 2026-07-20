@@ -555,6 +555,80 @@ test("actual Browser retry isolates diagnostic projection failure after successf
   }
 });
 
+test("actual Browser normal dispatch isolates post-action diagnostic projection failure", async () => {
+  const browser = fakeBrowserEnvironment();
+  const transport = browserTransportHarness();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = transport.fetch;
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?npc-observability-dispatch-failure=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    browser.elements.devModeToggle.listeners.get("click")();
+    browser.elements.targetSelect.value = "npc1";
+    browser.elements.questionInput.value = "Who do you suspect?";
+    browser.elements.developerPanel.failNextReplaceChildren = true;
+
+    await browser.elements.askForm.listeners.get("submit")({ preventDefault() {} });
+    const diagnosticText = nodeText(browser.elements.developerPanel);
+    assert.equal(browser.elements.questionInput.value, "");
+    assert.equal(browser.elements.askButton.textContent, "Ask");
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 1);
+    assert.match(diagnosticText, /Developer diagnostics unavailable/);
+    assert.doesNotMatch(diagnosticText, /sensitive diagnostic projection failure|stack|cause/);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
+test("actual Browser toggle, New Game, and filter projection failures do not stop the session", async () => {
+  const browser = fakeBrowserEnvironment();
+  const transport = browserTransportHarness();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = transport.fetch;
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?npc-observability-control-failure=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    browser.elements.developerPanel.failNextReplaceChildren = true;
+    assert.doesNotThrow(() => browser.elements.devModeToggle.listeners.get("click")());
+    assert.match(nodeText(browser.elements.developerPanel), /Developer diagnostics unavailable/);
+
+    browser.elements.developerPanel.failNextReplaceChildren = true;
+    assert.doesNotThrow(() => browser.elements.newGameButton.listeners.get("click")());
+    assert.match(nodeText(browser.elements.developerPanel), /Developer diagnostics unavailable/);
+
+    browser.elements.targetSelect.value = "npc1";
+    browser.elements.questionInput.value = "Who do you suspect?";
+    await browser.elements.askForm.listeners.get("submit")({ preventDefault() {} });
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 1);
+
+    const kindFilter = findNode(browser.elements.developerPanel, (node) => node.id === "devLogKindFilter");
+    assert.ok(kindFilter);
+    browser.elements.developerPanel.failNextReplaceChildren = true;
+    assert.doesNotThrow(() => kindFilter.listeners.get("change")({ target: { value: "phase_change" } }));
+    assert.match(nodeText(browser.elements.developerPanel), /Developer diagnostics unavailable/);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
 test("actual Browser flag-off session reports NPC observations unavailable without creating a ledger", async () => {
   const browser = fakeBrowserEnvironment();
   const originalDocument = globalThis.document;
@@ -733,6 +807,124 @@ test("actual CLI retry isolates diagnostic output failure and does not retain th
   assert.equal(errors.length, 1);
   assert.match(errors[0], /player writer failed/);
   assert.doesNotMatch(errors.join("\n"), /sensitive diagnostic output failure/);
+});
+
+test("actual CLI normal ask isolates auto-tail failure and keeps the command loop live", async () => {
+  const order = [];
+  const errors = [];
+  let providerCalls = 0;
+  let diagnosticFailures = 0;
+  let statePrinted = false;
+  const pseudo = createPseudoNpcReactionCandidateInvoker();
+  const game = enabledGame({
+    npcWrite: async () => { order.push("npc"); },
+    invokeProvider: async (request, options) => {
+      providerCalls += 1;
+      return pseudo(request, options);
+    }
+  });
+  const commands = ["ask npc1 Who do you suspect?", "state", "quit"];
+  await runCli({
+    game,
+    runtimeConfig: { playerStructuredConsumerMode: true },
+    showDev: true,
+    readlineInterface: {
+      async question() { return commands.shift() ?? "quit"; },
+      close() {}
+    },
+    writeLine: (line) => {
+      const text = String(line);
+      if (text.startsWith("Day ")) statePrinted = true;
+      if (text.includes("--- developer log tail ---") && diagnosticFailures === 0) {
+        diagnosticFailures += 1;
+        throw new Error("sensitive diagnostic output failure");
+      }
+    },
+    writeError: (line) => errors.push(String(line)),
+    writePublicationText: async (text) => {
+      if (text.includes("Who do you suspect?")) order.push("player");
+    },
+    destroyOnExit: false
+  });
+
+  assert.deepEqual(order, ["player", "npc"]);
+  assert.equal(providerCalls, 1);
+  assert.equal(game.state.conversation.reactionPlans.length, 1);
+  assert.equal(diagnosticFailures, 1);
+  assert.equal(statePrinted, true);
+  assert.deepEqual(errors, []);
+  game.destroy();
+});
+
+test("actual CLI vote continues through night when the vote auto-tail fails", async () => {
+  const errors = [];
+  let diagnosticFailures = 0;
+  let statePrinted = false;
+  const game = enabledGame();
+  const commands = ["vote", "state", "quit"];
+  await runCli({
+    game,
+    runtimeConfig: { playerStructuredConsumerMode: true },
+    showDev: true,
+    readlineInterface: {
+      async question() { return commands.shift() ?? "quit"; },
+      close() {}
+    },
+    writeLine: (line) => {
+      const text = String(line);
+      if (text.startsWith("Day ")) statePrinted = true;
+      if (text.includes("--- developer log tail ---") && diagnosticFailures === 0) {
+        diagnosticFailures += 1;
+        throw new Error("sensitive diagnostic output failure");
+      }
+    },
+    writeError: (line) => errors.push(String(line)),
+    writePublicationText: async () => {},
+    destroyOnExit: false
+  });
+
+  const messages = game.state.playerLog.map(({ message }) => message);
+  assert.equal(messages.filter((message) => message === "夜になりました。").length, 1);
+  assert.equal(messages.filter((message) => message.startsWith("夜が明けました。")).length, 1);
+  assert.equal(messages.filter((message) => message === "2日目の昼。議論を再開します。").length, 1);
+  assert.equal(game.state.day, 2);
+  assert.equal(game.state.phase, "day_discussion");
+  assert.equal(diagnosticFailures, 1);
+  assert.equal(statePrinted, true);
+  assert.deepEqual(errors, []);
+  game.destroy();
+});
+
+test("actual CLI dev command replaces diagnostic output failure with one fixed redacted error", async () => {
+  const errors = [];
+  const game = enabledGame();
+  const commands = ["dev", "quit"];
+  let devRequested = false;
+  await runCli({
+    game,
+    runtimeConfig: { playerStructuredConsumerMode: true },
+    readlineInterface: {
+      async question() {
+        const command = commands.shift() ?? "quit";
+        if (command === "dev") devRequested = true;
+        return command;
+      },
+      close() {}
+    },
+    writeLine: () => {
+      if (devRequested) {
+        devRequested = false;
+        throw new Error("sensitive diagnostic output failure");
+      }
+    },
+    writeError: (line) => errors.push(String(line)),
+    writePublicationText: async () => {},
+    destroyOnExit: false
+  });
+
+  assert.deepEqual(errors, ["Error: developer diagnostics unavailable"]);
+  assert.doesNotMatch(errors.join("\n"), /sensitive diagnostic output failure|stack|cause/);
+  game.destroy();
 });
 
 test("CLI external games have no synthetic ledger and normal output never includes diagnostics", async () => {
@@ -1009,6 +1201,15 @@ function fakeBrowserEnvironment() {
 
 function nodeText(node) {
   return [node.textContent, ...node.children.flatMap((child) => nodeText(child))].filter(Boolean).join("\n");
+}
+
+function findNode(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children) {
+    const found = findNode(child, predicate);
+    if (found) return found;
+  }
+  return null;
 }
 
 function browserTransportHarness() {

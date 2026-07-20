@@ -135,6 +135,10 @@ export async function runCli(options = {}) {
     printNpcStructuredObservations({ onlyNew: true });
   }
 
+  function maybePrintDevTailSafely() {
+    try { maybePrintDevTail(); } catch { /* diagnostic isolation */ }
+  }
+
   function printNpcStructuredObservations({ onlyNew }) {
     if (!npcProductionObservationLedger) {
       if (!onlyNew) writeLine("\n--- NPC Structured Observations ---\nunavailable");
@@ -184,8 +188,12 @@ export async function runCli(options = {}) {
         }
         if (command === "log") { writeLine(formatEntries(playerFacingHistory)); continue; }
         if (command === "dev") {
-          writeLine(game.formatDeveloperLog({ last: 8 }));
-          printNpcStructuredObservations({ onlyNew: false });
+          try {
+            writeLine(game.formatDeveloperLog({ last: 8 }));
+            printNpcStructuredObservations({ onlyNew: false });
+          } catch {
+            try { writeError("Error: developer diagnostics unavailable"); } catch { /* diagnostic isolation */ }
+          }
           continue;
         }
         if (command === "retry") {
@@ -193,7 +201,7 @@ export async function runCli(options = {}) {
             if (!pendingCliDisplayHandoff) writeLine("再試行対象の表示はありません。");
             else await continuePendingCliDisplay(pendingCliDisplayHandoff);
           } finally {
-            try { maybePrintDevTail(); } catch { /* diagnostic isolation */ }
+            maybePrintDevTailSafely();
           }
           continue;
         }
@@ -207,17 +215,17 @@ export async function runCli(options = {}) {
           }
           const action = await dispatchCommand({ type: "ask_npc", target, input: question, logCursor: printedLogIndex });
           await printNewPlayerLog(action);
-          maybePrintDevTail();
+          maybePrintDevTailSafely();
           continue;
         }
         if (command === "vote") {
           const voteAction = await dispatchCommand({ type: "advance_vote", logCursor: printedLogIndex });
           await printNewPlayerLog(voteAction);
-          maybePrintDevTail();
+          maybePrintDevTailSafely();
           if (!game.state.winner) {
             const nightAction = await dispatchCommand({ type: "run_night", logCursor: printedLogIndex });
             await printNewPlayerLog(nightAction);
-            maybePrintDevTail();
+            maybePrintDevTailSafely();
           }
           if (game.state.winner) writeLine("\nゲーム終了です。dev コマンドで開発者ログを確認できます。");
           continue;

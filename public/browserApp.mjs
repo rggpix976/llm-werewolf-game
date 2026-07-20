@@ -67,9 +67,9 @@ elements.devModeToggle.addEventListener("click", () => {
   elements.developerPanel.hidden = !isDevMode;
 
   if (isDevMode) {
-    refreshDiagnostics();
+    refreshDiagnosticsSafely();
   } else {
-    elements.developerPanel.replaceChildren();
+    try { elements.developerPanel.replaceChildren(); } catch { /* diagnostic isolation */ }
   }
 });
 
@@ -208,7 +208,7 @@ function startNewGame() {
   canRunNight = false;
   render(snapshot);
   if (isDevMode) {
-    refreshDiagnostics();
+    refreshDiagnosticsSafely();
   }
 }
 
@@ -239,7 +239,7 @@ async function dispatch(action) {
     renderLogs();
     logCursor = result.nextLogCursor;
     if (isDevMode) {
-      refreshDiagnostics();
+      refreshDiagnosticsSafely();
     }
     return result;
   } catch (error) {
@@ -262,7 +262,7 @@ async function retryPendingBrowserDisplay() {
   finally {
     if (sessionManager.isCurrentGame(handoff.generation)) {
       setBusy(false);
-      refreshDiagnosticsAfterRetry();
+      refreshDiagnosticsSafely();
     }
   }
 }
@@ -346,7 +346,7 @@ function refreshDiagnostics() {
   renderDeveloperPanel(diagnostics.snapshot);
 }
 
-function refreshDiagnosticsAfterRetry() {
+function refreshDiagnosticsSafely() {
   if (!isDevMode) return;
   try {
     refreshDiagnostics();
@@ -474,7 +474,7 @@ function renderDevEventLog() {
   kindFilter.value = devLogFilterKind;
   kindFilter.addEventListener("change", (e) => {
     devLogFilterKind = e.target.value;
-    refreshDiagnostics();
+    refreshDiagnosticsSafely();
   });
 
   const kindLabel = document.createElement("label");
@@ -495,7 +495,7 @@ function renderDevEventLog() {
   npcFilter.value = devLogFilterNpc;
   npcFilter.addEventListener("change", (e) => {
     devLogFilterNpc = e.target.value;
-    refreshDiagnostics();
+    refreshDiagnosticsSafely();
   });
 
   const npcLabel = document.createElement("label");

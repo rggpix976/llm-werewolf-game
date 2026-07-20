@@ -65,13 +65,13 @@ Last updated: 2026-07-20
 
 ## Last Verified
 
-- Date: 2026-07-19
+- Date: 2026-07-20
 - Commands:
   - `npm.cmd test`
   - `npm.cmd run sample`
   - `git diff --check`
   - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
-- Result: 671/671 local tests and the required 135/135 focused observability/Route/Delivery/Browser/CLI/Integration tests pass on the Finding F-04 Draft branch. Coverage includes exact three-source normalization, malformed-input isolation, capacity eviction, frozen snapshots, formatter redaction, Browser flag-on/off and New Game session replacement, CLI `dev`／`--show-dev`／external-game boundaries, and no diagnostic output on normal Player-facing paths. Existing F-01〜F-03 hardening, Slice 6 Route/Commit/Delivery, Phase 5 Player delivery, Coordinator, Provider, and sink matrices remain green. `npm.cmd run sample`, changed-module syntax checks, browser-safe import scans, and `git diff --check` pass against the working Draft branch. Independent review and merge remain pending; the current CI result must be verified against the latest PR HEAD and no merge-commit workflow run is claimed at this branch state. No dependency, package, lockfile, or workflow changed. No API key was created, read, displayed, or used and no billable OpenAI smoke was run.
+- Result: 681/681 local tests and the exact 135/135 focused observability/Route/Delivery/Browser/CLI/Integration suite pass on the Finding F-04 Draft branch. Coverage includes exact three-source normalization, malformed-input isolation, capacity eviction, frozen snapshots, formatter redaction, retry projection, exhausted-to-reset lifecycle, Browser flag-on/off and New Game session replacement, Browser normal/retry/filter diagnostic-failure isolation, CLI `dev`／`--show-dev`／external-game boundaries, CLI ask/retry auto-tail isolation, and vote-to-night continuity after diagnostic failure. Existing F-01〜F-03 hardening, Slice 6 Route/Commit/Delivery, Phase 5 Player delivery, Coordinator, Provider, and sink matrices remain green. `npm.cmd run sample`, changed-module syntax checks, browser-safe import scans, and `git diff --check` pass against the working Draft branch. Independent review and merge remain pending; the current CI result must be verified against the latest PR HEAD and no merge-commit workflow run is claimed at this branch state. No dependency, package, lockfile, or workflow changed. No API key was created, read, displayed, or used and no billable OpenAI smoke was run.
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
