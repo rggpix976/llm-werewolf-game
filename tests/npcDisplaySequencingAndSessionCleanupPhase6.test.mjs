@@ -440,6 +440,141 @@ test("actual Browser Ask control explicitly retries the retained Player display 
   }
 });
 
+test("actual Browser Developer Mode projects all NPC observation sources and New Game clears the session ledger", async () => {
+  const browser = fakeBrowserEnvironment();
+  const transport = browserTransportHarness();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = transport.fetch;
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?npc-observability=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    browser.elements.targetSelect.value = "npc1";
+    browser.elements.questionInput.value = "Who do you suspect?";
+    await browser.elements.askForm.listeners.get("submit")({ preventDefault() {} });
+    browser.elements.devModeToggle.listeners.get("click")();
+
+    const diagnosticText = nodeText(browser.elements.developerPanel.children.at(-1));
+    assert.match(diagnosticText, /NPC Structured Observations/);
+    assert.match(diagnosticText, /source=route/);
+    assert.match(diagnosticText, /source=delivery_controller/);
+    assert.match(diagnosticText, /source=delivery_orchestrator/);
+    assert.doesNotMatch(diagnosticText, /knownInformation|prompt|rawResponse|role|team/);
+
+    browser.elements.newGameButton.listeners.get("click")();
+    const resetText = nodeText(browser.elements.developerPanel.children.at(-1));
+    assert.match(resetText, /NPC Structured Observations/);
+    assert.match(resetText, /No NPC structured observations yet/);
+    assert.doesNotMatch(resetText, /source=route|source=delivery_controller|source=delivery_orchestrator/);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
+test("actual Browser flag-off session reports NPC observations unavailable without creating a ledger", async () => {
+  const browser = fakeBrowserEnvironment();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    provider: "pseudo",
+    interpreterShadowMode: false,
+    interpreterValidationMode: false,
+    playerConversationCommitMode: false,
+    playerStructuredConsumerMode: false,
+    npcStructuredReactionMode: false
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?npc-observability-off=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    browser.elements.devModeToggle.listeners.get("click")();
+    const diagnosticText = nodeText(browser.elements.developerPanel.children.at(-1));
+    assert.match(diagnosticText, /NPC structured observations unavailable/);
+    assert.doesNotMatch(diagnosticText, /source=/);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
+test("actual CLI dev and --show-dev expose bounded NPC observations without duplicate automatic lines", async () => {
+  const output = [];
+  const commands = [
+    "ask npc1 Who do you suspect?",
+    "ask npc1 Who do you suspect now?",
+    "dev",
+    "quit"
+  ];
+  await runCli({
+    runtimeConfig: {
+      provider: "pseudo",
+      interpreterValidationMode: true,
+      playerConversationCommitMode: true,
+      playerStructuredConsumerMode: true,
+      npcStructuredReactionMode: true
+    },
+    showDev: true,
+    readlineInterface: {
+      async question() { return commands.shift() ?? "quit"; },
+      close() {}
+    },
+    writeLine: (line) => output.push(String(line)),
+    writeError: (line) => { throw new Error(`unexpected CLI error: ${line}`); }
+  });
+  const text = output.join("\n");
+  assert.match(text, /NPC Structured Observations/);
+  assert.match(text, /source=route/);
+  assert.match(text, /source=delivery_controller/);
+  assert.match(text, /source=delivery_orchestrator/);
+  const observationOutput = output.filter((entry) => entry.includes("--- NPC Structured Observations ---"));
+  const autoOutput = observationOutput[0];
+  assert.equal(autoOutput.split("\n").filter((line) => line.startsWith("#1 ")).length, 1);
+  assert.doesNotMatch(observationOutput.join("\n"), /knownInformation|rawResponse|privateMemory|promptPreview/);
+});
+
+test("CLI external games have no synthetic ledger and normal output never includes diagnostics", async () => {
+  const externalGame = enabledGame();
+  const externalOutput = [];
+  const externalCommands = ["dev", "quit"];
+  await runCli({
+    game: externalGame,
+    runtimeConfig: { playerStructuredConsumerMode: true },
+    readlineInterface: { async question() { return externalCommands.shift() ?? "quit"; }, close() {} },
+    writeLine: (line) => externalOutput.push(String(line)),
+    writeError: () => {},
+    destroyOnExit: false
+  });
+  assert.match(externalOutput.join("\n"), /NPC Structured Observations[\s\S]*unavailable/);
+  externalGame.destroy();
+
+  const normalOutput = [];
+  const commands = ["ask npc1 Who do you suspect?", "quit"];
+  await runCli({
+    runtimeConfig: {
+      provider: "pseudo",
+      interpreterValidationMode: true,
+      playerConversationCommitMode: true,
+      playerStructuredConsumerMode: true,
+      npcStructuredReactionMode: true
+    },
+    showDev: false,
+    readlineInterface: { async question() { return commands.shift() ?? "quit"; }, close() {} },
+    writeLine: (line) => normalOutput.push(String(line)),
+    writeError: (line) => { throw new Error(`unexpected CLI error: ${line}`); }
+  });
+  assert.doesNotMatch(normalOutput.join("\n"), /NPC Structured Observations|source=delivery_|source=route/);
+});
+
 test("actual CLI retry command preserves the exact action after Player writer failure", async () => {
   const order = [];
   let providerCalls = 0;
@@ -669,6 +804,10 @@ function fakeBrowserEnvironment() {
     createTextNode(text) { const node = new FakeNode("#text"); node.nodeType = 3; node.textContent = text; return node; }
   };
   return { document, elements };
+}
+
+function nodeText(node) {
+  return [node.textContent, ...node.children.flatMap((child) => nodeText(child))].filter(Boolean).join("\n");
 }
 
 function browserTransportHarness() {

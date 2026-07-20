@@ -5,6 +5,7 @@ import { InterpreterShadowClient, shouldObserveInterpreterShadow } from "./inter
 import { appendBrowserPublicationNode, consumeLiveActionDisplay, dispatchPlayerActionWithConsumerMode, reconcileBrowserPublicationNodes } from "../src/playerDisplaySink.mjs";
 import { createNpcBrowserPublicationSink } from "../src/npcBrowserPublicationSink.mjs";
 import { createProductionNpcStructuredDeliveryIntegration } from "../src/npcProductionIntegration.mjs";
+import { createNpcProductionObservationLedger, formatNpcProductionObservationRecord } from "../src/npcProductionObservationLedger.mjs";
 import { PseudoInterpreterProvider, createLocalInterpreterHttpProvider } from "../src/interpreterTransport.mjs";
 
 const elements = {
@@ -41,6 +42,7 @@ let playerFacingLog = [];
 let playerPublicationDomBookkeeping = new Map();
 let npcPublicationDomBookkeeping = new Map();
 let pendingBrowserDisplayHandoff = null;
+let npcProductionObservationLedger = null;
 
 initializeApp();
 
@@ -128,6 +130,8 @@ elements.nightButton.addEventListener("click", async () => {
 function startNewGame() {
   const nextGameId = sessionManager.startNewGame();
   game?.destroy?.();
+  npcProductionObservationLedger?.reset();
+  npcProductionObservationLedger = null;
   pendingBrowserDisplayHandoff = null;
   elements.questionInput.value = "";
   for (const node of elements.logList.querySelectorAll("[data-npc-publication-id]")) node.remove();
@@ -155,6 +159,7 @@ function startNewGame() {
     playerStructuredConsumerEnabled: runtimeConfig?.playerStructuredConsumerMode === true,
     npcStructuredReactionEnabled: runtimeConfig?.npcStructuredReactionMode === true,
     createNpcStructuredProductionIntegration: ({ gameSessionId, authorityPort, deliveryReadPort }) => {
+      const observationLedger = createNpcProductionObservationLedger({ gameSessionId, capacity: 200 });
       const sink = createNpcBrowserPublicationSink({
         getConversationContainer: () => sessionManager.isCurrentGame(capturedGameId) ? elements.logList : null,
         createTextNode: (text) => document.createTextNode(text),
@@ -168,21 +173,28 @@ function startNewGame() {
           return node;
         }
       });
-      return createProductionNpcStructuredDeliveryIntegration({
-        gameSessionId,
-        authorityPort,
-        deliveryReadPort,
-        candidateTransport: Object.freeze({ generateCandidateTransport: responseProvider.generateCandidateTransport.bind(responseProvider) }),
-        sink,
-        consumer: Object.freeze({ consumerId: "browser-npc-main", sinkType: "browser" }),
-        createId: () => globalThis.crypto.randomUUID(),
-        nowUtc: () => new Date().toISOString(),
-        nowMonotonicMs: () => Math.floor(globalThis.performance.now()),
-        scheduleTimer: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
-        cancelTimer: (handle) => globalThis.clearTimeout(handle),
-        createAbortController: () => new AbortController(),
-        observer: () => {}
-      });
+      try {
+        const integration = createProductionNpcStructuredDeliveryIntegration({
+          gameSessionId,
+          authorityPort,
+          deliveryReadPort,
+          candidateTransport: Object.freeze({ generateCandidateTransport: responseProvider.generateCandidateTransport.bind(responseProvider) }),
+          sink,
+          consumer: Object.freeze({ consumerId: "browser-npc-main", sinkType: "browser" }),
+          createId: () => globalThis.crypto.randomUUID(),
+          nowUtc: () => new Date().toISOString(),
+          nowMonotonicMs: () => Math.floor(globalThis.performance.now()),
+          scheduleTimer: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+          cancelTimer: (handle) => globalThis.clearTimeout(handle),
+          createAbortController: () => new AbortController(),
+          observer: observationLedger.observe
+        });
+        npcProductionObservationLedger = observationLedger;
+        return integration;
+      } catch (error) {
+        observationLedger.reset();
+        throw error;
+      }
     },
     interpreterObserver: (entry) => { shadowObservations = [...shadowObservations.slice(-99), entry]; }
   });
@@ -336,7 +348,8 @@ function renderDeveloperPanel(devSnapshot) {
     renderDevSummary(devSnapshot),
     renderNpcInternalStates(devSnapshot),
     renderDevEventLog(),
-    renderResponseDiagnostics()
+    renderResponseDiagnostics(),
+    renderNpcStructuredObservations()
   );
 }
 
@@ -580,6 +593,54 @@ function renderResponseDiagnostics() {
   }
 
   section.append(title, grid);
+  return section;
+}
+
+function renderNpcStructuredObservations() {
+  const section = document.createElement("div");
+  section.className = "dev-section";
+  const title = document.createElement("div");
+  title.className = "dev-section-title";
+  title.textContent = "5. NPC Structured Observations";
+  section.append(title);
+
+  if (!npcProductionObservationLedger) {
+    const unavailable = document.createElement("div");
+    unavailable.className = "empty-state";
+    unavailable.textContent = "NPC structured observations unavailable";
+    section.append(unavailable);
+    return section;
+  }
+
+  try {
+    const observationSnapshot = npcProductionObservationLedger.getSnapshot({
+      schemaVersion: 1,
+      gameSessionId: game.state.gameSessionId,
+      limit: 100
+    });
+    const summary = document.createElement("div");
+    summary.className = "dev-value";
+    summary.textContent = `status=${observationSnapshot.status} retained=${observationSnapshot.records.length}/${observationSnapshot.capacity} accepted=${observationSnapshot.acceptedCount} rejected=${observationSnapshot.rejectedCount} evicted=${observationSnapshot.evictedCount}`;
+    section.append(summary);
+    if (observationSnapshot.records.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No NPC structured observations yet";
+      section.append(empty);
+    } else {
+      for (const record of observationSnapshot.records) {
+        const line = document.createElement("div");
+        line.className = "dev-value";
+        line.textContent = formatNpcProductionObservationRecord(record);
+        section.append(line);
+      }
+    }
+  } catch {
+    const unavailable = document.createElement("div");
+    unavailable.className = "empty-state";
+    unavailable.textContent = "NPC structured observations unavailable";
+    section.append(unavailable);
+  }
   return section;
 }
 
