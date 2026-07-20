@@ -3,6 +3,14 @@
 Status: Accepted
 Date: 2026-07-18
 
+> **Phase-lifecycle amendment (2026-07-20):**
+> [NPC Structured Reaction Phase Lifecycle and Fallback Decision](./npc-structured-reaction-phase-lifecycle-and-fallback-decision.md)
+> supersedes this document's initial byte-equal live-phase rule for one narrow
+> case. A new successful structured NPC commit derives and atomically applies
+> `player_question -> day_discussion` with the canonical graph append and exact
+> version increment. Frozen historical precondition fields remain
+> `player_question`; every other NPC phase write remains forbidden.
+
 ## Context
 
 Phase 6 currently has two intentionally isolated representations that cannot yet be connected safely:
@@ -123,7 +131,7 @@ The replacement has the same transaction-projection shape as `currentState`, wit
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `gameSessionId` | `state.gameSessionId` | transaction root and binding | None in meaning | `WerewolfGame.state` | Exact copy and equality check | Engine construction/reset only | No commit-specific delta | 2/3 |
 | `stateVersion` | `state.stateVersion` | transaction root, binding, delta, result | Commit replacement is not a game root | `WerewolfGame.state` | Copy precondition into projection; accept only exact `N + 1` output | Atomic port only | Exactly `+1` on committed | 2/3 |
-| `phase` | `state.phase` | transaction root and delta | Commit writes the same allowed resulting phase | `WerewolfGame.state` | Require replacement phase byte-equal to current phase; translator does not write it in initial Phase 6 | Existing commands only | Zero in NPC utterance commit | 2/3 |
+| `phase` | `state.phase` | transaction root and delta | Pure Commit keeps the captured phase; the engine translator derives the live close | `WerewolfGame.state` | Historical phase remains byte-equal. A new successful structured NPC commit alone authorizes `player_question -> day_discussion` in its atomic final replacement | Existing commands plus the amended structured close | Zero except the amended live close | 2/3 plus lifecycle amendment |
 | `turnId` | `state.turnId` | root/binding/plan | None in meaning | `WerewolfGame.state` | Exact copy and equality check | Existing engine turn lifecycle | Zero | 2/3 |
 | `turnOrder` | `state.turnOrder` | root/binding/idempotency record | Plan does not own it | `WerewolfGame.state` | Exact copy into binding and idempotency evidence only | Existing engine turn lifecycle | Zero | 2/3 |
 | Players/participants | `state.players` plus implicit human identity `"player"` | transaction `players` | Different representation and human storage model | `state.players`; implicit human remains engine-owned | Build a fresh minimum participant array; never persist it | Projection builder read-only | Zero | 2 |
@@ -266,10 +274,12 @@ state.conversation.nextRecordAppendOrder                exact +1
 
 Canonical segments change only as members of the one appended reaction plan. There is no independent segment registry.
 
-Every existing registry prefix must be byte-equivalent. The following paths are forbidden from changing:
+Every existing registry prefix must be byte-equivalent. Subject only to the
+prominent phase-lifecycle amendment above, the following paths are forbidden
+from changing:
 
 ```text
-gameSessionId, turnId, turnOrder, day, phase,
+gameSessionId, turnId, turnOrder, day,
 players and every identity/role/team/alive/private/public gameplay field,
 alivePlayers, deadPlayers, votes, seer results, night actions, winner,
 publicInfo, voteHistory, playerLog, developerLog, rng, config,
@@ -282,7 +292,9 @@ all existing claims, events, publications, commit results, plans, and NPC idempo
 provider diagnostics, Coordinator state, and delivery state
 ```
 
-Initial Phase 6 prepared zero-effects also prohibit suspicion, memory, legacy history, vote, phase, and other gameplay-effect changes.
+Initial Phase 6 prepared zero-effects also prohibit suspicion, memory, legacy
+history, vote, and other gameplay-effect changes. They do not authorize phase;
+the engine alone derives the amended successful live close.
 
 ## Operation authority boundary
 
