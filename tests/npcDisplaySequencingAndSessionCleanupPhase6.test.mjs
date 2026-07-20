@@ -215,6 +215,54 @@ test("Browser and CLI entrypoints encode Player-first sequencing and stale-sessi
   assert.ok(cliConsume >= 0 && cliComplete > cliConsume);
 });
 
+test("Browser New Game and renderLogs remove old or untracked NPC nodes in the actual entrypoint", async () => {
+  const browser = fakeBrowserEnvironment();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        provider: "pseudo",
+        interpreterShadowMode: false,
+        interpreterValidationMode: false,
+        playerConversationCommitMode: false,
+        playerStructuredConsumerMode: false,
+        npcStructuredReactionMode: false
+      };
+    }
+  });
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?npc-cleanup=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const oldNode = browser.document.createElement("div");
+    oldNode.dataset.npcPublicationId = "old-publication";
+    oldNode.dataset.browserGameId = "1";
+    browser.elements.logList.append(oldNode);
+    assert.equal(oldNode.parentNode, browser.elements.logList);
+    browser.elements.newGameButton.listeners.get("click")();
+    assert.equal(oldNode.parentNode, null);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 0);
+
+    const untracked = browser.document.createElement("div");
+    untracked.dataset.npcPublicationId = "untracked-current-looking-publication";
+    untracked.dataset.browserGameId = "2";
+    browser.elements.logList.append(untracked);
+    await browser.elements.voteButton.listeners.get("click")();
+    assert.equal(untracked.parentNode, null);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 0);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
 async function ask(game) {
   return game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Who do you suspect?" });
 }
@@ -278,4 +326,73 @@ function enabledGame({ npcWrite, playerStructuredConsumerEnabled = true } = {}) 
 function ids(prefix) {
   let order = 0;
   return () => `${prefix}-${++order}`;
+}
+
+function fakeBrowserEnvironment() {
+  class FakeNode {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.childNodes = this.children;
+      this.dataset = {};
+      this.listeners = new Map();
+      this.parentNode = null;
+      this.textContent = "";
+      this.value = "";
+      this.hidden = false;
+      this.disabled = false;
+      this.className = "";
+      this.scrollTop = 0;
+    }
+    get scrollHeight() { return this.children.length; }
+    append(...nodes) { for (const node of nodes) this.appendChild(node); }
+    appendChild(node) {
+      node.remove?.();
+      this.children.push(node);
+      node.parentNode = this;
+      return node;
+    }
+    replaceChildren(...nodes) {
+      for (const child of this.children) child.parentNode = null;
+      this.children = [];
+      this.childNodes = this.children;
+      this.append(...nodes);
+    }
+    remove() {
+      if (!this.parentNode) return;
+      const parent = this.parentNode;
+      parent.children = parent.children.filter((child) => child !== this);
+      parent.childNodes = parent.children;
+      this.parentNode = null;
+    }
+    contains(node) { return this === node || this.children.some((child) => child.contains?.(node)); }
+    addEventListener(type, listener) { this.listeners.set(type, listener); }
+    setAttribute(name, value) { this[name] = String(value); }
+    querySelectorAll(selector) {
+      const field = selector === "[data-publication-id]" ? "publicationId"
+        : selector === "[data-npc-publication-id]" ? "npcPublicationId" : null;
+      if (!field) return [];
+      const found = [];
+      const visit = (node) => {
+        for (const child of node.children) {
+          if (Object.hasOwn(child.dataset, field)) found.push(child);
+          visit(child);
+        }
+      };
+      visit(this);
+      return found;
+    }
+  }
+
+  const ids = [
+    "statusLine", "newGameButton", "playerGrid", "askForm", "targetSelect", "questionInput",
+    "askButton", "voteButton", "nightButton", "logList", "voteList", "devModeToggle", "developerPanel"
+  ];
+  const elements = Object.fromEntries(ids.map((id) => [id, new FakeNode(id)]));
+  const document = {
+    querySelector(selector) { return elements[selector.slice(1)]; },
+    createElement(tagName) { return new FakeNode(tagName); },
+    createTextNode(text) { const node = new FakeNode("#text"); node.nodeType = 3; node.textContent = text; return node; }
+  };
+  return { document, elements };
 }
