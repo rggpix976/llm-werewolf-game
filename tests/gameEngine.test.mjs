@@ -432,34 +432,29 @@ test("finished games reject further vote and night progression", async () => {
   game.killPlayer("npc3", "test");
   game.checkWin("test");
 
-  const stateBefore = {
-    day: game.state.day,
-    phase: game.state.phase,
-    alivePlayers: [...game.state.alivePlayers],
-    deadPlayers: [...game.state.deadPlayers],
-    voteRounds: game.state.voteHistory.length,
-    playerLogs: game.state.playerLog.length
-  };
+  assert.equal(game.state.winner, TEAMS.VILLAGE);
+  const stateBefore = structuredClone(game.state);
+  const stateVersionBefore = game.state.stateVersion;
+  const turnOrderBefore = game.state.turnOrder;
+  const turnIdBefore = game.state.turnId;
 
   const vote = await game.dispatchPlayerAction({ type: "advance_vote" });
+  assert.equal(vote.result, null);
+  assert.deepEqual(structuredClone(game.state), stateBefore);
+  assert.equal(game.state.stateVersion, stateVersionBefore);
+  assert.equal(game.state.turnOrder, turnOrderBefore);
+  assert.equal(game.state.turnId, turnIdBefore);
+
   const night = await game.dispatchPlayerAction({ type: "run_night" });
 
-  assert.equal(vote.result, null);
   assert.deepEqual(night.result, {
     skipped: true,
     reason: "game_already_finished"
   });
-  assert.deepEqual(
-    {
-      day: game.state.day,
-      phase: game.state.phase,
-      alivePlayers: game.state.alivePlayers,
-      deadPlayers: game.state.deadPlayers,
-      voteRounds: game.state.voteHistory.length,
-      playerLogs: game.state.playerLog.length
-    },
-    stateBefore
-  );
+  assert.deepEqual(structuredClone(game.state), stateBefore);
+  assert.equal(game.state.stateVersion, stateVersionBefore);
+  assert.equal(game.state.turnOrder, turnOrderBefore);
+  assert.equal(game.state.turnId, turnIdBefore);
 });
 
 test("getDeveloperDiagnostics returns a structured, read-only clone of the state and logs", async () => {
