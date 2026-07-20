@@ -259,7 +259,12 @@ async function retryPendingBrowserDisplay() {
   if (!handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
   setBusy(true);
   try { return await continuePendingBrowserDisplay(handoff); }
-  finally { if (sessionManager.isCurrentGame(handoff.generation)) setBusy(false); }
+  finally {
+    if (sessionManager.isCurrentGame(handoff.generation)) {
+      setBusy(false);
+      refreshDiagnosticsAfterRetry();
+    }
+  }
 }
 
 async function continuePendingBrowserDisplay(handoff) {
@@ -339,6 +344,28 @@ function refreshDiagnostics() {
   devLogEntries.push(...diagnostics.developerLogEntries);
 
   renderDeveloperPanel(diagnostics.snapshot);
+}
+
+function refreshDiagnosticsAfterRetry() {
+  if (!isDevMode) return;
+  try {
+    refreshDiagnostics();
+  } catch {
+    try { renderDeveloperPanelUnavailable(); } catch { /* diagnostic isolation */ }
+  }
+}
+
+function renderDeveloperPanelUnavailable() {
+  const section = document.createElement("div");
+  section.className = "dev-section";
+  const title = document.createElement("div");
+  title.className = "dev-section-title";
+  title.textContent = "Developer Diagnostics";
+  const unavailable = document.createElement("div");
+  unavailable.className = "empty-state";
+  unavailable.textContent = "Developer diagnostics unavailable";
+  section.append(title, unavailable);
+  elements.developerPanel.replaceChildren(section);
 }
 
 function renderDeveloperPanel(devSnapshot) {

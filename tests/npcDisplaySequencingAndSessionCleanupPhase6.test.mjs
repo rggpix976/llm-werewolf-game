@@ -477,6 +477,84 @@ test("actual Browser Developer Mode projects all NPC observation sources and New
   }
 });
 
+test("actual Browser Retry Display refreshes repeat-sink and terminal observations without redispatch", async () => {
+  const browser = fakeBrowserEnvironment();
+  const transport = browserTransportHarness();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = transport.fetch;
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?npc-observability-retry=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    browser.elements.devModeToggle.listeners.get("click")();
+    browser.elements.targetSelect.value = "npc1";
+    browser.elements.questionInput.value = "Who do you suspect?";
+    browser.elements.logList.failNextNpcPublicationAppend = true;
+    const submit = browser.elements.askForm.listeners.get("submit");
+
+    await submit({ preventDefault() {} });
+    assert.equal(browser.elements.askButton.textContent, "Retry Display");
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 0);
+    assert.match(nodeText(browser.elements.developerPanel), /outcome=retry_required/);
+    assert.match(nodeText(browser.elements.developerPanel), /retry=repeat_sink/);
+
+    await submit({ preventDefault() {} });
+    const diagnosticText = nodeText(browser.elements.developerPanel);
+    assert.equal(browser.elements.askButton.textContent, "Ask");
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 1);
+    assert.match(diagnosticText, /outcome=delivered/);
+    assert.equal((diagnosticText.match(/retry=repeat_sink/g) ?? []).length, 1);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
+test("actual Browser retry isolates diagnostic projection failure after successful delivery", async () => {
+  const browser = fakeBrowserEnvironment();
+  const transport = browserTransportHarness();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = transport.fetch;
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?npc-observability-retry-failure=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    browser.elements.devModeToggle.listeners.get("click")();
+    browser.elements.targetSelect.value = "npc1";
+    browser.elements.questionInput.value = "Who do you suspect?";
+    browser.elements.logList.failNextNpcPublicationAppend = true;
+    const submit = browser.elements.askForm.listeners.get("submit");
+    await submit({ preventDefault() {} });
+
+    browser.elements.developerPanel.failNextReplaceChildren = true;
+    await submit({ preventDefault() {} });
+    const diagnosticText = nodeText(browser.elements.developerPanel);
+    assert.equal(browser.elements.askButton.textContent, "Ask");
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 1);
+    assert.match(diagnosticText, /Developer diagnostics unavailable/);
+    assert.doesNotMatch(diagnosticText, /sensitive diagnostic projection failure|stack|cause/);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
 test("actual Browser flag-off session reports NPC observations unavailable without creating a ledger", async () => {
   const browser = fakeBrowserEnvironment();
   const originalDocument = globalThis.document;
@@ -540,6 +618,121 @@ test("actual CLI dev and --show-dev expose bounded NPC observations without dupl
   const autoOutput = observationOutput[0];
   assert.equal(autoOutput.split("\n").filter((line) => line.startsWith("#1 ")).length, 1);
   assert.doesNotMatch(observationOutput.join("\n"), /knownInformation|rawResponse|privateMemory|promptPreview/);
+});
+
+test("actual CLI retry auto-tail prints only observations not shown before the retry", async () => {
+  const output = [];
+  const errors = [];
+  let candidateCalls = 0;
+  let playerWriteCalls = 0;
+  const commands = ["ask npc1 Who do you suspect?", "retry", "retry", "quit"];
+  await runCli({
+    runtimeConfig: {
+      provider: "openai",
+      openai: {
+        apiKey: "unit-test-credential",
+        model: "test-model",
+        maxOutputTokens: 220,
+        maxRequestsPerMinute: 10,
+        maxConcurrentRequests: 1,
+        fetch: async (_url, options) => {
+          candidateCalls += 1;
+          const body = JSON.parse(options.body);
+          const request = JSON.parse(body.input[0].content[0].text);
+          const targetId = request.knownInformation.constraints.allowedLivingTargetIds[0];
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            async json() {
+              return {
+                status: "completed",
+                output_text: JSON.stringify({
+                  schemaVersion: 1,
+                  proposals: [{ proposalType: "suspicion", targetId }]
+                })
+              };
+            }
+          };
+        }
+      },
+      interpreterValidationMode: true,
+      playerConversationCommitMode: true,
+      playerStructuredConsumerMode: true,
+      npcStructuredReactionMode: true
+    },
+    showDev: true,
+    readlineInterface: {
+      async question() { return commands.shift() ?? "quit"; },
+      close() {}
+    },
+    writeLine: (line) => output.push(String(line)),
+    writeError: (line) => errors.push(String(line)),
+    writePublicationText: async (text) => {
+      if (!text.includes("Who do you suspect?")) return;
+      playerWriteCalls += 1;
+      if (playerWriteCalls === 1) throw new Error("player writer failed");
+    }
+  });
+
+  assert.equal(candidateCalls, 1);
+  assert.equal(playerWriteCalls, 2);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /player writer failed/);
+  const observationOutput = output.filter((entry) => entry.includes("--- NPC Structured Observations ---"));
+  assert.equal(observationOutput.length, 1);
+  assert.match(observationOutput[0], /source=route/);
+  assert.match(observationOutput[0], /source=delivery_controller/);
+  assert.match(observationOutput[0], /source=delivery_orchestrator/);
+  assert.match(observationOutput[0], /outcome=delivered/);
+  const orders = observationOutput[0].split("\n")
+    .filter((line) => /^#\d+ /.test(line))
+    .map((line) => Number(line.match(/^#(\d+) /)[1]));
+  assert.equal(new Set(orders).size, orders.length);
+  assert.deepEqual([...orders].sort((left, right) => left - right), orders);
+});
+
+test("actual CLI retry isolates diagnostic output failure and does not retain the completed handoff", async () => {
+  const errors = [];
+  const commands = ["ask npc1 Who do you suspect?", "retry", "retry", "quit"];
+  let playerWriteCalls = 0;
+  let diagnosticFailures = 0;
+  let sawNoRetryTarget = false;
+  await runCli({
+    runtimeConfig: {
+      provider: "pseudo",
+      interpreterValidationMode: true,
+      playerConversationCommitMode: true,
+      playerStructuredConsumerMode: true,
+      npcStructuredReactionMode: true
+    },
+    showDev: true,
+    readlineInterface: {
+      async question() { return commands.shift() ?? "quit"; },
+      close() {}
+    },
+    writeLine: (line) => {
+      const text = String(line);
+      if (text.includes("再試行対象の表示はありません")) sawNoRetryTarget = true;
+      if (text.includes("--- developer log tail ---") && diagnosticFailures === 0) {
+        diagnosticFailures += 1;
+        throw new Error("sensitive diagnostic output failure");
+      }
+    },
+    writeError: (line) => errors.push(String(line)),
+    writePublicationText: async (text) => {
+      if (!text.includes("Who do you suspect?")) return;
+      playerWriteCalls += 1;
+      if (playerWriteCalls === 1) throw new Error("player writer failed");
+    }
+  });
+
+  assert.equal(playerWriteCalls, 2);
+  assert.equal(diagnosticFailures, 1);
+  assert.equal(sawNoRetryTarget, true);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /player writer failed/);
+  assert.doesNotMatch(errors.join("\n"), /sensitive diagnostic output failure/);
 });
 
 test("CLI external games have no synthetic ledger and normal output never includes diagnostics", async () => {
@@ -756,12 +949,20 @@ function fakeBrowserEnvironment() {
         this.failNextPlayerPublicationAppend = false;
         throw new Error("browser_sink_attachment_failed");
       }
+      if (this.failNextNpcPublicationAppend && Object.hasOwn(node.dataset, "npcPublicationId")) {
+        this.failNextNpcPublicationAppend = false;
+        throw new Error("browser_sink_attachment_failed");
+      }
       node.remove?.();
       this.children.push(node);
       node.parentNode = this;
       return node;
     }
     replaceChildren(...nodes) {
+      if (this.failNextReplaceChildren) {
+        this.failNextReplaceChildren = false;
+        throw new Error("sensitive diagnostic projection failure");
+      }
       for (const child of this.children) child.parentNode = null;
       this.children = [];
       this.childNodes = this.children;

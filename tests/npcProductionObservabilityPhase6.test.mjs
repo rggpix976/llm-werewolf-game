@@ -135,6 +135,22 @@ test("last safe observation order is accepted once and all counters saturate wit
   assert.equal(snapshot.nextObservationOrder, Number.MAX_SAFE_INTEGER);
   assert.equal(snapshot.records[0].observationOrder, Number.MAX_SAFE_INTEGER);
 
+  const beforeReset = structuredClone(snapshot);
+  assert.equal(ledger.reset(), undefined);
+  assert.equal(ledger.reset(), undefined);
+  const resetSnapshot = ledger.getSnapshot({ schemaVersion: 1, gameSessionId: sessionId, limit: 1 });
+  assert.equal(resetSnapshot.status, "reset");
+  assert.deepEqual(resetSnapshot.records, beforeReset.records);
+  assert.equal(resetSnapshot.acceptedCount, beforeReset.acceptedCount);
+  assert.equal(resetSnapshot.rejectedCount, beforeReset.rejectedCount);
+  assert.equal(resetSnapshot.evictedCount, beforeReset.evictedCount);
+  assert.equal(resetSnapshot.nextObservationOrder, beforeReset.nextObservationOrder);
+  ledger.observe(routeEvent({ runtimeOrder: 3 }));
+  assert.deepEqual(
+    ledger.getSnapshot({ schemaVersion: 1, gameSessionId: sessionId, limit: 1 }),
+    resetSnapshot
+  );
+
   const rejectedBoundaryModule = await loadLedgerWithPrivateInitializers({
     rejectedCount: Number.MAX_SAFE_INTEGER - 1
   });
@@ -187,6 +203,20 @@ test("formatter emits one exact redacted line and rejects malformed normalized r
     () => formatNpcProductionObservationRecord({ ...record, rawResponse: "sensitive-marker" }),
     (error) => error instanceof TypeError && error.message === "Invalid NPC production observation record."
   );
+});
+
+test("repeat-sink and acknowledgement-only retry modes remain distinct in redacted projection", () => {
+  const ledger = createNpcProductionObservationLedger({ gameSessionId: sessionId, capacity: 2 });
+  ledger.observe(orchestratorEvent());
+  ledger.observe(orchestratorEvent({
+    deliveryId: "delivery-2",
+    retryMode: "ack_only"
+  }));
+  const snapshot = ledger.getSnapshot({ schemaVersion: 1, gameSessionId: sessionId, limit: 2 });
+  const lines = snapshot.records.map(formatNpcProductionObservationRecord);
+  assert.match(lines[0], /outcome=retry_required[\s\S]*retry=repeat_sink$/);
+  assert.match(lines[1], /outcome=retry_required[\s\S]*retry=ack_only$/);
+  assert.doesNotMatch(lines.join("\n"), /receipt|retryToken|capability|rawResponse/);
 });
 
 test("source event objects remain unchanged and retained records are detached", () => {

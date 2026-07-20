@@ -78,7 +78,7 @@ export function createNpcProductionObservationLedger(configuration) {
   }
 
   function reset() {
-    if (status === "active") status = "reset";
+    status = "reset";
     return undefined;
   }
 

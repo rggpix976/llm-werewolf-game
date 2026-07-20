@@ -189,8 +189,12 @@ export async function runCli(options = {}) {
           continue;
         }
         if (command === "retry") {
-          if (!pendingCliDisplayHandoff) writeLine("再試行対象の表示はありません。");
-          else await continuePendingCliDisplay(pendingCliDisplayHandoff);
+          try {
+            if (!pendingCliDisplayHandoff) writeLine("再試行対象の表示はありません。");
+            else await continuePendingCliDisplay(pendingCliDisplayHandoff);
+          } finally {
+            try { maybePrintDevTail(); } catch { /* diagnostic isolation */ }
+          }
           continue;
         }
         if (command === "ask") {
