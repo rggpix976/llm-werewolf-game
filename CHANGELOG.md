@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hardened the default-off OpenAI NPC candidate path without a live API call. Each candidate invoker now owns a process-local 60-second rolling fetch-start limit and bounded concurrency lease shared for the Server handler or CLI process lifetime, transmits configured `max_output_tokens`, fails local denial immediately without queue/retry/pseudo fallback, and does not change authority, Commit, or Delivery behavior.
+
 - Reconciled README, development status, and changelog with the post-merge Phase 6 production-integration baseline after PR #58: Slices 1–6 are merged at normal two-parent merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572`, while `NPC_STRUCTURED_REACTION_MODE` remains default-off. Runtime, tests, schemas, dependencies, packages, and workflows are unchanged.
 
 - Corrected the Phase 6 OpenAI NPC candidate upstream contract without a live API call: the strict Responses API schema now uses the supported nested `anyOf` composition while preserving all nine exact proposal variants, and upstream HTTP 429 evidence now produces `retryAfterMs` only from an explicit decimal delta-seconds value within the existing two-second Provider limit. Missing, empty, malformed, negative, fractional, unsafe, over-limit, and unsupported HTTP-date values fail closed as nonretryable; explicit zero remains valid. Injected-fetch regression tests prove one invocation, no hidden retry, and no `oneOf` in the transmitted schema.
