@@ -171,11 +171,82 @@ pending Player display／NPC Deliveryはabandonされる。old sessionのlate ca
 8. NPC structured observation ledgerが`unavailable`であることを確認する。
 9. `Retry Display`が残っていないことを確認する。
 
-localhostでの非billable確認例:
+localhostでの非billable確認では、実際にserverを起動したprocessと同じ`PORT`を使う。`PORT`が未設定ならproduction serverのdefault `4173`を使う。別portを固定してはならない。
+
+PowerShell:
 
 ```powershell
-Invoke-RestMethod -Method Get -Uri http://127.0.0.1:3000/api/runtime-config
+$port = if ($env:PORT) { $env:PORT } else { "4173" }
+$baseUrl = "http://127.0.0.1:$port"
+
+# このendpointの成功responseは200だけであり、非2xxならInvoke-RestMethodがthrowする。
+$config = Invoke-RestMethod `
+  -Method Get `
+  -Uri "$baseUrl/api/runtime-config"
+
+if ($config.npcStructuredReactionMode -ne $false) {
+  throw "NPC Structured Reaction rollback verification failed."
+}
+
+$candidateStatus = $null
+try {
+  $candidateResponse = Invoke-WebRequest `
+    -Method Post `
+    -Uri "$baseUrl/api/generate-npc-reaction-candidate" `
+    -ContentType "application/json" `
+    -Body "{}"
+  $candidateStatus = [int]$candidateResponse.StatusCode
+} catch {
+  if ($null -eq $_.Exception.Response) {
+    throw
+  }
+  $candidateStatus = [int]$_.Exception.Response.StatusCode
+}
+
+if ($candidateStatus -ne 404) {
+  throw "NPC candidate endpoint remained enabled after rollback."
+}
 ```
+
+POSIX shell:
+
+```bash
+port="${PORT:-4173}"
+base_url="http://127.0.0.1:${port}"
+config_file="$(mktemp)"
+trap 'rm -f "$config_file"' EXIT
+
+config_status="$(
+  curl --silent \
+    --show-error \
+    --output "$config_file" \
+    --write-out '%{http_code}' \
+    "${base_url}/api/runtime-config"
+)"
+
+test "$config_status" = "200"
+node --input-type=module --eval '
+  const config = JSON.parse(process.argv[1]);
+  if (config.npcStructuredReactionMode !== false) {
+    throw new Error("NPC Structured Reaction rollback verification failed.");
+  }
+' "$(cat "$config_file")"
+
+candidate_status="$(
+  curl --silent \
+    --show-error \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    "${base_url}/api/generate-npc-reaction-candidate"
+)"
+
+test "$candidate_status" = "404"
+```
+
+どちらの例もcandidate検証bodyは空のJSON objectだけであり、credential、private question、role、team、Known Informationを含めない。commandが失敗した場合や期待statusと異なる場合はrollback完了と判定しない。
 
 ### CLI
 

@@ -286,6 +286,24 @@ test("rollback runbook has the exact operator structure, required recovery bound
   ]) {
     assert.ok(runbook.includes(marker), `missing runbook contract marker: ${marker}`);
   }
+  for (const commandMarker of [
+    "production serverのdefault `4173`", "$env:PORT", "$baseUrl = \"http://127.0.0.1:$port\"",
+    "Invoke-RestMethod", "$config.npcStructuredReactionMode -ne $false", "Invoke-WebRequest",
+    "$candidateStatus -ne 404", "port=\"${PORT:-4173}\"", "base_url=\"http://127.0.0.1:${port}\"",
+    "curl --silent", "test \"$config_status\" = \"200\"", "config.npcStructuredReactionMode !== false",
+    "test \"$candidate_status\" = \"404\""
+  ]) {
+    assert.ok(runbook.includes(commandMarker), `missing executable verification marker: ${commandMarker}`);
+  }
+  assert.doesNotMatch(runbook, /127\.0\.0\.1:3000/);
+  const verificationBlocks = [...runbook.matchAll(/```(?:powershell|bash)\n([\s\S]*?)\n```/g)]
+    .map((match) => match[1])
+    .filter((block) => block.includes("/api/generate-npc-reaction-candidate"));
+  assert.equal(verificationBlocks.length, 2);
+  for (const block of verificationBlocks) {
+    assert.match(block, /(?:-Body \"\{\}\"|--data '\{\}')/);
+    assert.doesNotMatch(block, /OPENAI_API_KEY|Authorization|private question|Known Information|role|team/i);
+  }
   assert.doesNotMatch(runbook, /sk-(?:proj-)?[A-Za-z0-9_-]{8,}/);
   assert.doesNotMatch(runbook, /C:\\Users\\|\/home\/|Authorization:\s*Bearer/);
   assert.doesNotMatch(runbook, /hot toggle.{0,20}(?:可能|supported)/i);
