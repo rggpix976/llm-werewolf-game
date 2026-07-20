@@ -99,6 +99,8 @@ const ACCUSATORY_QUESTION_KEYWORDS = [
   "black"
 ];
 
+const EXECUTE_COMMAND_DECISION = Object.freeze({ disposition: "execute" });
+
 export class WerewolfGame {
   static create(options = {}) {
     const createId = options.createId ?? (() => globalThis.crypto.randomUUID());
@@ -295,7 +297,8 @@ export class WerewolfGame {
       throw typedError("input_in_progress");
     }
     if (this.playerPublicationDeliveryController.modeState().transitionStatus === "draining_pre_cutover") throw typedError("consumer_mode_transition_pending");
-    const rejected = this._validateCommand(action); if (rejected) return this._actionResult(action.type, rejected, logCursor);
+    const decision = validateCommandDecision(this._validateCommand(action));
+    if (decision.disposition === "return") return this._actionResult(action.type, decision.result, logCursor);
     if (this._commandInProgress) throw typedError("input_in_progress");
     if (!Number.isSafeInteger(this.state.stateVersion) || this.state.stateVersion < 0 || this.state.stateVersion === Number.MAX_SAFE_INTEGER) throw typedError("state_version_exhausted");
     if (!Number.isSafeInteger(this.state.turnOrder) || this.state.turnOrder < 0 || this.state.turnOrder === Number.MAX_SAFE_INTEGER) throw typedError("turn_order_exhausted");
@@ -534,10 +537,14 @@ export class WerewolfGame {
 
   _validateCommand(action) {
     if (!["ask_npc", "advance_vote", "run_night", "get_state"].includes(action.type)) throw new Error(`Unknown player action type: ${action.type}`);
-    if (this.state.winner) return action.type === "ask_npc" ? { responded: false, reason: "game_already_finished" } : action.type === "run_night" ? { skipped: true, reason: "game_already_finished" } : null;
+    if (this.state.winner) {
+      if (action.type === "ask_npc") return returnCommandDecision({ responded: false, reason: "game_already_finished" });
+      if (action.type === "advance_vote") return returnCommandDecision(null);
+      if (action.type === "run_night") return returnCommandDecision({ skipped: true, reason: "game_already_finished" });
+    }
     if (action.type === "ask_npc") { const target = action.targetId ?? action.target ?? action.npcId; if (!this.getPlayer(target)) throw new Error(`Unknown NPC: ${target}`); if (!String(action.input ?? action.question ?? "").trim()) throw new TypeError("Player input is required"); }
     if (action.clarificationRequestId && !this._clarificationContinuation(action)) throw typedError("invalid_clarification_continuation");
-    return null;
+    return EXECUTE_COMMAND_DECISION;
   }
 
   _clarificationContinuation(action) { if (action.type !== "ask_npc" || !action.clarificationRequestId) return false; const prior = this.interpreterTerminalAudit.get(action.clarificationRequestId); return prior?.outcome?.category === "clarification" && prior.turnId === this.state.turnId; }
@@ -1752,6 +1759,21 @@ function createConversationPolicy(role) {
 
 function cloneState(state) { const { rng, ...plain } = state, clonedRng = new SeededRandom(0); clonedRng.state = rng.state; return { ...structuredClone(plain), rng: clonedRng }; }
 function engineId(prefix, createId) { const value = `${prefix}-${createId()}`; if (!ID_PATTERN.test(value)) throw typedError("invalid_engine_id"); return value; }
+function returnCommandDecision(result) { return Object.freeze({ disposition: "return", result }); }
+function validateCommandDecision(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw typedError("invalid_command_decision");
+  const dispositionDescriptor = Object.getOwnPropertyDescriptor(value, "disposition");
+  if (!dispositionDescriptor?.enumerable || !Object.hasOwn(dispositionDescriptor, "value")) throw typedError("invalid_command_decision");
+  const expectedFields = dispositionDescriptor.value === "execute" ? ["disposition"]
+    : dispositionDescriptor.value === "return" ? ["disposition", "result"] : null;
+  const keys = Reflect.ownKeys(value);
+  if (!expectedFields || keys.length !== expectedFields.length || keys.some((key) => typeof key !== "string" || !expectedFields.includes(key))) throw typedError("invalid_command_decision");
+  for (const field of expectedFields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw typedError("invalid_command_decision");
+  }
+  return value;
+}
 function exactNpcStructuredIntegration(value) {
   const fields = ["executeNpcReaction", "pumpNpcPublicationAfterPlayerDisplay", "reset"];
   if (value === null || typeof value !== "object" || Array.isArray(value)
