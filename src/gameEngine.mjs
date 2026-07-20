@@ -100,6 +100,9 @@ const ACCUSATORY_QUESTION_KEYWORDS = [
 ];
 
 const EXECUTE_COMMAND_DECISION = Object.freeze({ disposition: "execute" });
+const NPC_STRUCTURED_LIFECYCLE_SETTLED = "settled";
+const NPC_STRUCTURED_LIFECYCLE_OWNER_LOST = "owner_lost";
+const NPC_STRUCTURED_LIFECYCLE_SETTLEMENT_FAILED = "settlement_failed";
 
 export class WerewolfGame {
   static create(options = {}) {
@@ -300,13 +303,14 @@ export class WerewolfGame {
     const decision = validateCommandDecision(this._validateCommand(action));
     if (decision.disposition === "return") return this._actionResult(action.type, decision.result, logCursor);
     if (this._commandInProgress) throw typedError("input_in_progress");
+    const closedStructuredSelection = action.type === "ask_npc" && this.npcStructuredReactionEnabled;
     if (!Number.isSafeInteger(this.state.stateVersion) || this.state.stateVersion < 0 || this.state.stateVersion === Number.MAX_SAFE_INTEGER) throw typedError("state_version_exhausted");
+    if (closedStructuredSelection && this.state.stateVersion > Number.MAX_SAFE_INTEGER - 2) throw typedError("state_version_exhausted");
     if (!Number.isSafeInteger(this.state.turnOrder) || this.state.turnOrder < 0 || this.state.turnOrder === Number.MAX_SAFE_INTEGER) throw typedError("turn_order_exhausted");
     this._commandInProgress = true;
     const preconditionVersion = this.state.stateVersion;
     const continuation = this._clarificationContinuation(action); if (!continuation) { this.state.turnOrder += 1; this.state.turnId = engineId("turn", this.createId); }
     try {
-      const closedStructuredSelection = action.type === "ask_npc" && this.npcStructuredReactionEnabled;
       let interpreted = null;
       if (action.type === "ask_npc" && this.interpreterValidationEnabled) {
         try { interpreted = await this._observeInterpreter(action); }
@@ -318,9 +322,6 @@ export class WerewolfGame {
       if (this._destroyed) throw abortError();
       if (closedStructuredSelection && interpreted?.outcome?.category !== "validated") {
         return this._actionResult(action.type, closedNpcStructuredInterpreterResult(interpreted?.outcome), logCursor);
-      }
-      if (closedStructuredSelection && this.state.stateVersion > Number.MAX_SAFE_INTEGER - 2) {
-        throw typedError("state_version_exhausted");
       }
       if (action.type === "ask_npc" && this.playerConversationCommitEnabled && interpreted?.outcome?.category === "validated") {
         const result = await this._commitStructuredPlayerQuestion(action, interpreted, preconditionVersion);
@@ -406,11 +407,15 @@ export class WerewolfGame {
           originatingInputRecordId: delta.inputRecordId
         }));
       } catch (error) {
-        this._settleNpcStructuredLifecycleFailure(lifecycleOwner);
+        consumeNpcStructuredLifecycleSettlementOutcome(
+          this._settleNpcStructuredLifecycleFailure(lifecycleOwner)
+        );
         throw error;
       }
       if (!["committed", "committed_cleanup_pending"].includes(structuredNpc?.routeStatus)) {
-        this._settleNpcStructuredLifecycleFailure(lifecycleOwner);
+        consumeNpcStructuredLifecycleSettlementOutcome(
+          this._settleNpcStructuredLifecycleFailure(lifecycleOwner)
+        );
       }
       if (["committed", "committed_cleanup_pending"].includes(structuredNpc.routeStatus)
           && structuredNpc.deliveryStatus === "pending_player_display") {
@@ -447,8 +452,11 @@ export class WerewolfGame {
   }
 
   _settleNpcStructuredLifecycleFailure(owner) {
+    if (!npcStructuredLifecycleOwnerMatches(this.state, owner, this._destroyed)) {
+      return NPC_STRUCTURED_LIFECYCLE_OWNER_LOST;
+    }
+    let finalReplacementStarted = false;
     try {
-      if (!npcStructuredLifecycleOwnerMatches(this.state, owner, this._destroyed)) return false;
       this.npcAuthorityFaultInjector("lifecycle_settlement_before_working_copy");
       const working = this._workingCopy();
       working.state.phase = "day_discussion";
@@ -457,11 +465,21 @@ export class WerewolfGame {
       validateNpcAuthoritativeStateFoundation(working.state);
       validateCommittedConversationGraph(working._conversationGraph());
       this.npcAuthorityFaultInjector("lifecycle_settlement_before_final_replacement");
-      if (!npcStructuredLifecycleOwnerMatches(this.state, owner, this._destroyed)) return false;
+      if (!npcStructuredLifecycleOwnerMatches(this.state, owner, this._destroyed)) {
+        return NPC_STRUCTURED_LIFECYCLE_OWNER_LOST;
+      }
+      finalReplacementStarted = true;
       commitState(this.state, working.state);
-      return true;
+      return NPC_STRUCTURED_LIFECYCLE_SETTLED;
     } catch {
-      return false;
+      if (npcStructuredLifecycleSettlementPostconditionMatches(this.state, owner)) {
+        return NPC_STRUCTURED_LIFECYCLE_SETTLED;
+      }
+      if (!finalReplacementStarted
+          && !npcStructuredLifecycleOwnerMatches(this.state, owner, this._destroyed)) {
+        return NPC_STRUCTURED_LIFECYCLE_OWNER_LOST;
+      }
+      return NPC_STRUCTURED_LIFECYCLE_SETTLEMENT_FAILED;
     }
   }
 
@@ -1717,6 +1735,26 @@ function npcStructuredLifecycleOwnerMatches(state, owner, destroyed) {
   }
 }
 
+function npcStructuredLifecycleSettlementPostconditionMatches(state, owner) {
+  if (state.gameSessionId !== owner.gameSessionId || state.turnId !== owner.turnId
+    || state.turnOrder !== owner.turnOrder || state.stateVersion !== owner.stateVersion + 1
+    || state.phase !== "day_discussion") return false;
+  try {
+    const normalized = structuredClone(state);
+    normalized.stateVersion = owner.stateVersion;
+    normalized.phase = owner.phase;
+    if (npcAuthorityRootFingerprint(normalized) !== owner.rootFingerprint) return false;
+    const playerGraph = resolveNpcStructuredLifecyclePlayerGraph(state, owner);
+    if (!state.players.some((player) => player.id === owner.targetNpcId)
+      || sha256Fingerprint(playerGraph) !== owner.playerGraphFingerprint) return false;
+    return !state.conversation.npcReactionCommitIdempotencyRecords.some((record) =>
+      record.causationId === owner.triggerRequestId
+      || record.originatingInputRecordId === owner.originatingInputRecordId);
+  } catch {
+    return false;
+  }
+}
+
 function resolveNpcStructuredLifecyclePlayerGraph(state, request) {
   const conversation = state.conversation;
   const results = conversation.commitResults.filter((result) =>
@@ -1781,6 +1819,26 @@ function closedNpcStructuredInterpreterResult(outcome) {
       legacySuppressed: true
     }
   });
+}
+
+function consumeNpcStructuredLifecycleSettlementOutcome(outcome) {
+  switch (outcome) {
+    case NPC_STRUCTURED_LIFECYCLE_SETTLED:
+    case NPC_STRUCTURED_LIFECYCLE_OWNER_LOST:
+      return;
+    case NPC_STRUCTURED_LIFECYCLE_SETTLEMENT_FAILED:
+    default:
+      throw npcStructuredLifecycleSettlementError();
+  }
+}
+
+function npcStructuredLifecycleSettlementError() {
+  const reasonCode = "npc_structured_lifecycle_settlement_failed";
+  const error = new Error(reasonCode);
+  error.name = "NpcStructuredLifecycleSettlementError";
+  error.code = reasonCode;
+  error.reasonCode = reasonCode;
+  return error;
 }
 
 function assertNpcAuthorityExact(value, fields, code) {

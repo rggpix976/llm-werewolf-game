@@ -62,6 +62,30 @@ phase, no newer owner, and no committed NPC reaction for the trigger. A stale,
 conflicting, reset, or destroyed owner causes zero settlement mutation. The
 original route result or error remains the public outcome.
 
+The private settlement result is a closed three-member taxonomy:
+
+```text
+settled:
+  exact owner retained and the lifecycle replacement completed
+
+owner_lost:
+  the exact CAS owner was lost before replacement
+
+settlement_failed:
+  the exact owner remained but working-copy construction, validation,
+  fault injection, or final replacement failed
+```
+
+Both the terminal-result and route-throw callers consume this result
+exhaustively. `settled` and `owner_lost` preserve the original route result or
+error contract. `settlement_failed` and any unknown member fail-stop with
+`NpcStructuredLifecycleSettlementError` and the fixed redacted reason
+`npc_structured_lifecycle_settlement_failed`; no raw route/fault error or cause
+is attached. Settlement is attempted once, with no retry or legacy recovery.
+If an exception follows a completed replacement, the engine verifies the exact
+postcondition before classifying it as `settled`; a partial replacement cannot
+be disguised as owner loss.
+
 ## Delivery nonauthority and lifecycle gate
 
 Delivery never changes phase, version, or the authoritative conversation
@@ -105,11 +129,23 @@ unchanged.
 
 ## Turn allocation compatibility
 
+For structured-mode `ask_npc`, two-version capacity is checked after command
+validation and the existing in-progress gates but before turn/order mutation,
+turn-ID allocation, ID-allocator invocation, Interpreter invocation, or any
+Player/NPC/legacy effect. A starting version greater than
+`Number.MAX_SAFE_INTEGER - 2` fails with the existing
+`state_version_exhausted` code and changes no authoritative identity or graph.
+The exact boundary `Number.MAX_SAFE_INTEGER - 2` remains valid and ends at the
+last safe integer after the two commits.
+
 Closed nonvalidated structured outcomes preserve the existing Phase 3 turn
 contract: a new noncontinuation command retains its newly allocated turn ID and
 order, while a valid clarification continuation reuses its logical turn. They
 do not commit Player or NPC conversation state and do not increment the state
 version merely because the structured outcome is closed.
+
+The preflight is not applied to flag-off or non-`ask_npc` compatibility paths;
+their existing one-version and Interpreter/fallback behavior is unchanged.
 
 ## Replay and conflict boundaries
 

@@ -187,6 +187,125 @@ test("terminal integration throw keeps its identity after a successful lifecycle
   assert.equal(game.state.conversation.reactionPlans.length, 0);
 });
 
+test("settlement-internal faults fail-stop with one redacted typed error", async (t) => {
+  const cases = [
+    ["terminal result before working copy", "result", "lifecycle_settlement_before_working_copy"],
+    ["route throw before working copy", "throw", "lifecycle_settlement_before_working_copy"],
+    ["terminal result before final replacement", "result", "lifecycle_settlement_before_final_replacement"],
+    ["route throw before final replacement", "throw", "lifecycle_settlement_before_final_replacement"]
+  ];
+  for (const [name, routeMode, faultStage] of cases) await t.test(name, async () => {
+    const counters = { candidate: 0, legacy: 0, npcWrites: 0 };
+    const routeError = new Error("RAW_PRIVATE_ROUTE_ERROR");
+    let settlementAttempts = 0;
+    let deliveryCalls = 0;
+    let postPlayerState;
+    let game;
+    const integration = () => Object.freeze({
+      async executeNpcReaction() {
+        if (routeMode === "throw") throw routeError;
+        return Object.freeze({ routeStatus: "route_failed" });
+      },
+      async pumpNpcPublicationAfterPlayerDisplay() {
+        deliveryCalls += 1;
+        return Object.freeze({ deliveryStatus: "pending_none" });
+      },
+      reset() {}
+    });
+    ({ game } = createLifecycleGame({
+      counters,
+      createNpcStructuredProductionIntegration: integration,
+      npcAuthorityFaultInjector(stage) {
+        if (stage !== faultStage) return;
+        settlementAttempts += 1;
+        postPlayerState = authoritativeComparable(game.state);
+        throw new Error("RAW_PRIVATE_SETTLEMENT_FAULT");
+      }
+    }));
+
+    let publicError;
+    await assert.rejects(
+      () => game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Question?" }),
+      (error) => {
+        publicError = error;
+        return error.name === "NpcStructuredLifecycleSettlementError"
+          && error.code === "npc_structured_lifecycle_settlement_failed"
+          && error.reasonCode === "npc_structured_lifecycle_settlement_failed";
+      }
+    );
+
+    assert.equal(settlementAttempts, 1);
+    assert.equal(counters.candidate, 0);
+    assert.equal(counters.legacy, 0);
+    assert.equal(counters.npcWrites, 0);
+    assert.equal(deliveryCalls, 0);
+    assert.equal(game.state.phase, "player_question");
+    assert.equal(game.state.stateVersion, 1);
+    assert.equal(game.state.conversation.commitResults.filter((entry) =>
+      entry.commitType === "player_conversation").length, 1);
+    assert.equal(game.state.conversation.reactionPlans.length, 0);
+    assert.deepEqual(authoritativeComparable(game.state), postPlayerState);
+    const exposed = `${publicError.name}:${publicError.message}:${JSON.stringify(publicError)}`;
+    assert.equal(exposed.includes("RAW_PRIVATE_SETTLEMENT_FAULT"), false);
+    assert.equal(exposed.includes("RAW_PRIVATE_ROUTE_ERROR"), false);
+    assert.equal(Object.hasOwn(publicError, "cause"), false);
+  });
+});
+
+test("owner loss while a settlement fault is caught preserves the original route error", async () => {
+  const routeError = new Error("route owner-lost identity");
+  let game;
+  let interveningState;
+  const integration = () => Object.freeze({
+    async executeNpcReaction() { throw routeError; },
+    async pumpNpcPublicationAfterPlayerDisplay() {
+      throw new Error("delivery must remain unused");
+    },
+    reset() {}
+  });
+  ({ game } = createLifecycleGame({
+    createNpcStructuredProductionIntegration: integration,
+    npcAuthorityFaultInjector(stage) {
+      if (stage !== "lifecycle_settlement_before_final_replacement") return;
+      game.state.day += 1;
+      interveningState = authoritativeComparable(game.state);
+      throw new Error("settlement fault after owner loss");
+    }
+  }));
+  await assert.rejects(
+    () => game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Question?" }),
+    (error) => error === routeError
+  );
+  assert.deepEqual(authoritativeComparable(game.state), interveningState);
+  assert.equal(game.state.conversation.reactionPlans.length, 0);
+});
+
+test("unknown settlement outcome fails closed instead of completing a terminal route result", async () => {
+  const counters = { candidate: 0, legacy: 0 };
+  const integration = () => Object.freeze({
+    async executeNpcReaction() { return Object.freeze({ routeStatus: "route_failed" }); },
+    async pumpNpcPublicationAfterPlayerDisplay() {
+      throw new Error("delivery must remain unused");
+    },
+    reset() {}
+  });
+  const { game } = createLifecycleGame({
+    counters,
+    createNpcStructuredProductionIntegration: integration
+  });
+  game._settleNpcStructuredLifecycleFailure = () => "unknown_settlement_outcome";
+  await assert.rejects(
+    () => game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Question?" }),
+    (error) => error.name === "NpcStructuredLifecycleSettlementError"
+      && error.reasonCode === "npc_structured_lifecycle_settlement_failed"
+  );
+  assert.equal(counters.candidate, 0);
+  assert.equal(counters.legacy, 0);
+  assert.equal(game.state.phase, "player_question");
+  assert.equal(game.state.stateVersion, 1);
+  assert.equal(game.state.conversation.reactionPlans.length, 0);
+});
+
 test("RC-015 live phase closes before Delivery while the handoff gate still blocks mutation", async () => {
   const { game } = createLifecycleGame();
   const first = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "First?" });
