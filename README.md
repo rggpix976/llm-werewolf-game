@@ -115,7 +115,9 @@ Phase 5を有効にすると、browser/CLIはrequested consumer modeとしてstr
 
 Phase 6の`NPC_STRUCTURED_REACTION_MODE`はdefault-offです。`false`では既存legacy NPC Provider／表示経路を維持します。`PLAYER_CONVERSATION_COMMIT_MODE=true`を前提として`true`にすると、受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続し、同一logical reactionのlegacy Providerおよびlegacy表示fallbackを抑止します。PR #58は2026-07-19に通常のmerge commitで`master`へ取り込み済みですが、flagは安全な既定値として`false`を維持します。有効化は別の明示的な運用判断と検証を経て行います。`false`へのrollbackは将来のreactionをlegacy経路へ戻しますが、既にauthoritative commit済みのstructured publicationは巻き戻しません。
 
-Phase 6 hardeningでは、Finding F-01のcandidate cost controlが通常のmerge commit `4a510d902c7d455d7ed7c3c1e96a5d89c814f9ea`で取り込み済みです。現在のF-02／F-03 Draft hardeningは、Structured Routeとauthoritative NPC Commitをengine内で完了した後もNPC Deliveryを開始せず、Browser／CLIがPlayer表示を`acknowledged`または`evidence_recorded`へ完了してから明示的にpumpします。Player表示またはNPC Deliveryがretry可能な場合は同じfrozen action／engine-private handoffを保持し、Browserでは同じAsk controlの`Retry Display`、CLIでは明示的な`retry` commandでのみ再開します。`repeat_sink`はsinkだけを、`ack_only`はacknowledgementだけを再試行し、Provider、Validation、Preparation、Commit、Player action dispatchを再実行しません。Browser New Gameは旧generationを先に無効化し、旧sessionのNPC DOM nodeをbookkeeping reset前に除去してlate callbackと再挿入を遮断します。F-04〜F-06、flag-on判断、Slice 6 candidate routeのbillable live smokeは別工程のままであり、flagのdefaultは`false`です。
+Phase 6 hardeningでは、Finding F-01のcandidate cost controlに加え、F-02のPlayer-before-NPC delivery sequencingとF-03のBrowser New Game cleanupが通常のmerge commit `a039bd1f19e83bbe8ba65573071c0dc64f3b15c9`で取り込み済みです。Structured Routeとauthoritative NPC Commitをengine内で完了した後も、Browser／CLIがPlayer表示を`acknowledged`または`evidence_recorded`へ完了するまでNPC Deliveryを開始しません。Player表示またはNPC Deliveryがretry可能な場合は同じfrozen action／engine-private handoffを保持し、Browserでは同じAsk controlの`Retry Display`、CLIでは明示的な`retry` commandでのみ再開します。`repeat_sink`はsinkだけを、`ack_only`はacknowledgementだけを再試行し、Provider、Validation、Preparation、Commit、Player action dispatchを再実行しません。Browser New Gameは旧generationを先に無効化し、旧sessionのNPC DOM nodeをbookkeeping reset前に除去してlate callbackと再挿入を遮断します。F-05／F-06、flag-on判断、Slice 6 candidate routeのbillable live smokeは別工程のままであり、flagのdefaultは`false`です。
+
+F-04のNPC production observabilityは、Structured Route、Delivery Controller、Delivery Orchestratorの既存redacted eventだけをsession-localなin-memory ledgerへ統合します。Browser／CLIともcapacityは200件で、古いrecordからevictされます。BrowserではDeveloper Modeの最新100件、CLIでは`dev`の最新20件と`--show-dev`の未表示差分だけを表示します。Player-facing UI／通常CLI出力には表示せず、New Game／process終了でsession ledgerを破棄します。永続化、remote telemetry、network送信、raw prompt／response、Known Information、role／team、provider exceptionは保存しません。Structured Route flagがOFFのsessionと外部注入CLI gameではledgerを作らず、診断はunavailableです。
 
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは引き続き実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックのみを使用します。
 
@@ -142,6 +144,7 @@ node scripts/mock-openai-server.mjs
   - 各NPCの内部状態（役職、陣営、既知の情報、秘密の情報、疑念スコア、記憶、ポリシーなど）
   - 開発者イベントログ（全NPCの行動、内部判定の履歴）
   - LLM/プロバイダー診断（プロンプトのプレビュー、使用された根拠、使用トークン、エラー詳細）
+  - NPC Structured Observations（Route／Delivery Controller／Delivery Orchestratorのboundedかつredactedなsession-local record）
 - **注意点**:
   - 初期状態はOFFです。
   - ローカルでの診断およびデバッグ用であり、認証・認可の境界ではありません。

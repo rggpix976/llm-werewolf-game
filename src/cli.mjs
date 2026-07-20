@@ -12,6 +12,7 @@ import { createLocalNpcReactionCandidateTransport } from "./npcReactionCandidate
 import { createOpenAINpcReactionCandidateInvoker, createPseudoNpcReactionCandidateInvoker } from "./npcReactionCandidateUpstream.mjs";
 import { createNpcCliPublicationSink } from "./npcCliPublicationSink.mjs";
 import { createProductionNpcStructuredDeliveryIntegration } from "./npcProductionIntegration.mjs";
+import { createNpcProductionObservationLedger, formatNpcProductionObservationRecord } from "./npcProductionObservationLedger.mjs";
 
 export async function runCli(options = {}) {
   const runtimeConfig = options.runtimeConfig ?? parseConfig(options.environment ?? process.env);
@@ -19,13 +20,18 @@ export async function runCli(options = {}) {
   const writeLine = options.writeLine ?? ((text) => console.log(text));
   const writeError = options.writeError ?? ((text) => console.error(text));
   const writePublicationText = options.writePublicationText ?? (async (text) => { if (text) writeLine(`\n${text}`); });
-  const game = options.game ?? createCliGame(runtimeConfig, writeLine);
+  const created = options.game
+    ? { game: options.game, observationLedger: null }
+    : createCliGame(runtimeConfig, writeLine);
+  const game = created.game;
+  let npcProductionObservationLedger = created.observationLedger;
   const rl = options.readlineInterface ?? readline.createInterface({ input, output });
   const destroyOnExit = options.destroyOnExit !== false;
   let printedLogIndex = 0;
   const playerFacingHistory = [];
   const cliPublicationBookkeeping = new Map();
   let pendingCliDisplayHandoff = null;
+  let lastAutoPrintedNpcObservationOrder = 0;
 
   function printAliveNpcs(snapshot = game.getPublicSnapshot()) {
     const alive = snapshot.players.filter((player) => player.alive).map((player) => {
@@ -124,7 +130,37 @@ export async function runCli(options = {}) {
   }
 
   function maybePrintDevTail() {
-    if (showDev) writeLine(`\n--- developer log tail ---\n${game.formatDeveloperLog({ last: 3 })}`);
+    if (!showDev) return;
+    writeLine(`\n--- developer log tail ---\n${game.formatDeveloperLog({ last: 3 })}`);
+    printNpcStructuredObservations({ onlyNew: true });
+  }
+
+  function maybePrintDevTailSafely() {
+    try { maybePrintDevTail(); } catch { /* diagnostic isolation */ }
+  }
+
+  function printNpcStructuredObservations({ onlyNew }) {
+    if (!npcProductionObservationLedger) {
+      if (!onlyNew) writeLine("\n--- NPC Structured Observations ---\nunavailable");
+      return;
+    }
+    try {
+      const observationSnapshot = npcProductionObservationLedger.getSnapshot({
+        schemaVersion: 1,
+        gameSessionId: game.state.gameSessionId,
+        limit: onlyNew ? 200 : 20
+      });
+      const records = onlyNew
+        ? observationSnapshot.records.filter(({ observationOrder }) => observationOrder > lastAutoPrintedNpcObservationOrder)
+        : observationSnapshot.records;
+      if (onlyNew && records.length === 0) return;
+      const summary = `status=${observationSnapshot.status} retained=${observationSnapshot.records.length}/${observationSnapshot.capacity} accepted=${observationSnapshot.acceptedCount} rejected=${observationSnapshot.rejectedCount} evicted=${observationSnapshot.evictedCount}`;
+      const lines = records.map((record) => sanitizeTerminalText(formatNpcProductionObservationRecord(record)));
+      writeLine(`\n--- NPC Structured Observations ---\n${sanitizeTerminalText(summary)}${lines.length ? `\n${lines.join("\n")}` : "\nNo NPC structured observations yet"}`);
+      if (onlyNew) lastAutoPrintedNpcObservationOrder = records.at(-1).observationOrder;
+    } catch {
+      if (!onlyNew) writeLine("\n--- NPC Structured Observations ---\nunavailable");
+    }
   }
 
   function printIntro() {
@@ -151,10 +187,22 @@ export async function runCli(options = {}) {
           continue;
         }
         if (command === "log") { writeLine(formatEntries(playerFacingHistory)); continue; }
-        if (command === "dev") { writeLine(game.formatDeveloperLog({ last: 8 })); continue; }
+        if (command === "dev") {
+          try {
+            writeLine(game.formatDeveloperLog({ last: 8 }));
+            printNpcStructuredObservations({ onlyNew: false });
+          } catch {
+            try { writeError("Error: developer diagnostics unavailable"); } catch { /* diagnostic isolation */ }
+          }
+          continue;
+        }
         if (command === "retry") {
-          if (!pendingCliDisplayHandoff) writeLine("再試行対象の表示はありません。");
-          else await continuePendingCliDisplay(pendingCliDisplayHandoff);
+          try {
+            if (!pendingCliDisplayHandoff) writeLine("再試行対象の表示はありません。");
+            else await continuePendingCliDisplay(pendingCliDisplayHandoff);
+          } finally {
+            maybePrintDevTailSafely();
+          }
           continue;
         }
         if (command === "ask") {
@@ -167,17 +215,17 @@ export async function runCli(options = {}) {
           }
           const action = await dispatchCommand({ type: "ask_npc", target, input: question, logCursor: printedLogIndex });
           await printNewPlayerLog(action);
-          maybePrintDevTail();
+          maybePrintDevTailSafely();
           continue;
         }
         if (command === "vote") {
           const voteAction = await dispatchCommand({ type: "advance_vote", logCursor: printedLogIndex });
           await printNewPlayerLog(voteAction);
-          maybePrintDevTail();
+          maybePrintDevTailSafely();
           if (!game.state.winner) {
             const nightAction = await dispatchCommand({ type: "run_night", logCursor: printedLogIndex });
             await printNewPlayerLog(nightAction);
-            maybePrintDevTail();
+            maybePrintDevTailSafely();
           }
           if (game.state.winner) writeLine("\nゲーム終了です。dev コマンドで開発者ログを確認できます。");
           continue;
@@ -191,7 +239,11 @@ export async function runCli(options = {}) {
   } finally {
     pendingCliDisplayHandoff = null;
     rl.close();
-    if (destroyOnExit) game.destroy();
+    if (destroyOnExit) {
+      game.destroy();
+      npcProductionObservationLedger?.reset();
+      npcProductionObservationLedger = null;
+    }
   }
 
   return Object.freeze({ printedLogIndex, playerFacingEntryCount: playerFacingHistory.length });
@@ -204,7 +256,8 @@ function createCliGame(runtimeConfig, writeLine) {
       : createPseudoNpcReactionCandidateInvoker()
   });
   let npcServerCorrelationOrder = 0;
-  return WerewolfGame.create({
+  let observationLedger = null;
+  const game = WerewolfGame.create({
     seed: Date.now(),
     shuffleRoles: true,
     interpreterProvider: createLocalInterpreterHttpProvider(new PseudoInterpreterProvider(), { createServerCorrelationId: () => `server-cli-interpreter-${globalThis.crypto.randomUUID()}` }),
@@ -213,30 +266,39 @@ function createCliGame(runtimeConfig, writeLine) {
     playerStructuredConsumerEnabled: runtimeConfig.playerStructuredConsumerMode,
     npcStructuredReactionEnabled: runtimeConfig.npcStructuredReactionMode,
     createNpcStructuredProductionIntegration: ({ gameSessionId, authorityPort, deliveryReadPort }) => {
+      const sessionObservationLedger = createNpcProductionObservationLedger({ gameSessionId, capacity: 200 });
       const sink = createNpcCliPublicationSink({
         write: async ({ text }) => { if (text) writeLine(`\n${text}`); },
         failureGuarantee: "unknown_on_failure"
       });
-      return createProductionNpcStructuredDeliveryIntegration({
-        gameSessionId,
-        authorityPort,
-        deliveryReadPort,
-        candidateTransport: createLocalNpcReactionCandidateTransport({
-          provider: npcCandidateProvider,
-          createServerCorrelationId: () => `server-cli-${++npcServerCorrelationOrder}`
-        }),
-        sink,
-        consumer: Object.freeze({ consumerId: "cli-npc-main", sinkType: "cli" }),
-        createId: () => globalThis.crypto.randomUUID(),
-        nowUtc: () => new Date().toISOString(),
-        nowMonotonicMs: () => Math.floor(globalThis.performance.now()),
-        scheduleTimer: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
-        cancelTimer: (handle) => globalThis.clearTimeout(handle),
-        createAbortController: () => new AbortController(),
-        observer: () => {}
-      });
+      try {
+        const integration = createProductionNpcStructuredDeliveryIntegration({
+          gameSessionId,
+          authorityPort,
+          deliveryReadPort,
+          candidateTransport: createLocalNpcReactionCandidateTransport({
+            provider: npcCandidateProvider,
+            createServerCorrelationId: () => `server-cli-${++npcServerCorrelationOrder}`
+          }),
+          sink,
+          consumer: Object.freeze({ consumerId: "cli-npc-main", sinkType: "cli" }),
+          createId: () => globalThis.crypto.randomUUID(),
+          nowUtc: () => new Date().toISOString(),
+          nowMonotonicMs: () => Math.floor(globalThis.performance.now()),
+          scheduleTimer: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+          cancelTimer: (handle) => globalThis.clearTimeout(handle),
+          createAbortController: () => new AbortController(),
+          observer: sessionObservationLedger.observe
+        });
+        observationLedger = sessionObservationLedger;
+        return integration;
+      } catch (error) {
+        sessionObservationLedger.reset();
+        throw error;
+      }
     }
   });
+  return { game, observationLedger };
 }
 
 function isTerminalNpcDelivery(status) {
