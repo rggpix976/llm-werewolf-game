@@ -300,6 +300,22 @@ test("rollback runbook has the exact operator structure, required recovery bound
     .map((match) => match[1])
     .filter((block) => block.includes("/api/generate-npc-reaction-candidate"));
   assert.equal(verificationBlocks.length, 2);
+  const posixBlock = verificationBlocks.find((block) => block.includes('port="${PORT:-4173}"'));
+  assert.ok(posixBlock);
+  assert.match(posixBlock, /^\(\n  set -eu\n/);
+  assert.match(posixBlock, /\n\)$/);
+  assert.ok(posixBlock.indexOf("  set -eu") < posixBlock.indexOf('  port="${PORT:-4173}"'));
+  for (const failClosedMarker of [
+    "  config_status=\"$(",
+    '  test "$config_status" = "200"',
+    "  node --input-type=module --eval '",
+    "config.npcStructuredReactionMode !== false",
+    "  candidate_status=\"$(",
+    '  test "$candidate_status" = "404"'
+  ]) {
+    assert.ok(posixBlock.includes(failClosedMarker), `missing fail-closed marker: ${failClosedMarker}`);
+  }
+  assert.match(posixBlock, /  config_file="\$\(mktemp\)"\n  trap 'rm -f "\$config_file"' EXIT/);
   for (const block of verificationBlocks) {
     assert.match(block, /(?:-Body \"\{\}\"|--data '\{\}')/);
     assert.doesNotMatch(block, /OPENAI_API_KEY|Authorization|private question|Known Information|role|team/i);

@@ -211,40 +211,46 @@ if ($candidateStatus -ne 404) {
 POSIX shell:
 
 ```bash
-port="${PORT:-4173}"
-base_url="http://127.0.0.1:${port}"
-config_file="$(mktemp)"
-trap 'rm -f "$config_file"' EXIT
+(
+  set -eu
 
-config_status="$(
-  curl --silent \
-    --show-error \
-    --output "$config_file" \
-    --write-out '%{http_code}' \
-    "${base_url}/api/runtime-config"
-)"
+  port="${PORT:-4173}"
+  base_url="http://127.0.0.1:${port}"
+  config_file="$(mktemp)"
+  trap 'rm -f "$config_file"' EXIT
 
-test "$config_status" = "200"
-node --input-type=module --eval '
-  const config = JSON.parse(process.argv[1]);
-  if (config.npcStructuredReactionMode !== false) {
-    throw new Error("NPC Structured Reaction rollback verification failed.");
-  }
-' "$(cat "$config_file")"
+  config_status="$(
+    curl --silent \
+      --show-error \
+      --output "$config_file" \
+      --write-out '%{http_code}' \
+      "${base_url}/api/runtime-config"
+  )"
 
-candidate_status="$(
-  curl --silent \
-    --show-error \
-    --output /dev/null \
-    --write-out '%{http_code}' \
-    --request POST \
-    --header 'Content-Type: application/json' \
-    --data '{}' \
-    "${base_url}/api/generate-npc-reaction-candidate"
-)"
+  test "$config_status" = "200"
+  node --input-type=module --eval '
+    const config = JSON.parse(process.argv[1]);
+    if (config.npcStructuredReactionMode !== false) {
+      throw new Error("NPC Structured Reaction rollback verification failed.");
+    }
+  ' "$(cat "$config_file")"
 
-test "$candidate_status" = "404"
+  candidate_status="$(
+    curl --silent \
+      --show-error \
+      --output /dev/null \
+      --write-out '%{http_code}' \
+      --request POST \
+      --header 'Content-Type: application/json' \
+      --data '{}' \
+      "${base_url}/api/generate-npc-reaction-candidate"
+  )"
+
+  test "$candidate_status" = "404"
+)
 ```
+
+POSIX例は`set -eu`をscoped subshell内だけで有効化する。runtime-config request、status、JSON parse、`npcStructuredReactionMode`、candidate request、statusのいずれかが失敗した時点でsubshellはnonzeroで終了し、後続の成功で上書きしない。temporary-fileの`EXIT` trapもsubshell終了時に実行され、operatorのparent shellへ残らない。全条件が成功した場合だけsubshellは`0`を返す。
 
 どちらの例もcandidate検証bodyは空のJSON objectだけであり、credential、private question、role、team、Known Informationを含めない。commandが失敗した場合や期待statusと異なる場合はrollback完了と判定しない。
 
