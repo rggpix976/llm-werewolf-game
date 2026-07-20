@@ -40,6 +40,7 @@ let shadowObservations = [];
 let playerFacingLog = [];
 let playerPublicationDomBookkeeping = new Map();
 let npcPublicationDomBookkeeping = new Map();
+let pendingBrowserDisplayHandoff = null;
 
 initializeApp();
 
@@ -76,6 +77,11 @@ elements.newGameButton.addEventListener("click", () => {
 
 elements.askForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (pendingBrowserDisplayHandoff) {
+    const retried = await retryPendingBrowserDisplay();
+    if (retried) elements.questionInput.value = "";
+    return;
+  }
   const target = elements.targetSelect.value;
   const input = elements.questionInput.value.trim();
   if (!target || !input || snapshot.winner) {
@@ -122,6 +128,8 @@ elements.nightButton.addEventListener("click", async () => {
 function startNewGame() {
   const nextGameId = sessionManager.startNewGame();
   game?.destroy?.();
+  pendingBrowserDisplayHandoff = null;
+  elements.questionInput.value = "";
   for (const node of elements.logList.querySelectorAll("[data-npc-publication-id]")) node.remove();
   npcPublicationDomBookkeeping.clear();
   playerPublicationDomBookkeeping.clear();
@@ -196,23 +204,23 @@ async function dispatch(action) {
   const gameIdAtStart = currentGameId;
   setBusy(true);
   try {
-    const writeStructured = async (entry, attempt) => { const node = appendBrowserLogEntry(entry); bindBrowserDeliveryNode(node, attempt); return stagePlayerFacingEntry(entry, node); };
-    const writeLegacy = async (entry, attempt) => { if (attempt) return appendLegacyPlayerPublication(entry, attempt); const node = appendBrowserLogEntry(entry); playerFacingLog.push(structuredClone(entry)); return node; };
-    const result = await dispatchPlayerActionWithConsumerMode({ game, action: { ...action, logCursor }, requestedMode: runtimeConfig?.playerStructuredConsumerMode === true ? "structured" : "legacy", consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured, writeLegacy });
+    const result = await dispatchPlayerActionWithConsumerMode({ game, action: { ...action, logCursor }, requestedMode: runtimeConfig?.playerStructuredConsumerMode === true ? "structured" : "legacy", consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured: writeStructuredPlayerEntry, writeLegacy: writeLegacyPlayerEntry });
 
     if (!sessionManager.isCurrentGame(gameIdAtStart)) {
       return null;
     }
 
     render(result.publicSnapshot);
-    if (result.livePlayerDisplayEntries.length) await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured, writeLegacy });
-    if (!sessionManager.isCurrentGame(gameIdAtStart)) return null;
     if (result.result?.structuredNpc?.deliveryStatus === "pending_player_display") {
-      await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay({
-        schemaVersion: 1,
-        gameSessionId: game.state.gameSessionId,
-        playerPublicationId: result.result.conversationCommitResult.playerPublicationId
-      });
+      pendingBrowserDisplayHandoff = {
+        generation: gameIdAtStart,
+        action: frozenClone(result),
+        playerPublicationId: result.result.conversationCommitResult.playerPublicationId,
+        playerDisplayed: false
+      };
+      await continuePendingBrowserDisplay(pendingBrowserDisplayHandoff);
+    } else if (result.livePlayerDisplayEntries.length) {
+      await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured: writeStructuredPlayerEntry, writeLegacy: writeLegacyPlayerEntry });
     }
     if (!sessionManager.isCurrentGame(gameIdAtStart)) return null;
     captureNpcPublicationNodes();
@@ -232,6 +240,73 @@ async function dispatch(action) {
       setBusy(false);
     }
   }
+}
+
+async function retryPendingBrowserDisplay() {
+  const handoff = pendingBrowserDisplayHandoff;
+  if (!handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+  setBusy(true);
+  try { return await continuePendingBrowserDisplay(handoff); }
+  finally { if (sessionManager.isCurrentGame(handoff.generation)) setBusy(false); }
+}
+
+async function continuePendingBrowserDisplay(handoff) {
+  if (pendingBrowserDisplayHandoff !== handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+  if (!handoff.playerDisplayed) {
+    await consumeLiveActionDisplay({
+      game,
+      action: handoff.action,
+      consumerId: "browser-main",
+      sinkType: "browser",
+      bookkeeping: playerPublicationDomBookkeeping,
+      writeStructured: writeStructuredPlayerEntry,
+      writeLegacy: writeLegacyPlayerEntry
+    });
+    if (pendingBrowserDisplayHandoff !== handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+    handoff.playerDisplayed = true;
+    logCursor = handoff.action.nextLogCursor;
+  }
+  const completion = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay({
+    schemaVersion: 1,
+    gameSessionId: game.state.gameSessionId,
+    playerPublicationId: handoff.playerPublicationId
+  });
+  if (pendingBrowserDisplayHandoff !== handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+  if (isTerminalNpcDelivery(completion.deliveryStatus)) pendingBrowserDisplayHandoff = null;
+  captureNpcPublicationNodes();
+  renderLogs();
+  updateControls();
+  return handoff.action;
+}
+
+async function writeStructuredPlayerEntry(entry, attempt) {
+  const node = appendBrowserLogEntry(entry);
+  bindBrowserDeliveryNode(node, attempt);
+  return stagePlayerFacingEntry(entry, node);
+}
+
+async function writeLegacyPlayerEntry(entry, attempt) {
+  if (attempt) return appendLegacyPlayerPublication(entry, attempt);
+  const node = appendBrowserLogEntry(entry);
+  playerFacingLog.push(structuredClone(entry));
+  return node;
+}
+
+function isTerminalNpcDelivery(status) {
+  return ["delivered", "acknowledged_existing", "failed_terminal", "pending_none", "reset"].includes(status);
+}
+
+function frozenClone(value) {
+  const clone = structuredClone(value);
+  const freeze = (entry) => {
+    if (!entry || typeof entry !== "object" || Object.isFrozen(entry)) return entry;
+    for (const key of Reflect.ownKeys(entry)) {
+      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
+      if (descriptor && Object.hasOwn(descriptor, "value")) freeze(descriptor.value);
+    }
+    return Object.freeze(entry);
+  };
+  return freeze(clone);
 }
 
 function render(nextSnapshot) {
@@ -679,7 +754,10 @@ function captureNpcPublicationNodes() {
     }
     const publicationId = node.dataset.npcPublicationId;
     if (!npcPublicationDomBookkeeping.has(publicationId)) {
-      npcPublicationDomBookkeeping.set(publicationId, { node, afterPlayerCount: playerFacingLog.length });
+      npcPublicationDomBookkeeping.set(publicationId, {
+        node,
+        afterPlayerCount: elements.logList.querySelectorAll("[data-publication-id]").length
+      });
     }
   }
 }
@@ -733,13 +811,15 @@ function updateControls() {
 
   elements.targetSelect.disabled = !questionAvailable;
   elements.questionInput.disabled = !questionAvailable;
-  elements.askButton.disabled = !questionAvailable || !elements.questionInput.value.trim();
+  elements.askButton.textContent = pendingBrowserDisplayHandoff ? "Retry Display" : "Ask";
+  elements.askButton.disabled = !questionAvailable || (!pendingBrowserDisplayHandoff && !elements.questionInput.value.trim());
   elements.voteButton.disabled = gameOver || canRunNight;
   elements.nightButton.disabled = gameOver || !canRunNight;
 }
 
 function setBusy(isBusy) {
-  elements.askButton.disabled = isBusy || !elements.questionInput.value.trim();
+  elements.askButton.textContent = pendingBrowserDisplayHandoff ? "Retry Display" : "Ask";
+  elements.askButton.disabled = isBusy || (!pendingBrowserDisplayHandoff && !elements.questionInput.value.trim());
   elements.voteButton.disabled = isBusy || Boolean(snapshot?.winner) || canRunNight;
   elements.nightButton.disabled = isBusy || Boolean(snapshot?.winner) || !canRunNight;
 }

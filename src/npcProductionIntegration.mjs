@@ -67,6 +67,7 @@ export function createProductionNpcStructuredDeliveryIntegration(configuration) 
   });
   let reset = false;
   let pendingRouteStatus = null;
+  let pendingDeliveryRetry = null;
 
   async function executeNpcReaction(trigger) {
     if (reset) return publicResult("reset", null, null, "npc_structured_route_reset");
@@ -89,15 +90,32 @@ export function createProductionNpcStructuredDeliveryIntegration(configuration) 
     const routeStatus = pendingRouteStatus;
     let deliveryResult;
     try {
-      deliveryResult = await orchestrator.pumpPendingNpcPublications({
-        schemaVersion: 1,
-        gameSessionId: configuration.gameSessionId
-      });
+      deliveryResult = pendingDeliveryRetry === null
+        ? await orchestrator.pumpPendingNpcPublications({
+            schemaVersion: 1,
+            gameSessionId: configuration.gameSessionId
+          })
+        : await orchestrator.retryNpcPublicationDelivery({
+            schemaVersion: 1,
+            gameSessionId: configuration.gameSessionId,
+            retryId: pendingDeliveryRetry.retryId
+          });
     } catch (error) {
       return publicResult(routeStatus, "delivery_failed", null, closedCode(error));
     }
+    if (deliveryResult.status === "retry_required") {
+      pendingDeliveryRetry = Object.freeze({
+        retryId: deliveryResult.retryId,
+        retryMode: deliveryResult.retryMode
+      });
+    }
     if (["delivered", "failed_terminal", "pending_none", "reset"].includes(deliveryResult.status)) {
       pendingRouteStatus = null;
+      pendingDeliveryRetry = null;
+    }
+    if (deliveryResult.status === "acknowledged_existing") {
+      pendingRouteStatus = null;
+      pendingDeliveryRetry = null;
     }
     return publicResult(
       routeStatus,
@@ -111,6 +129,8 @@ export function createProductionNpcStructuredDeliveryIntegration(configuration) 
   function resetIntegration() {
     if (reset) return undefined;
     reset = true;
+    pendingRouteStatus = null;
+    pendingDeliveryRetry = null;
     try { route.reset(); } catch {}
     try { orchestrator.reset(); } catch {}
     return undefined;

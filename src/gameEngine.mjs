@@ -291,7 +291,7 @@ export class WerewolfGame {
     const logCursor = Number.isInteger(action.logCursor) ? action.logCursor : this.state.playerLog.length;
     if (action.type === "get_state") return this._actionResult(action.type, null, logCursor);
     if (action.type === "ask_npc" && action.replayRequestId) return this._replayPlayerConversation(action, logCursor);
-    if (["pending_player_display", "in_progress"].includes(this._npcStructuredDeliveryHandoff?.state)) {
+    if (["pending_player_display", "pending_delivery_retry", "in_progress"].includes(this._npcStructuredDeliveryHandoff?.state)) {
       throw typedError("input_in_progress");
     }
     if (this.playerPublicationDeliveryController.modeState().transitionStatus === "draining_pre_cutover") throw typedError("consumer_mode_transition_pending");
@@ -383,7 +383,7 @@ export class WerewolfGame {
       }));
       if (["committed", "committed_cleanup_pending"].includes(structuredNpc.routeStatus)
           && structuredNpc.deliveryStatus === "pending_player_display") {
-        if (["pending_player_display", "in_progress"].includes(this._npcStructuredDeliveryHandoff?.state)) {
+        if (["pending_player_display", "pending_delivery_retry", "in_progress"].includes(this._npcStructuredDeliveryHandoff?.state)) {
           throw typedError("input_in_progress");
         }
         this._npcStructuredDeliveryHandoff = {
@@ -425,6 +425,7 @@ export class WerewolfGame {
     if (handoff.state === "settled") return handoff.finalResult;
     if (handoff.state === "abandoned") throw typedError("stale_session");
     if (handoff.state === "in_progress") throw typedError("input_in_progress");
+    const previousState = handoff.state;
     const playerDeliveryState = this.playerPublicationDeliveryController.stateFor(handoff.playerPublicationId);
     if (!["acknowledged", "evidence_recorded"].includes(playerDeliveryState)) return handoff.finalResult;
 
@@ -439,12 +440,20 @@ export class WerewolfGame {
         return result;
       }
       handoff.finalResult = result;
-      handoff.state = "settled";
+      if (["retry_required", "delivery_failed"].includes(result?.deliveryStatus)) {
+        handoff.state = "pending_delivery_retry";
+      } else if (result?.routeStatus === "reset"
+          || ["delivered", "acknowledged_existing", "failed_terminal", "pending_none", "reset"].includes(result?.deliveryStatus)) {
+        handoff.state = "settled";
+      } else {
+        handoff.state = previousState;
+        throw typedError("invalid_npc_structured_integration");
+      }
       return result;
     } catch (error) {
       if (!this._destroyed && this._npcStructuredDeliveryHandoff === handoff
           && handoff.generation === this._npcStructuredDeliveryGeneration && handoff.state === "in_progress") {
-        handoff.state = "pending_player_display";
+        handoff.state = previousState;
       }
       throw error;
     }

@@ -5,11 +5,13 @@ import test from "node:test";
 import { WerewolfGame } from "../src/gameEngine.mjs";
 import { createLocalInterpreterHttpProvider, PseudoInterpreterProvider } from "../src/interpreterTransport.mjs";
 import { createNpcCliPublicationSink } from "../src/npcCliPublicationSink.mjs";
+import { createNpcBrowserPublicationSink } from "../src/npcBrowserPublicationSink.mjs";
 import { createProductionNpcStructuredDeliveryIntegration } from "../src/npcProductionIntegration.mjs";
-import { createNpcReactionCandidateProvider } from "../src/npcReactionCandidateProvider.mjs";
+import { createNpcReactionCandidateHttpHandler, createNpcReactionCandidateProvider } from "../src/npcReactionCandidateProvider.mjs";
 import { createLocalNpcReactionCandidateTransport } from "../src/npcReactionCandidateTransport.mjs";
 import { createPseudoNpcReactionCandidateInvoker } from "../src/npcReactionCandidateUpstream.mjs";
 import { consumeLiveActionDisplay } from "../src/playerDisplaySink.mjs";
+import { runCli } from "../src/cli.mjs";
 
 test("NPC delivery remains pending until the exact Player publication has display evidence", async () => {
   const order = [];
@@ -196,6 +198,125 @@ test("Player display failure never starts the NPC sink and can be retried explic
   game.destroy();
 });
 
+test("production repeat-sink retry stays nonterminal and reruns neither Provider nor Commit", async () => {
+  const npcDom = failingNpcDom(1);
+  let providerCalls = 0;
+  const pseudo = createPseudoNpcReactionCandidateInvoker();
+  const game = enabledGame({
+    npcSinkType: "browser",
+    npcDom,
+    invokeProvider: async (request, options) => {
+      providerCalls += 1;
+      return pseudo(request, options);
+    }
+  });
+  const action = await ask(game);
+  const planCount = game.state.conversation.reactionPlans.length;
+  await displayPlayer(game, action, async () => {});
+  const input = {
+    schemaVersion: 1,
+    gameSessionId: game.state.gameSessionId,
+    playerPublicationId: action.result.conversationCommitResult.playerPublicationId
+  };
+
+  const retryRequired = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
+  assert.equal(retryRequired.deliveryStatus, "retry_required");
+  assert.match(retryRequired.retryId, /^runtime-/);
+  assert.equal(npcDom.appendAttempts, 1);
+  await assert.rejects(() => game.dispatchPlayerAction({ type: "advance_vote" }), (error) => error.code === "input_in_progress");
+
+  const delivered = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
+  assert.equal(delivered.deliveryStatus, "delivered");
+  assert.equal(npcDom.appendAttempts, 2);
+  assert.equal(npcDom.container.children.length, 1);
+  assert.equal(providerCalls, 1);
+  assert.equal(game.state.conversation.reactionPlans.length, planCount);
+  const duplicate = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
+  assert.equal(duplicate, delivered);
+  assert.equal(npcDom.appendAttempts, 2);
+  game.destroy();
+});
+
+test("repeat-sink exhaustion is terminal and releases the mutation gate", async () => {
+  const npcDom = failingNpcDom(3);
+  const game = enabledGame({ npcSinkType: "browser", npcDom });
+  const action = await ask(game);
+  await displayPlayer(game, action, async () => {});
+  const input = {
+    schemaVersion: 1,
+    gameSessionId: game.state.gameSessionId,
+    playerPublicationId: action.result.conversationCommitResult.playerPublicationId
+  };
+  assert.equal((await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input)).deliveryStatus, "retry_required");
+  assert.equal((await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input)).deliveryStatus, "retry_required");
+  const exhausted = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
+  assert.equal(exhausted.deliveryStatus, "failed_terminal");
+  assert.equal(npcDom.appendAttempts, 3);
+  assert.equal((await game.dispatchPlayerAction({ type: "advance_vote" })).ok, true);
+  game.destroy();
+});
+
+test("ack-only and closed delivery failures retain the same engine handoff until explicit retry", async () => {
+  const pumpResults = [
+    frozenIntegrationResult("retry_required", "retry-ack"),
+    frozenIntegrationResult("acknowledged_existing", null)
+  ];
+  let executeCalls = 0;
+  let pumpCalls = 0;
+  let simulatedSinkCalls = 1;
+  const game = enabledGame({
+    createIntegration: () => Object.freeze({
+      async executeNpcReaction() { executeCalls += 1; return frozenIntegrationResult("pending_player_display", null, "committed"); },
+      async pumpNpcPublicationAfterPlayerDisplay() {
+        const result = pumpResults[pumpCalls++];
+        if (pumpCalls > 1) simulatedSinkCalls += 0;
+        return result;
+      },
+      reset() {}
+    })
+  });
+  const action = await ask(game);
+  await displayPlayer(game, action, async () => {});
+  const input = { schemaVersion: 1, gameSessionId: game.state.gameSessionId, playerPublicationId: action.result.conversationCommitResult.playerPublicationId };
+  assert.equal((await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input)).deliveryStatus, "retry_required");
+  await assert.rejects(() => game.dispatchPlayerAction({ type: "advance_vote" }), (error) => error.code === "input_in_progress");
+  assert.equal((await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input)).deliveryStatus, "acknowledged_existing");
+  assert.equal(executeCalls, 1);
+  assert.equal(pumpCalls, 2);
+  assert.equal(simulatedSinkCalls, 1);
+  game.destroy();
+
+  const failureThenSuccess = [frozenIntegrationResult("delivery_failed"), frozenIntegrationResult("delivered")];
+  let failurePumps = 0;
+  const retryableGame = enabledGame({
+    createIntegration: () => Object.freeze({
+      async executeNpcReaction() { return frozenIntegrationResult("pending_player_display", null, "committed"); },
+      async pumpNpcPublicationAfterPlayerDisplay() { return failureThenSuccess[failurePumps++]; },
+      reset() {}
+    })
+  });
+  const retryableAction = await ask(retryableGame);
+  await displayPlayer(retryableGame, retryableAction, async () => {});
+  const retryableInput = { schemaVersion: 1, gameSessionId: retryableGame.state.gameSessionId, playerPublicationId: retryableAction.result.conversationCommitResult.playerPublicationId };
+  assert.equal((await retryableGame.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(retryableInput)).deliveryStatus, "delivery_failed");
+  await assert.rejects(() => retryableGame.dispatchPlayerAction({ type: "advance_vote" }), (error) => error.code === "input_in_progress");
+  assert.equal((await retryableGame.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(retryableInput)).deliveryStatus, "delivered");
+  retryableGame.destroy();
+});
+
+test("reset during a retained delivery retry invalidates late retry effects", async () => {
+  const npcDom = failingNpcDom(1);
+  const game = enabledGame({ npcSinkType: "browser", npcDom });
+  const action = await ask(game);
+  await displayPlayer(game, action, async () => {});
+  const input = { schemaVersion: 1, gameSessionId: game.state.gameSessionId, playerPublicationId: action.result.conversationCommitResult.playerPublicationId };
+  assert.equal((await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input)).deliveryStatus, "retry_required");
+  game.destroy();
+  await assert.rejects(() => game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input), (error) => error.code === "stale_session");
+  assert.equal(npcDom.appendAttempts, 1);
+  assert.equal(npcDom.container.children.length, 0);
+});
+
 test("Browser and CLI entrypoints encode Player-first sequencing and stale-session DOM isolation", () => {
   const browser = readFileSync(new URL("../public/browserApp.mjs", import.meta.url), "utf8");
   const cli = readFileSync(new URL("../src/cli.mjs", import.meta.url), "utf8");
@@ -263,6 +384,103 @@ test("Browser New Game and renderLogs remove old or untracked NPC nodes in the a
   }
 });
 
+test("actual Browser Ask control explicitly retries the retained Player display without redispatch", async () => {
+  const browser = fakeBrowserEnvironment();
+  const transport = browserTransportHarness();
+  const originalDocument = globalThis.document;
+  const originalFetch = globalThis.fetch;
+  const originalAlert = globalThis.alert;
+  globalThis.document = browser.document;
+  globalThis.fetch = transport.fetch;
+  globalThis.alert = () => { throw new Error("browser initialization must not alert"); };
+  try {
+    await import(`../public/browserApp.mjs?display-retry=${Date.now()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const submit = browser.elements.askForm.listeners.get("submit");
+    browser.elements.newGameButton.listeners.get("click")();
+    browser.elements.targetSelect.value = "npc1";
+    browser.elements.questionInput.value = "Who do you suspect?";
+    browser.elements.logList.failNextPlayerPublicationAppend = true;
+
+    await assert.rejects(() => submit({ preventDefault() {} }), /browser_sink_attachment_failed/);
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 0);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 0);
+    assert.equal(browser.elements.askButton.textContent, "Retry Display");
+
+    await submit({ preventDefault() {} });
+    const playerNodes = browser.elements.logList.querySelectorAll("[data-publication-id]");
+    const npcNodes = browser.elements.logList.querySelectorAll("[data-npc-publication-id]");
+    assert.equal(playerNodes.length, 1);
+    assert.equal(npcNodes.length, 1);
+    assert.ok(browser.elements.logList.children.indexOf(playerNodes[0]) < browser.elements.logList.children.indexOf(npcNodes[0]));
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.askButton.textContent, "Ask");
+
+    await submit({ preventDefault() {} });
+    assert.equal(transport.candidateCalls, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 1);
+
+    browser.elements.newGameButton.listeners.get("click")();
+    browser.elements.targetSelect.value = "npc1";
+    browser.elements.questionInput.value = "Who do you suspect now?";
+    browser.elements.logList.failNextPlayerPublicationAppend = true;
+    await assert.rejects(() => submit({ preventDefault() {} }), /browser_sink_attachment_failed/);
+    assert.equal(transport.candidateCalls, 2);
+    browser.elements.newGameButton.listeners.get("click")();
+    await submit({ preventDefault() {} });
+    assert.equal(transport.candidateCalls, 2);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 0);
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.fetch = originalFetch;
+    globalThis.alert = originalAlert;
+  }
+});
+
+test("actual CLI retry command preserves the exact action after Player writer failure", async () => {
+  const order = [];
+  let providerCalls = 0;
+  let playerWriteCalls = 0;
+  const pseudo = createPseudoNpcReactionCandidateInvoker();
+  const game = enabledGame({
+    npcWrite: async () => { order.push("npc"); },
+    invokeProvider: async (request, options) => {
+      providerCalls += 1;
+      return pseudo(request, options);
+    }
+  });
+  const commands = ["ask npc1 Who do you suspect?", "retry", "retry", "quit"];
+  const errors = [];
+  const readlineInterface = {
+    async question() { return commands.shift() ?? "quit"; },
+    close() {}
+  };
+  await runCli({
+    game,
+    runtimeConfig: { playerStructuredConsumerMode: true },
+    readlineInterface,
+    writeLine: () => {},
+    writeError: (text) => { errors.push(text); },
+    writePublicationText: async (text) => {
+      if (!text.includes("Who do you suspect?")) return;
+      playerWriteCalls += 1;
+      if (playerWriteCalls === 1) throw new Error("player writer failed");
+      order.push("player");
+    },
+    destroyOnExit: false
+  });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /player writer failed/);
+  assert.deepEqual(order, ["player", "npc"]);
+  assert.equal(playerWriteCalls, 2);
+  assert.equal(providerCalls, 1);
+  assert.equal(game.state.conversation.reactionPlans.length, 1);
+  game.destroy();
+});
+
 async function ask(game) {
   return game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Who do you suspect?" });
 }
@@ -280,8 +498,8 @@ async function displayPlayer(game, action, write) {
   });
 }
 
-function enabledGame({ npcWrite, playerStructuredConsumerEnabled = true } = {}) {
-  const provider = createNpcReactionCandidateProvider({ invokeProvider: createPseudoNpcReactionCandidateInvoker() });
+function enabledGame({ npcWrite, playerStructuredConsumerEnabled = true, npcSinkType = "cli", npcDom = null, invokeProvider = null, createIntegration = null } = {}) {
+  const provider = createNpcReactionCandidateProvider({ invokeProvider: invokeProvider ?? createPseudoNpcReactionCandidateInvoker() });
   let serverCorrelationOrder = 0;
   const candidateTransport = createLocalNpcReactionCandidateTransport({
     provider,
@@ -299,18 +517,24 @@ function enabledGame({ npcWrite, playerStructuredConsumerEnabled = true } = {}) 
     interpreterProvider: createLocalInterpreterHttpProvider(new PseudoInterpreterProvider(), {
       createServerCorrelationId: ids("server-interpreter")
     }),
-    createNpcStructuredProductionIntegration: ({ gameSessionId, authorityPort, deliveryReadPort }) => {
-      const sink = createNpcCliPublicationSink({
-        write: async ({ text }) => npcWrite?.(text),
-        failureGuarantee: "unknown_on_failure"
-      });
+    createNpcStructuredProductionIntegration: createIntegration ?? (({ gameSessionId, authorityPort, deliveryReadPort }) => {
+      const sink = npcSinkType === "browser"
+        ? createNpcBrowserPublicationSink({
+            getConversationContainer: npcDom.getConversationContainer,
+            createTextNode: npcDom.createTextNode,
+            createMessageNode: npcDom.createMessageNode
+          })
+        : createNpcCliPublicationSink({
+            write: async ({ text }) => npcWrite?.(text),
+            failureGuarantee: "unknown_on_failure"
+          });
       return createProductionNpcStructuredDeliveryIntegration({
         gameSessionId,
         authorityPort,
         deliveryReadPort,
         candidateTransport,
         sink,
-        consumer: { consumerId: "cli-npc", sinkType: "cli" },
+        consumer: { consumerId: `${npcSinkType}-npc`, sinkType: npcSinkType },
         createId: ids("runtime"),
         nowUtc: () => "2026-07-20T00:00:00.000Z",
         nowMonotonicMs: () => Math.floor(performance.now()),
@@ -319,7 +543,50 @@ function enabledGame({ npcWrite, playerStructuredConsumerEnabled = true } = {}) 
         createAbortController: () => new AbortController(),
         observer: () => {}
       });
+    })
+  });
+}
+
+function failingNpcDom(failures) {
+  let remainingFailures = failures;
+  const container = {
+    children: [],
+    appendAttempts: 0,
+    appendChild(node) {
+      this.appendAttempts += 1;
+      if (remainingFailures > 0) { remainingFailures -= 1; throw new Error("browser append failed"); }
+      this.children.push(node);
+      node.parentNode = this;
+      return node;
+    },
+    contains(node) { return this.children.includes(node); },
+    removeChild(node) { this.children = this.children.filter((value) => value !== node); node.parentNode = null; }
+  };
+  return {
+    container,
+    get appendAttempts() { return container.appendAttempts; },
+    getConversationContainer: () => container,
+    createTextNode: (text) => ({ nodeType: 3, textContent: text, parentNode: null }),
+    createMessageNode: ({ textNode }) => {
+      const node = { nodeType: 1, childNodes: [textNode], firstChild: textNode, lastChild: textNode, parentNode: null, remove() { this.parentNode?.removeChild(this); } };
+      textNode.parentNode = node;
+      return node;
     }
+  };
+}
+
+function frozenIntegrationResult(deliveryStatus, retryId = null, routeStatus = "committed") {
+  return Object.freeze({
+    schemaVersion: 1,
+    resultType: "npc_structured_production_integration",
+    enabled: true,
+    routeStatus,
+    deliveryStatus,
+    publicationId: null,
+    retryId,
+    errorCode: deliveryStatus === "delivery_failed" ? "integration_invariant" : null,
+    legacyUsed: false,
+    legacySuppressed: true
   });
 }
 
@@ -332,6 +599,7 @@ function fakeBrowserEnvironment() {
   class FakeNode {
     constructor(tagName) {
       this.tagName = tagName;
+      this.nodeType = tagName === "#text" ? 3 : 1;
       this.children = [];
       this.childNodes = this.children;
       this.dataset = {};
@@ -344,9 +612,15 @@ function fakeBrowserEnvironment() {
       this.className = "";
       this.scrollTop = 0;
     }
+    get firstChild() { return this.children[0] ?? null; }
+    get lastChild() { return this.children.at(-1) ?? null; }
     get scrollHeight() { return this.children.length; }
     append(...nodes) { for (const node of nodes) this.appendChild(node); }
     appendChild(node) {
+      if (this.failNextPlayerPublicationAppend && Object.hasOwn(node.dataset, "publicationId")) {
+        this.failNextPlayerPublicationAppend = false;
+        throw new Error("browser_sink_attachment_failed");
+      }
       node.remove?.();
       this.children.push(node);
       node.parentNode = this;
@@ -395,4 +669,48 @@ function fakeBrowserEnvironment() {
     createTextNode(text) { const node = new FakeNode("#text"); node.nodeType = 3; node.textContent = text; return node; }
   };
   return { document, elements };
+}
+
+function browserTransportHarness() {
+  const interpreter = createLocalInterpreterHttpProvider(new PseudoInterpreterProvider(), {
+    createServerCorrelationId: ids("browser-interpreter")
+  });
+  const provider = createNpcReactionCandidateProvider({ invokeProvider: createPseudoNpcReactionCandidateInvoker() });
+  const handler = createNpcReactionCandidateHttpHandler({
+    provider,
+    createServerCorrelationId: ids("browser-candidate")
+  });
+  let candidateCalls = 0;
+  return {
+    get candidateCalls() { return candidateCalls; },
+    async fetch(url, options = {}) {
+      if (url === "/api/runtime-config") {
+        return new Response(JSON.stringify({
+          provider: "pseudo",
+          interpreterShadowMode: false,
+          interpreterValidationMode: true,
+          playerConversationCommitMode: true,
+          playerStructuredConsumerMode: true,
+          npcStructuredReactionMode: true
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url === "/api/interpret-player-input") {
+        const request = JSON.parse(options.body);
+        const response = await interpreter.interpretPlayerInput(request, { signal: options.signal });
+        return new Response(JSON.stringify(response), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      }
+      if (url === "/api/generate-npc-reaction-candidate") {
+        candidateCalls += 1;
+        const response = await handler.handle({
+          method: "POST",
+          path: "/api/generate-npc-reaction-candidate",
+          contentTypeHeader: "application/json; charset=utf-8",
+          contentEncodingHeader: null,
+          bodyBytes: new TextEncoder().encode(options.body)
+        }, { signal: options.signal });
+        return new Response(JSON.stringify(response.body), { status: response.status, headers: response.headers });
+      }
+      throw new Error(`Unexpected browser test URL: ${url}`);
+    }
+  };
 }
