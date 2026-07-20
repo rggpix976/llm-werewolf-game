@@ -66,34 +66,81 @@ export function createProductionNpcStructuredDeliveryIntegration(configuration) 
     observer: configuration.observer
   });
   let reset = false;
+  let pendingRouteStatus = null;
+  let pendingDeliveryRetry = null;
 
   async function executeNpcReaction(trigger) {
     if (reset) return publicResult("reset", null, null, "npc_structured_route_reset");
     let routeResult;
     try { routeResult = await route.executeStructuredReaction(trigger); }
     catch (error) { return publicResult("route_failed", null, null, closedCode(error)); }
-    let deliveryResult = null;
     if (["committed", "committed_cleanup_pending"].includes(routeResult.status)) {
-      try {
-        deliveryResult = await orchestrator.handleNpcStructuredRouteResult({
-          schemaVersion: 1, gameSessionId: configuration.gameSessionId, routeResult
-        });
-      } catch (error) {
-        return publicResult(routeResult.status, "delivery_failed", routeResult, closedCode(error));
-      }
+      pendingRouteStatus = routeResult.status;
+      return publicResult(routeResult.status, "pending_player_display", routeResult, routeResult.reason ?? null);
     }
-    return publicResult(routeResult.status, deliveryResult?.status ?? "skipped_not_eligible", routeResult, routeResult.reason ?? null, deliveryResult);
+    return publicResult(routeResult.status, "skipped_not_eligible", routeResult, routeResult.reason ?? null);
+  }
+
+  async function pumpNpcPublicationAfterPlayerDisplay(input) {
+    assertPumpInput(input, configuration.gameSessionId);
+    if (reset) return publicResult("reset", null, null, "npc_structured_route_reset");
+    if (pendingRouteStatus === null) {
+      return publicResult("route_failed", "skipped_not_eligible", null, "integration_invariant");
+    }
+    const routeStatus = pendingRouteStatus;
+    let deliveryResult;
+    try {
+      deliveryResult = pendingDeliveryRetry === null
+        ? await orchestrator.pumpPendingNpcPublications({
+            schemaVersion: 1,
+            gameSessionId: configuration.gameSessionId
+          })
+        : await orchestrator.retryNpcPublicationDelivery({
+            schemaVersion: 1,
+            gameSessionId: configuration.gameSessionId,
+            retryId: pendingDeliveryRetry.retryId
+          });
+    } catch (error) {
+      return publicResult(routeStatus, "delivery_failed", null, closedCode(error));
+    }
+    if (deliveryResult.status === "retry_required") {
+      pendingDeliveryRetry = Object.freeze({
+        retryId: deliveryResult.retryId,
+        retryMode: deliveryResult.retryMode
+      });
+    }
+    if (["delivered", "failed_terminal", "pending_none", "reset"].includes(deliveryResult.status)) {
+      pendingRouteStatus = null;
+      pendingDeliveryRetry = null;
+    }
+    if (deliveryResult.status === "acknowledged_existing") {
+      pendingRouteStatus = null;
+      pendingDeliveryRetry = null;
+    }
+    return publicResult(
+      routeStatus,
+      deliveryResult.status,
+      null,
+      deliveryResult.terminalCode ?? null,
+      deliveryResult
+    );
   }
 
   function resetIntegration() {
     if (reset) return undefined;
     reset = true;
+    pendingRouteStatus = null;
+    pendingDeliveryRetry = null;
     try { route.reset(); } catch {}
     try { orchestrator.reset(); } catch {}
     return undefined;
   }
 
-  return Object.freeze({ executeNpcReaction, reset: resetIntegration });
+  return Object.freeze({
+    executeNpcReaction,
+    pumpNpcPublicationAfterPlayerDisplay,
+    reset: resetIntegration
+  });
 }
 
 function publicResult(routeStatus, deliveryStatus, routeResult, errorCode, deliveryResult = null) {
@@ -125,4 +172,11 @@ function isExact(value, fields) {
     });
 }
 function assertExact(value, fields) { if (!isExact(value, fields)) throw new TypeError("Invalid NPC production integration configuration."); }
+function assertPumpInput(value, gameSessionId) {
+  if (Object.getPrototypeOf(value ?? {}) !== Object.prototype
+      || !isExact(value, ["schemaVersion", "gameSessionId"])
+      || value.schemaVersion !== 1 || value.gameSessionId !== gameSessionId) {
+    throw new TypeError("Invalid NPC production integration pump input.");
+  }
+}
 function deepFreeze(value) { Object.freeze(value); for (const child of Object.values(value)) if (child && typeof child === "object" && !Object.isFrozen(child)) deepFreeze(child); return value; }

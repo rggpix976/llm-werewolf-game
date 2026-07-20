@@ -40,6 +40,7 @@ let shadowObservations = [];
 let playerFacingLog = [];
 let playerPublicationDomBookkeeping = new Map();
 let npcPublicationDomBookkeeping = new Map();
+let pendingBrowserDisplayHandoff = null;
 
 initializeApp();
 
@@ -76,6 +77,11 @@ elements.newGameButton.addEventListener("click", () => {
 
 elements.askForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (pendingBrowserDisplayHandoff) {
+    const retried = await retryPendingBrowserDisplay();
+    if (retried) elements.questionInput.value = "";
+    return;
+  }
   const target = elements.targetSelect.value;
   const input = elements.questionInput.value.trim();
   if (!target || !input || snapshot.winner) {
@@ -120,8 +126,14 @@ elements.nightButton.addEventListener("click", async () => {
 });
 
 function startNewGame() {
+  const nextGameId = sessionManager.startNewGame();
   game?.destroy?.();
-  currentGameId = sessionManager.startNewGame();
+  pendingBrowserDisplayHandoff = null;
+  elements.questionInput.value = "";
+  for (const node of elements.logList.querySelectorAll("[data-npc-publication-id]")) node.remove();
+  npcPublicationDomBookkeeping.clear();
+  playerPublicationDomBookkeeping.clear();
+  currentGameId = nextGameId;
 
   // Always use HttpResponseProvider, delegate selection to server
   const responseProvider = new HttpResponseProvider({
@@ -130,6 +142,7 @@ function startNewGame() {
   interpreterShadowClient = shouldObserveInterpreterShadow(runtimeConfig) ? new InterpreterShadowClient({ provider: responseProvider, sessionManager, observer: (entry) => { shadowObservations = [...shadowObservations.slice(-99), Object.freeze({ ...entry })]; } }) : null;
   shadowObservations = [];
 
+  const capturedGameId = currentGameId;
   game = WerewolfGame.create({
     seed: Date.now(),
     shuffleRoles: true,
@@ -143,13 +156,14 @@ function startNewGame() {
     npcStructuredReactionEnabled: runtimeConfig?.npcStructuredReactionMode === true,
     createNpcStructuredProductionIntegration: ({ gameSessionId, authorityPort, deliveryReadPort }) => {
       const sink = createNpcBrowserPublicationSink({
-        getConversationContainer: () => elements.logList,
+        getConversationContainer: () => sessionManager.isCurrentGame(capturedGameId) ? elements.logList : null,
         createTextNode: (text) => document.createTextNode(text),
         createMessageNode: ({ textNode, publicationId, deliveryAttemptId }) => {
           const node = document.createElement("div");
           node.className = "log-entry npc-canonical-publication";
           node.dataset.npcPublicationId = publicationId;
           node.dataset.deliveryAttemptId = deliveryAttemptId;
+          node.dataset.browserGameId = String(capturedGameId);
           node.append(textNode);
           return node;
         }
@@ -175,8 +189,6 @@ function startNewGame() {
   snapshot = game.getPublicSnapshot();
   logCursor = snapshot.playerLog.length;
   playerFacingLog = structuredClone(snapshot.playerLog);
-  playerPublicationDomBookkeeping = new Map();
-  npcPublicationDomBookkeeping = new Map();
   devLogCursor = 0;
   devLogEntries = [];
   devLogFilterKind = "";
@@ -192,16 +204,25 @@ async function dispatch(action) {
   const gameIdAtStart = currentGameId;
   setBusy(true);
   try {
-    const writeStructured = async (entry, attempt) => { const node = appendBrowserLogEntry(entry); bindBrowserDeliveryNode(node, attempt); return stagePlayerFacingEntry(entry, node); };
-    const writeLegacy = async (entry, attempt) => { if (attempt) return appendLegacyPlayerPublication(entry, attempt); const node = appendBrowserLogEntry(entry); playerFacingLog.push(structuredClone(entry)); return node; };
-    const result = await dispatchPlayerActionWithConsumerMode({ game, action: { ...action, logCursor }, requestedMode: runtimeConfig?.playerStructuredConsumerMode === true ? "structured" : "legacy", consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured, writeLegacy });
+    const result = await dispatchPlayerActionWithConsumerMode({ game, action: { ...action, logCursor }, requestedMode: runtimeConfig?.playerStructuredConsumerMode === true ? "structured" : "legacy", consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured: writeStructuredPlayerEntry, writeLegacy: writeLegacyPlayerEntry });
 
     if (!sessionManager.isCurrentGame(gameIdAtStart)) {
       return null;
     }
 
     render(result.publicSnapshot);
-    if (result.livePlayerDisplayEntries.length) await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured, writeLegacy });
+    if (result.result?.structuredNpc?.deliveryStatus === "pending_player_display") {
+      pendingBrowserDisplayHandoff = {
+        generation: gameIdAtStart,
+        action: frozenClone(result),
+        playerPublicationId: result.result.conversationCommitResult.playerPublicationId,
+        playerDisplayed: false
+      };
+      await continuePendingBrowserDisplay(pendingBrowserDisplayHandoff);
+    } else if (result.livePlayerDisplayEntries.length) {
+      await consumeLiveActionDisplay({ game, action: result, consumerId: "browser-main", sinkType: "browser", bookkeeping: playerPublicationDomBookkeeping, writeStructured: writeStructuredPlayerEntry, writeLegacy: writeLegacyPlayerEntry });
+    }
+    if (!sessionManager.isCurrentGame(gameIdAtStart)) return null;
     captureNpcPublicationNodes();
     renderLogs();
     logCursor = result.nextLogCursor;
@@ -219,6 +240,73 @@ async function dispatch(action) {
       setBusy(false);
     }
   }
+}
+
+async function retryPendingBrowserDisplay() {
+  const handoff = pendingBrowserDisplayHandoff;
+  if (!handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+  setBusy(true);
+  try { return await continuePendingBrowserDisplay(handoff); }
+  finally { if (sessionManager.isCurrentGame(handoff.generation)) setBusy(false); }
+}
+
+async function continuePendingBrowserDisplay(handoff) {
+  if (pendingBrowserDisplayHandoff !== handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+  if (!handoff.playerDisplayed) {
+    await consumeLiveActionDisplay({
+      game,
+      action: handoff.action,
+      consumerId: "browser-main",
+      sinkType: "browser",
+      bookkeeping: playerPublicationDomBookkeeping,
+      writeStructured: writeStructuredPlayerEntry,
+      writeLegacy: writeLegacyPlayerEntry
+    });
+    if (pendingBrowserDisplayHandoff !== handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+    handoff.playerDisplayed = true;
+    logCursor = handoff.action.nextLogCursor;
+  }
+  const completion = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay({
+    schemaVersion: 1,
+    gameSessionId: game.state.gameSessionId,
+    playerPublicationId: handoff.playerPublicationId
+  });
+  if (pendingBrowserDisplayHandoff !== handoff || !sessionManager.isCurrentGame(handoff.generation)) return null;
+  if (isTerminalNpcDelivery(completion.deliveryStatus)) pendingBrowserDisplayHandoff = null;
+  captureNpcPublicationNodes();
+  renderLogs();
+  updateControls();
+  return handoff.action;
+}
+
+async function writeStructuredPlayerEntry(entry, attempt) {
+  const node = appendBrowserLogEntry(entry);
+  bindBrowserDeliveryNode(node, attempt);
+  return stagePlayerFacingEntry(entry, node);
+}
+
+async function writeLegacyPlayerEntry(entry, attempt) {
+  if (attempt) return appendLegacyPlayerPublication(entry, attempt);
+  const node = appendBrowserLogEntry(entry);
+  playerFacingLog.push(structuredClone(entry));
+  return node;
+}
+
+function isTerminalNpcDelivery(status) {
+  return ["delivered", "acknowledged_existing", "failed_terminal", "pending_none", "reset"].includes(status);
+}
+
+function frozenClone(value) {
+  const clone = structuredClone(value);
+  const freeze = (entry) => {
+    if (!entry || typeof entry !== "object" || Object.isFrozen(entry)) return entry;
+    for (const key of Reflect.ownKeys(entry)) {
+      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
+      if (descriptor && Object.hasOwn(descriptor, "value")) freeze(descriptor.value);
+    }
+    return Object.freeze(entry);
+  };
+  return freeze(clone);
 }
 
 function render(nextSnapshot) {
@@ -630,13 +718,18 @@ function renderTargetOptions() {
 function renderLogs() {
   const entries = playerFacingLog;
   const npcNodes = [...elements.logList.querySelectorAll("[data-npc-publication-id]")];
+  const currentNpcNodes = npcNodes.filter((node) => {
+    const stored = npcPublicationDomBookkeeping.get(node.dataset.npcPublicationId);
+    const current = node.dataset.browserGameId === String(currentGameId) && stored?.node === node;
+    if (!current) node.remove();
+    return current;
+  });
   if (!entries.length) {
-    elements.logList.replaceChildren(...(npcNodes.length ? npcNodes : [createEmptyState("No log entries")]));
+    elements.logList.replaceChildren(...(currentNpcNodes.length ? currentNpcNodes : [createEmptyState("No log entries")]));
     return;
   }
 
   reconcileBrowserPublicationNodes({ document, container: elements.logList, entries, formatPhase });
-  const untrackedNpcNodes = npcNodes.filter((node) => !npcPublicationDomBookkeeping.has(node.dataset.npcPublicationId));
   const playerNodes = [...elements.logList.querySelectorAll("[data-publication-id]")];
   const merged = [];
   appendNpcNodesAfterPlayerCount(merged, 0);
@@ -644,7 +737,6 @@ function renderLogs() {
     merged.push(node);
     appendNpcNodesAfterPlayerCount(merged, index + 1);
   });
-  merged.push(...untrackedNpcNodes);
   elements.logList.replaceChildren(...merged);
   elements.logList.scrollTop = elements.logList.scrollHeight;
   const nodesByPublication = new Map([...elements.logList.querySelectorAll("[data-publication-id]")].map((node) => [node.dataset.publicationId, node]));
@@ -656,9 +748,16 @@ function renderLogs() {
 
 function captureNpcPublicationNodes() {
   for (const node of elements.logList.querySelectorAll("[data-npc-publication-id]")) {
+    if (node.dataset.browserGameId !== String(currentGameId)) {
+      node.remove();
+      continue;
+    }
     const publicationId = node.dataset.npcPublicationId;
     if (!npcPublicationDomBookkeeping.has(publicationId)) {
-      npcPublicationDomBookkeeping.set(publicationId, { node, afterPlayerCount: playerFacingLog.length });
+      npcPublicationDomBookkeeping.set(publicationId, {
+        node,
+        afterPlayerCount: elements.logList.querySelectorAll("[data-publication-id]").length
+      });
     }
   }
 }
@@ -712,13 +811,15 @@ function updateControls() {
 
   elements.targetSelect.disabled = !questionAvailable;
   elements.questionInput.disabled = !questionAvailable;
-  elements.askButton.disabled = !questionAvailable || !elements.questionInput.value.trim();
+  elements.askButton.textContent = pendingBrowserDisplayHandoff ? "Retry Display" : "Ask";
+  elements.askButton.disabled = !questionAvailable || (!pendingBrowserDisplayHandoff && !elements.questionInput.value.trim());
   elements.voteButton.disabled = gameOver || canRunNight;
   elements.nightButton.disabled = gameOver || !canRunNight;
 }
 
 function setBusy(isBusy) {
-  elements.askButton.disabled = isBusy || !elements.questionInput.value.trim();
+  elements.askButton.textContent = pendingBrowserDisplayHandoff ? "Retry Display" : "Ask";
+  elements.askButton.disabled = isBusy || (!pendingBrowserDisplayHandoff && !elements.questionInput.value.trim());
   elements.voteButton.disabled = isBusy || Boolean(snapshot?.winner) || canRunNight;
   elements.nightButton.disabled = isBusy || Boolean(snapshot?.winner) || !canRunNight;
 }

@@ -115,6 +115,8 @@ Phase 5を有効にすると、browser/CLIはrequested consumer modeとしてstr
 
 Phase 6の`NPC_STRUCTURED_REACTION_MODE`はdefault-offです。`false`では既存legacy NPC Provider／表示経路を維持します。`PLAYER_CONVERSATION_COMMIT_MODE=true`を前提として`true`にすると、受理されたPlayer質問をStructured Route、engine-owned atomic Commit、canonical Delivery経路へ接続し、同一logical reactionのlegacy Providerおよびlegacy表示fallbackを抑止します。PR #58は2026-07-19に通常のmerge commitで`master`へ取り込み済みですが、flagは安全な既定値として`false`を維持します。有効化は別の明示的な運用判断と検証を経て行います。`false`へのrollbackは将来のreactionをlegacy経路へ戻しますが、既にauthoritative commit済みのstructured publicationは巻き戻しません。
 
+Phase 6 hardeningでは、Finding F-01のcandidate cost controlが通常のmerge commit `4a510d902c7d455d7ed7c3c1e96a5d89c814f9ea`で取り込み済みです。現在のF-02／F-03 Draft hardeningは、Structured Routeとauthoritative NPC Commitをengine内で完了した後もNPC Deliveryを開始せず、Browser／CLIがPlayer表示を`acknowledged`または`evidence_recorded`へ完了してから明示的にpumpします。Player表示またはNPC Deliveryがretry可能な場合は同じfrozen action／engine-private handoffを保持し、Browserでは同じAsk controlの`Retry Display`、CLIでは明示的な`retry` commandでのみ再開します。`repeat_sink`はsinkだけを、`ack_only`はacknowledgementだけを再試行し、Provider、Validation、Preparation、Commit、Player action dispatchを再実行しません。Browser New Gameは旧generationを先に無効化し、旧sessionのNPC DOM nodeをbookkeeping reset前に除去してlate callbackと再挿入を遮断します。F-04〜F-06、flag-on判断、Slice 6 candidate routeのbillable live smokeは別工程のままであり、flagのdefaultは`false`です。
+
 **注意**: OpenAI APIの利用には別途料金が発生します。自動テストでは引き続き実APIを呼び出さず、本物のHTTPレスポンス形状を模したモックのみを使用します。
 
 2026-07-01にリポジトリ所有者によって、制御された実OpenAIスモークテストが1回成功しました。このテストでは、再試行と `pseudo` フォールバックを無効化した状態で、本番のローカルサーバーおよびプロバイダーのパスを介して正確に1回の実リクエストが行われ、正常終了を確認しました。APIキーはコミットされず、検証後にローカルシェル環境から削除されています。これは制御されたローカル環境での統合を確認するものであり、本プロジェクトを本番環境対応（認証や分散レート制限の実装など）とするものではありません。
