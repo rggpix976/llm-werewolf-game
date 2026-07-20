@@ -462,6 +462,8 @@ test("idempotency record requires every exact deterministic field", () => {
 
 test("authorized delta validator accepts exact output and rejects shape, counts, aliases, and identity links", () => {
   const delta = translate(cloneCommitted());
+  assert.equal(delta.precondition.phase, "player_question");
+  assert.equal(delta.resultingPhase, "day_discussion");
   assert.equal(validateNpcReactionAuthorizedDelta(delta), undefined);
   const vectors = [
     (value) => { delete value.precondition; },
@@ -470,6 +472,7 @@ test("authorized delta validator accepts exact output and rejects shape, counts,
     (value) => { Object.defineProperty(value, "appends", { enumerable: true, get() { throw new Error("getter"); } }); },
     (value) => { value.schemaVersion = 2; },
     (value) => { value.deltaType = "other"; },
+    (value) => { value.resultingPhase = "player_question"; },
     (value) => { value.resultingStateVersion += 1; },
     (value) => { value.appends.reactionPlans = []; },
     (value) => { value.appends.events.length += 1; },

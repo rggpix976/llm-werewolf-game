@@ -10,11 +10,15 @@ test("atomic commit publishes one authorized NPC graph at exact N to N+1", () =>
   const input = commitInput(value);
   const inputBefore = canonicalJson(input);
   const before = structuredClone(value.game.state);
+  const developerLog = structuredClone(value.game.state.developerLog);
   const result = value.game.commitPreparedNpcReactionAtomically(input);
   assert.deepEqual(Object.keys(result), ["schemaVersion", "status", "result", "coordinatorCleanupHandoff"]);
   assert.equal(result.status, "committed");
   assert.equal(Object.isFrozen(result), true);
   assert.equal(value.game.state.stateVersion, before.stateVersion + 1);
+  assert.equal(before.phase, "player_question");
+  assert.equal(value.game.state.phase, "day_discussion");
+  assert.deepEqual(value.game.state.developerLog, developerLog);
   assert.equal(value.game.state.conversation.reactionPlans.length, before.conversation.reactionPlans.length + 1);
   assert.equal(value.game.state.conversation.publications.length, before.conversation.publications.length + 1);
   assert.equal(value.game.state.conversation.npcReactionCommitIdempotencyRecords.length, 1);

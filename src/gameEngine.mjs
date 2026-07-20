@@ -306,8 +306,22 @@ export class WerewolfGame {
     const preconditionVersion = this.state.stateVersion;
     const continuation = this._clarificationContinuation(action); if (!continuation) { this.state.turnOrder += 1; this.state.turnId = engineId("turn", this.createId); }
     try {
-      const interpreted = action.type === "ask_npc" && this.interpreterValidationEnabled ? await this._observeInterpreter(action) : null;
+      const closedStructuredSelection = action.type === "ask_npc" && this.npcStructuredReactionEnabled;
+      let interpreted = null;
+      if (action.type === "ask_npc" && this.interpreterValidationEnabled) {
+        try { interpreted = await this._observeInterpreter(action); }
+        catch (error) {
+          if (!closedStructuredSelection) throw error;
+          interpreted = null;
+        }
+      }
       if (this._destroyed) throw abortError();
+      if (closedStructuredSelection && interpreted?.outcome?.category !== "validated") {
+        return this._actionResult(action.type, closedNpcStructuredInterpreterResult(interpreted?.outcome), logCursor);
+      }
+      if (closedStructuredSelection && this.state.stateVersion > Number.MAX_SAFE_INTEGER - 2) {
+        throw typedError("state_version_exhausted");
+      }
       if (action.type === "ask_npc" && this.playerConversationCommitEnabled && interpreted?.outcome?.category === "validated") {
         const result = await this._commitStructuredPlayerQuestion(action, interpreted, preconditionVersion);
         return this._actionResult(action.type, result, logCursor);
@@ -378,12 +392,26 @@ export class WerewolfGame {
     working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
     this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; validateNpcAuthoritativeStateFoundation(working.state); commitState(this.state, working.state);
     if (this.npcStructuredReactionEnabled) {
-      const structuredNpc = await this.npcStructuredProductionIntegration.executeNpcReaction(Object.freeze({
-        schemaVersion: 1,
-        gameSessionId: this.state.gameSessionId,
+      const lifecycleOwner = captureNpcStructuredLifecycleOwner(this.state, {
         triggerRequestId: delta.requestId,
-        originatingInputRecordId: delta.inputRecordId
-      }));
+        originatingInputRecordId: delta.inputRecordId,
+        targetNpcId: target.id
+      });
+      let structuredNpc;
+      try {
+        structuredNpc = await this.npcStructuredProductionIntegration.executeNpcReaction(Object.freeze({
+          schemaVersion: 1,
+          gameSessionId: this.state.gameSessionId,
+          triggerRequestId: delta.requestId,
+          originatingInputRecordId: delta.inputRecordId
+        }));
+      } catch (error) {
+        this._settleNpcStructuredLifecycleFailure(lifecycleOwner);
+        throw error;
+      }
+      if (!["committed", "committed_cleanup_pending"].includes(structuredNpc?.routeStatus)) {
+        this._settleNpcStructuredLifecycleFailure(lifecycleOwner);
+      }
       if (["committed", "committed_cleanup_pending"].includes(structuredNpc.routeStatus)
           && structuredNpc.deliveryStatus === "pending_player_display") {
         if (["pending_player_display", "pending_delivery_retry", "in_progress"].includes(this._npcStructuredDeliveryHandoff?.state)) {
@@ -416,6 +444,25 @@ export class WerewolfGame {
       this.phase4FaultInjector("npc_final_state_replacement"); npcWorking.state.stateVersion = preconditionVersion + 2; validateNpcAuthoritativeStateFoundation(npcWorking.state); commitState(this.state, npcWorking.state);
       return { ...reaction, conversationCommitResult: structuredClone(prepared.result) };
     } finally { if (this.activeNpcReaction === active) this.activeNpcReaction = null; }
+  }
+
+  _settleNpcStructuredLifecycleFailure(owner) {
+    try {
+      if (!npcStructuredLifecycleOwnerMatches(this.state, owner, this._destroyed)) return false;
+      this.npcAuthorityFaultInjector("lifecycle_settlement_before_working_copy");
+      const working = this._workingCopy();
+      working.state.phase = "day_discussion";
+      working.state.stateVersion = owner.stateVersion + 1;
+      assertNpcStructuredLifecycleSettlementDelta(this.state, working.state);
+      validateNpcAuthoritativeStateFoundation(working.state);
+      validateCommittedConversationGraph(working._conversationGraph());
+      this.npcAuthorityFaultInjector("lifecycle_settlement_before_final_replacement");
+      if (!npcStructuredLifecycleOwnerMatches(this.state, owner, this._destroyed)) return false;
+      commitState(this.state, working.state);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input) {
@@ -1613,6 +1660,7 @@ function applyNpcAuthorizedDelta(state, delta) {
   conversation.nextCreatedOrder = delta.counters.nextCreatedOrder;
   conversation.nextPublicationSlotOrder = delta.counters.nextPublicationSlotOrder;
   conversation.nextRecordAppendOrder = delta.counters.nextRecordAppendOrder;
+  state.phase = delta.resultingPhase;
   state.stateVersion = delta.resultingStateVersion;
 }
 
@@ -1620,14 +1668,119 @@ function assertNpcAuthorityForbiddenPathsPreserved(before, after, delta) {
   const allowedArrays = ["reactionPlans", "claims", "events", "publications", "npcReactionCommitIdempotencyRecords", "commitResults"];
   const beforeRoot = structuredClone(before), afterRoot = structuredClone(after);
   afterRoot.stateVersion = beforeRoot.stateVersion;
+  afterRoot.phase = beforeRoot.phase;
   for (const field of allowedArrays) afterRoot.conversation[field] = beforeRoot.conversation[field];
   for (const field of ["nextCreatedOrder", "nextPublicationSlotOrder", "nextRecordAppendOrder"]) afterRoot.conversation[field] = beforeRoot.conversation[field];
   if (canonicalJson(beforeRoot) !== canonicalJson(afterRoot)) throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
+  if (before.phase !== "player_question" || after.phase !== delta.resultingPhase
+    || delta.resultingPhase !== "day_discussion") throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
   for (const field of allowedArrays) {
     const prefix = before.conversation[field], current = after.conversation[field], append = delta.appends[field];
     if (canonicalJson(current.slice(0, prefix.length)) !== canonicalJson(prefix)
       || canonicalJson(current.slice(prefix.length)) !== canonicalJson(append)) throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
   }
+}
+
+function captureNpcStructuredLifecycleOwner(state, request) {
+  const playerGraph = resolveNpcStructuredLifecyclePlayerGraph(state, request);
+  if (!state.players.some((player) => player.id === request.targetNpcId)
+    || state.phase !== "player_question"
+    || state.stateVersion === Number.MAX_SAFE_INTEGER) throw npcAuthorityInvariant("invalid_npc_structured_authority_state");
+  return Object.freeze({
+    gameSessionId: state.gameSessionId,
+    turnId: state.turnId,
+    turnOrder: state.turnOrder,
+    stateVersion: state.stateVersion,
+    phase: state.phase,
+    triggerRequestId: request.triggerRequestId,
+    originatingInputRecordId: request.originatingInputRecordId,
+    targetNpcId: request.targetNpcId,
+    playerGraphFingerprint: sha256Fingerprint(playerGraph),
+    rootFingerprint: npcAuthorityRootFingerprint(state)
+  });
+}
+
+function npcStructuredLifecycleOwnerMatches(state, owner, destroyed) {
+  if (destroyed || state.gameSessionId !== owner.gameSessionId || state.turnId !== owner.turnId
+    || state.turnOrder !== owner.turnOrder || state.stateVersion !== owner.stateVersion
+    || state.phase !== owner.phase || state.phase !== "player_question") return false;
+  try {
+    if (npcAuthorityRootFingerprint(state) !== owner.rootFingerprint) return false;
+    const playerGraph = resolveNpcStructuredLifecyclePlayerGraph(state, owner);
+    if (!state.players.some((player) => player.id === owner.targetNpcId)
+      || sha256Fingerprint(playerGraph) !== owner.playerGraphFingerprint) return false;
+    return !state.conversation.npcReactionCommitIdempotencyRecords.some((record) =>
+      record.causationId === owner.triggerRequestId
+      || record.originatingInputRecordId === owner.originatingInputRecordId);
+  } catch {
+    return false;
+  }
+}
+
+function resolveNpcStructuredLifecyclePlayerGraph(state, request) {
+  const conversation = state.conversation;
+  const results = conversation.commitResults.filter((result) =>
+    result.commitType === "player_conversation" && result.requestId === request.triggerRequestId);
+  const records = conversation.idempotencyRecords.filter((record) =>
+    record.requestId === request.triggerRequestId);
+  const inputs = conversation.inputRecords.filter((input) =>
+    input.inputRecordId === request.originatingInputRecordId);
+  if (results.length !== 1 || records.length !== 1 || inputs.length !== 1) {
+    throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  }
+  const [result] = results, [record] = records, [input] = inputs;
+  if (result.inputRecordId !== input.inputRecordId || result.requestId !== input.requestId
+    || result.correlationId !== input.correlationId || record.requestFingerprint !== result.requestFingerprint
+    || canonicalJson(record.result) !== canonicalJson(result)) {
+    throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  }
+  const acceptedSpeechActs = conversation.acceptedSpeechActs.filter((act) =>
+    act.requestId === result.requestId && act.inputRecordId === input.inputRecordId);
+  if (acceptedSpeechActs.length === 0) throw npcAuthorityInvariant("invalid_npc_structured_trigger_graph");
+  return { result, record, input, acceptedSpeechActs };
+}
+
+function assertNpcStructuredLifecycleSettlementDelta(before, after) {
+  const normalized = structuredClone(after);
+  normalized.phase = before.phase;
+  normalized.stateVersion = before.stateVersion;
+  if (before.phase !== "player_question" || after.phase !== "day_discussion"
+    || after.stateVersion !== before.stateVersion + 1
+    || npcAuthorityRootFingerprint(normalized) !== npcAuthorityRootFingerprint(before)) {
+    throw npcAuthorityInvariant("invalid_npc_structured_state_replacement");
+  }
+}
+
+function closedNpcStructuredInterpreterResult(outcome) {
+  const category = ["clarification", "rejected", "failure", "stale", "conflict"].includes(outcome?.category)
+    ? outcome.category
+    : "failure";
+  const knownReasons = new Set([
+    "multiple_alternatives", "uninterpretable", "candidate_not_allowed", "invalid_discriminator",
+    "invalid_reference", "invalid_target_class", "target_not_alive", "candidate_rejected",
+    "correlation_mismatch", "stale_input", "stale_turn", "stale_state_version", "stale_phase",
+    "stale_actor", "stale_session", "idempotency_conflict", "transport_aborted",
+    "provider_failure", "duplicate_response_conflict"
+  ]);
+  const reasonCode = knownReasons.has(outcome?.reasonCode)
+    ? outcome.reasonCode
+    : category === "clarification" ? "interpreter_clarification"
+      : category === "rejected" ? "candidate_rejected"
+        : category === "stale" ? "stale_interpreter_outcome"
+          : category === "conflict" ? "interpreter_conflict"
+            : "interpreter_failure";
+  return deepFreeze({
+    responded: false,
+    structuredNpc: {
+      schemaVersion: 1,
+      resultType: "npc_structured_interpreter_outcome",
+      enabled: true,
+      outcomeCategory: category,
+      reasonCode,
+      legacyUsed: false,
+      legacySuppressed: true
+    }
+  });
 }
 
 function assertNpcAuthorityExact(value, fields, code) {

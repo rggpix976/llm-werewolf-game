@@ -92,7 +92,8 @@ const TRANSLATOR_INPUT_FIELDS = Object.freeze([
   "currentProjection", "replacementProjection", "preparedReaction"
 ]);
 const AUTHORIZED_DELTA_FIELDS = Object.freeze([
-  "schemaVersion", "deltaType", "precondition", "resultingStateVersion", "appends", "counters"
+  "schemaVersion", "deltaType", "precondition", "resultingPhase", "resultingStateVersion",
+  "appends", "counters"
 ]);
 const PRECONDITION_FIELDS = Object.freeze([
   "gameSessionId", "turnId", "turnOrder", "stateVersion", "phase"
@@ -214,7 +215,8 @@ export function translateNpcReactionCommitReplacementToAuthorizedDelta(input) {
     || binding.preconditionStateVersion !== current.stateVersion) {
     throw invariant("invalid_npc_reaction_prepared_reaction");
   }
-  if (current.stateVersion === Number.MAX_SAFE_INTEGER
+  if (current.phase !== "player_question"
+    || current.stateVersion === Number.MAX_SAFE_INTEGER
     || preparedDelta.resultingStateVersion !== current.stateVersion + 1
     || preparedDelta.resultingPhase !== current.phase) {
     throw invariant("npc_reaction_projection_counter_mismatch");
@@ -280,6 +282,7 @@ export function translateNpcReactionCommitReplacementToAuthorizedDelta(input) {
       stateVersion: current.stateVersion,
       phase: current.phase
     },
+    resultingPhase: "day_discussion",
     resultingStateVersion: replacement.stateVersion,
     appends: Object.fromEntries(APPEND_FIELDS.map((field) => [
       field,
@@ -307,7 +310,8 @@ export function validateNpcReactionAuthorizedDelta(value) {
   assertId(value.precondition.turnId, "invalid_npc_reaction_authorized_delta");
   assertSafe(value.precondition.turnOrder, "invalid_npc_reaction_authorized_delta");
   assertSafe(value.precondition.stateVersion, "invalid_npc_reaction_authorized_delta");
-  if (!enums.gamePhase.includes(value.precondition.phase)
+  if (value.precondition.phase !== "player_question"
+    || value.resultingPhase !== "day_discussion"
     || value.precondition.stateVersion === Number.MAX_SAFE_INTEGER
     || value.resultingStateVersion !== value.precondition.stateVersion + 1) {
     throw invariant("invalid_npc_reaction_authorized_delta");

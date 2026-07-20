@@ -135,7 +135,8 @@ test("enabled route failure is redacted and never falls back to legacy", async (
   assert.equal(legacyCalls, 0);
   assert.equal(action.result.structuredNpc.legacySuppressed, true);
   assert.equal(JSON.stringify(action.result.structuredNpc).includes("PRIVATE_PROVIDER_FAILURE"), false);
-  assert.equal(game.state.stateVersion, 1);
+  assert.equal(game.state.stateVersion, 2);
+  assert.equal(game.state.phase, "day_discussion");
 });
 
 test("authoritative replay never pumps delivery or repeats the legacy or CLI sinks", async () => {
@@ -235,7 +236,8 @@ test("candidate rejection and observer failure never enable legacy fallback", as
   assert.equal(action.result.structuredNpc.routeStatus, "rejected");
   assert.equal(action.result.structuredNpc.deliveryStatus, "skipped_not_eligible");
   assert.equal(legacyCalls, 0);
-  assert.equal(game.state.stateVersion, 1);
+  assert.equal(game.state.stateVersion, 2);
+  assert.equal(game.state.phase, "day_discussion");
   assert.equal(JSON.stringify(action.result.structuredNpc).includes("PRIVATE_OBSERVER_FAILURE"), false);
 });
 

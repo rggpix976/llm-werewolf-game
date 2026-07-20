@@ -49,7 +49,8 @@ test("Phase 6 flag defaults off, requires Phase 4, and selects the production in
   assert.equal(disabledRun.providerRequests.length, 1);
   assert.equal(enabledRun.providerRequests.length, 0);
   assert.equal(disabledRun.game.state.stateVersion, 2);
-  assert.equal(enabledRun.game.state.stateVersion, 1);
+  assert.equal(enabledRun.game.state.stateVersion, 2);
+  assert.equal(enabledRun.game.state.phase, "day_discussion");
 });
 
 test("engine-owned logical and attempt identities are separate, immutable, and mutation-free", async () => {
