@@ -638,6 +638,7 @@ test("ACC-030 engine state, identities, immutability, and privacy remain closed"
   const orchestratorDeliveryIds = new Set(orchestratorObservations.map((event) => event.deliveryId).filter((value) => value !== null));
   assert.equal(controllerAttemptIds.size, 1);
   assert.deepEqual(orchestratorDeliveryIds, controllerAttemptIds);
+  const [npcDeliveryAttemptId] = controllerAttemptIds;
 
   const playerDeliveryEntries = [...bookkeeping.values()]
     .filter((entry) => entry.identity?.publicationId === playerPublication.publicationId);
@@ -649,6 +650,39 @@ test("ACC-030 engine state, identities, immutability, and privacy remain closed"
   assert.ok(playerDeliveryIdentity.deliveryAttemptId.length > 0);
   assert.equal(typeof playerDeliveryIdentity.receiptId, "string");
   assert.ok(playerDeliveryIdentity.receiptId.length > 0);
+  assert.notEqual(playerDeliveryIdentity.deliveryAttemptId, npcDeliveryAttemptId);
+
+  const distinctNewIdentityOwners = [
+    ["turnId", intermediate.turnId],
+    ["inputRecordId", inputRecord.inputRecordId],
+    ["playerRequestId", inputRecord.requestId],
+    ["acceptedSpeechActId", acceptedSpeechAct.speechActId],
+    ...added.claims.map((claim, index) => [`claimId[${index}]`, claim.claimId]),
+    ...added.events.map((event, index) => [`eventId[${index}]`, event.eventId]),
+    ["displayPlanId", displayPlan.displayPlanId],
+    ...displayPlan.segments.map((segment, index) => [`displaySegmentId[${index}]`, segment.segmentId]),
+    ["reactionPlanId", plan.reactionPlanId],
+    ["npcRequestId", plan.requestId],
+    ["successfulAttemptId", plan.successfulAttemptId],
+    ...plan.intendedSpeechActs.map((descriptor, index) => [`descriptorId[${index}]`, descriptor.descriptorId]),
+    ...plan.canonicalSegments.map((segment, index) => [`canonicalSegmentId[${index}]`, segment.segmentId]),
+    ["playerPublicationId", playerPublication.publicationId],
+    ["npcPublicationId", npcPublication.publicationId],
+    ["compatibilityMappingId", playerMapping.compatibilityMappingId],
+    ["legacyEntryId", playerMapping.legacyEntryId],
+    ["playerDeliveryAttemptId", playerDeliveryIdentity.deliveryAttemptId],
+    ["playerReceiptId", playerDeliveryIdentity.receiptId],
+    ["npcDeliveryAttemptId", npcDeliveryAttemptId]
+  ];
+  for (const [label, value] of distinctNewIdentityOwners) {
+    assert.equal(typeof value, "string", label);
+    assert.ok(value.length > 0, label);
+  }
+  assert.equal(
+    new Set(distinctNewIdentityOwners.map(([, value]) => value)).size,
+    distinctNewIdentityOwners.length,
+    `distinct primary identity owners must not collide: ${distinctNewIdentityOwners.map(([label, value]) => `${label}=${value}`).join(", ")}`
+  );
 
   assert.equal(Object.isFrozen(action.result.structuredNpc), true);
   assert.equal(Object.isFrozen(delivery), true);

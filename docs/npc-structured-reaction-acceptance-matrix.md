@@ -73,7 +73,7 @@ authoritative stateは`WerewolfGame.state`だけである。one logical reaction
 | ACC-018 | CLI | consumer-off multi-action | 2 questions order、vote/night candidate 0 | `ACC-018 actual CLI preserves two-question order and vote/night continuity with consumer off` | PASS |
 | ACC-019 | CLI | consumer-on multi-action | 2 questions order、vote/night candidate 0 | `ACC-019 actual CLI preserves two-question order and vote/night continuity with consumer on` | PASS |
 | ACC-020 | CLI | explicit retry recovery | Player writer、`repeat_sink`、`ack_only`をactual `runCli()`／`retry`で分離し、redispatch／Provider／Commit additional 0。同一NPC publication identityを維持し、retry後の`state` commandも成功 | `ACC-020 actual CLI retry command preserves Player, repeat_sink, and ack_only authorities`（`Player writer failure retries the same frozen action`、`repeat_sink retries only the actual CLI writer`、`ack_only retries the actual acknowledgement without a second CLI writer call`） | PASS |
-| ACC-021 | CLI | observability／privacy | injected OpenAI transportへ渡るactual serialized Known Information private projectionとmarker-bearing failure bodyをsource側で証明し、normal output／error／dev observationsで対応object／field／fragment／marker 0 | `ACC-021 actual CLI observability is bounded, redacted, and absent from normal output` | PASS |
+| ACC-021 | CLI | observability／privacy | injected OpenAI transportへ渡るactual serialized Known Information private projectionとmarker-bearing failure bodyをsource側で証明する。normal output／error／dev observationsでは対応object／field／fragment／marker 0、explicit `dev` commandのdeveloper-logを含む全出力ではfailure markerとCandidate-private `actorPrivate`／`ownRole`／`ownTeam`／exact fragment 0を固定する | `ACC-021 actual CLI observability is bounded, redacted, and absent from normal output` | PASS |
 
 ## 11. Server／transport acceptance
 
@@ -114,7 +114,7 @@ ACC-030のexact automated identity graphは次を固定する。
 - Player chain: added inputの`requestId`／`inputRecordId`をPlayer commit result、Player idempotency、Player publicationへ結び、`playerPublicationId`をcanonical publication、compatibility mapping、action delivery candidate、Player display bookkeepingへ結ぶ。
 - Trigger／NPC chain: added inputをPlan／NPC idempotency／NPC publicationの`originatingInputRecordId`へ、Player requestをPlan／NPC idempotencyの`causationId`へ結ぶ。Planの`reactionPlanId`とNPC requestをNPC commit result、NPC idempotency、NPC publicationへ結び、`npcPublicationId`をaction result、Delivery result、controller／orchestrator observationsへ結ぶ。
 - Attempt／Delivery chain: actual Candidate requestとRoute observationの`reactionAttemptId`をPlan／NPC idempotencyの`successfulAttemptId`へ結び、Delivery Controllerの`deliveryAttemptId`をOrchestratorの`deliveryId`とexact NPC publicationへ結ぶ。
-- Transition／uniqueness: `gameSessionId` continuity、`stateVersion +2`、`turnOrder +1`、fresh `turnId`、全canonical registryのappend-only prefixとexact delta、全owner registryのprimary-ID uniqueness、Player／NPC request-ID disjointness、Delivery前後のcomplete authoritative state deep equalityを検証する。
+- Transition／uniqueness: `gameSessionId` continuity、`stateVersion +2`、`turnOrder +1`、fresh `turnId`、全canonical registryのappend-only prefixとexact delta、全owner registryのprimary-ID uniqueness、Player／NPC request-ID disjointnessを検証する。Intentional reference aliasをowner ID 1件へ畳んだうえで、new turn／input／request／act／event／display／plan／attempt／descriptor／segment／publication／mapping／legacy-entry／Player receipt／Player・NPC delivery-attempt identitiesのcross-domain collision 0と、Delivery前後のcomplete authoritative state deep equalityを固定する。
 
 ## 15. Rollback boundary acceptance
 

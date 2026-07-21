@@ -252,6 +252,15 @@ export function assertPrivateProjectionAbsent(value, evidence) {
   assert.equal(serialized.includes(JSON.stringify(evidence.privateFragment)), false, "private projection fragment leaked");
 }
 
+export function assertCandidatePrivateProjectionAbsentFromDeveloperOutput(value, evidence) {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  for (const field of ["actorPrivate", "ownRole", "ownTeam"]) {
+    assert.equal(serialized.includes(field), false, `candidate private projection field leaked: ${field}`);
+  }
+  assert.equal(serialized.includes(JSON.stringify(evidence.actorPrivate)), false, "candidate actorPrivate object leaked");
+  assert.equal(serialized.includes(JSON.stringify(evidence.privateFragment)), false, "candidate private projection fragment leaked");
+}
+
 export function assertPrivacySafe(value, extraMarkers = []) {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
   for (const marker of [...STATIC_PRIVACY_MARKERS, ...extraMarkers]) {

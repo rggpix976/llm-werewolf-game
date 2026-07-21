@@ -9,6 +9,7 @@ import { createNpcReactionCandidateProvider } from "../src/npcReactionCandidateP
 import { createPseudoNpcReactionCandidateInvoker } from "../src/npcReactionCandidateUpstream.mjs";
 import { createWebServer } from "../src/webServer.mjs";
 import {
+  assertCandidatePrivateProjectionAbsentFromDeveloperOutput,
   assertPrivateFailureSource,
   assertPrivateProjectionAbsent,
   assertPrivateProjectionSource,
@@ -287,6 +288,11 @@ test("ACC-021 actual CLI observability is bounded, redacted, and absent from nor
   const privateMarkers = Object.values(failureEvidence.markers);
   assertPrivacySafe(observationText, privateMarkers);
   assertPrivateProjectionAbsent(observationText, failedProjectionEvidence);
+  const devOutput = output.slice(outputBeforeDev.length);
+  assert.ok(devOutput.length >= 2, "dev must emit the developer log and structured observations");
+  const devOutputText = devOutput.join("\n");
+  assertPrivacySafe(devOutputText, privateMarkers);
+  assertCandidatePrivateProjectionAbsentFromDeveloperOutput(devOutputText, failedProjectionEvidence);
   const normalOutputBeforeDev = outputBeforeDev
     .filter((line) => !line.includes("--- NPC Structured Observations ---"))
     .join("\n");
