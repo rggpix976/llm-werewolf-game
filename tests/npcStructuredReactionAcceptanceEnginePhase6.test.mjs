@@ -11,7 +11,9 @@ import {
   createAcceptanceGame,
   createDeferred,
   createDeliveryAcceptanceGame,
-  createFailingNpcDom
+  createFailingNpcDom,
+  installOneShotAcknowledgementPublicationFault,
+  PRIVACY_MARKERS
 } from "./helpers/npcStructuredReactionAcceptanceHarness.mjs";
 
 test("ACC-001 flag-off engine preserves legacy exclusivity", async () => {
@@ -311,26 +313,38 @@ test("ACC-010 repeat_sink retries only the failed sink", async () => {
 });
 
 test("ACC-011 ack_only retains one sink effect while explicit completion retries acknowledgement", async () => {
-  const results = [integrationResult("retry_required", "acceptance-retry"), integrationResult("acknowledged_existing")];
-  let executeCalls = 0;
-  let pumpCalls = 0;
-  const { game } = createAcceptanceGame({
-    createNpcStructuredProductionIntegration: () => Object.freeze({
-      async executeNpcReaction() { executeCalls += 1; return integrationResult("pending_player_display", null, "committed"); },
-      async pumpNpcPublicationAfterPlayerDisplay() { return results[pumpCalls++]; },
-      reset() {}
-    })
-  });
+  const observations = [];
+  const counters = { candidate: 0, legacy: 0, npcWrites: 0, playerWrites: 0 };
+  const { game } = createDeliveryAcceptanceGame({ counters, observer: (event) => observations.push(event) });
+  const before = authoritativeSnapshot(game);
   const action = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Ack only?" });
+  const afterCommit = authoritativeSnapshot(game);
   await consumeLiveActionDisplay({
     game, action, consumerId: "acceptance-player", sinkType: "cli", bookkeeping: new Map(),
     writeStructured: async () => {}, writeLegacy: async () => {}
   });
   const input = { schemaVersion: 1, gameSessionId: game.state.gameSessionId, playerPublicationId: action.result.conversationCommitResult.playerPublicationId };
-  assert.equal((await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input)).deliveryStatus, "retry_required");
-  assert.equal((await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input)).deliveryStatus, "acknowledged_existing");
-  assert.equal(executeCalls, 1);
-  assert.equal(pumpCalls, 2);
+  const fault = installOneShotAcknowledgementPublicationFault();
+  try {
+    const first = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
+    const second = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
+    const retryObservation = observations.find((event) => event.eventType === "npc_publication_delivery_orchestration"
+      && event.resultType === "retry_required");
+    assert.equal(first.deliveryStatus, "retry_required");
+    assert.equal(second.deliveryStatus, "acknowledged_existing");
+    assert.equal(retryObservation.retryMode, "ack_only");
+    assert.equal(first.publicationId, second.publicationId);
+    assert.equal(first.publicationId, action.result.structuredNpc.publicationId);
+    assert.equal(fault.acknowledgementAttempts, 2);
+    assert.equal(counters.npcWrites, 1);
+    assert.equal(counters.candidate, 1);
+    assert.equal(counters.legacy, 0);
+    assert.equal(game.state.conversation.reactionPlans.length - before.conversation.reactionPlans.length, 1);
+    assert.equal(game.state.conversation.publications.filter((entry) => entry.publicationId === input.playerPublicationId).length, 1);
+    assert.deepEqual(authoritativeSnapshot(game), afterCommit);
+  } finally {
+    fault.restore();
+  }
   game.destroy();
 });
 
@@ -360,7 +374,13 @@ test("ACC-012 unknown sink effect closes terminally without automatic redisplay"
 
 test("ACC-025 ACC-026 ACC-027 ACC-028 public progression, dead NPC, bounded winner, and terminal no-ops", async () => {
   const counters = { candidate: 0, legacy: 0, ids: 0, npcWrites: 0, playerWrites: 0 };
-  const { game } = createAcceptanceGame({ counters });
+  const allocatedIds = [];
+  const interpreterObservations = [];
+  const { game } = createAcceptanceGame({
+    counters,
+    allocatedIds,
+    interpreterObserver: (observation) => interpreterObservations.push(observation)
+  });
   for (const [targetId, input] of [["npc3", "Question one?"], ["npc1", "Question two?"]]) {
     const action = await game.dispatchPlayerAction({ type: "ask_npc", targetId, input });
     await completePlayerAndNpc(game, action, { counters });
@@ -369,18 +389,53 @@ test("ACC-025 ACC-026 ACC-027 ACC-028 public progression, dead NPC, bounded winn
   const vote = await game.dispatchPlayerAction({ type: "advance_vote" });
   assert.ok(vote.result.executedId);
   const deadId = vote.result.executedId;
-  const deadVersion = game.state.stateVersion;
-  const deadQuestion = await game.dispatchPlayerAction({ type: "ask_npc", targetId: deadId, input: "Can you answer?" });
-  assert.equal(deadQuestion.result.responded, false);
-  assert.equal(counters.candidate, candidateBeforeProgression);
-  assert.equal(game.state.stateVersion, deadVersion);
   const night = await game.dispatchPlayerAction({ type: "run_night" });
   assert.equal(night.ok, true);
   assert.equal(counters.candidate, candidateBeforeProgression);
+  assert.equal(game.state.phase, "day_discussion");
+  const deadState = authoritativeSnapshot(game);
+  const deadCounters = structuredClone(counters);
+  const deadAllocatedStart = allocatedIds.length;
+  const deadInterpreterStart = interpreterObservations.length;
+  const deadQuestion = await game.dispatchPlayerAction({ type: "ask_npc", targetId: deadId, input: "Can you answer?" });
+  const deadAfter = authoritativeSnapshot(game);
+  const deadAllocatedIds = allocatedIds.slice(deadAllocatedStart);
+  assert.equal(deadQuestion.result.responded, false);
+  assert.equal(deadQuestion.result.structuredNpc.resultType, "npc_structured_interpreter_outcome");
+  assert.equal(deadQuestion.result.structuredNpc.outcomeCategory, "rejected");
+  assert.equal(deadQuestion.result.structuredNpc.reasonCode, "target_not_alive");
+  assert.equal(deadQuestion.result.structuredNpc.legacyUsed, false);
+  assert.equal(deadQuestion.result.structuredNpc.legacySuppressed, true);
+  assert.equal(deadAfter.phase, deadState.phase);
+  assert.equal(deadAfter.stateVersion, deadState.stateVersion);
+  assert.equal(deadAfter.turnOrder, deadState.turnOrder + 1);
+  assert.notEqual(deadAfter.turnId, deadState.turnId);
+  assert.equal(deadAllocatedIds.length, 4);
+  assert.equal(new Set(deadAllocatedIds).size, deadAllocatedIds.length);
+  assert.equal(deadAfter.turnId, `turn-${deadAllocatedIds[0]}`);
+  assert.deepEqual(deadAfter, {
+    ...deadState,
+    turnOrder: deadState.turnOrder + 1,
+    turnId: `turn-${deadAllocatedIds[0]}`
+  });
+  assert.deepEqual(counters, { ...deadCounters, ids: deadCounters.ids + 4 });
+  assert.equal(interpreterObservations.length, deadInterpreterStart + 1);
+  assert.equal(interpreterObservations.at(-1).outcomeCategory, "rejected");
+  assert.equal(interpreterObservations.at(-1).reasonCode, "target_not_alive");
+  assert.equal(interpreterObservations.at(-1).turnId, deadAfter.turnId);
+  assert.equal(counters.candidate, candidateBeforeProgression);
   const aliveTarget = game.getPublicSnapshot().players.find((player) => player.alive && player.id.startsWith("npc"))?.id;
   assert.ok(aliveTarget);
+  const aliveBefore = authoritativeSnapshot(game);
+  const aliveCandidateBefore = counters.candidate;
   const third = await game.dispatchPlayerAction({ type: "ask_npc", targetId: aliveTarget, input: "Final suspicion?" });
   await completePlayerAndNpc(game, third, { counters });
+  assert.equal(third.result.responded, true);
+  assert.equal(counters.candidate, aliveCandidateBefore + 1);
+  assert.equal(game.state.stateVersion, aliveBefore.stateVersion + 2);
+  assert.equal(game.state.turnOrder, aliveBefore.turnOrder + 1);
+  assert.notEqual(game.state.turnId, aliveBefore.turnId);
+  assert.equal(game.state.phase, "day_discussion");
   await game.dispatchPlayerAction({ type: "advance_vote" });
   assert.equal(game.state.winner, "village");
   const terminal = authoritativeSnapshot(game);
@@ -425,37 +480,76 @@ test("ACC-029 fresh disabled instance is the rollback boundary", async () => {
 });
 
 test("ACC-030 engine state, identities, immutability, and privacy remain closed", async () => {
+  const observations = [];
   const counters = { candidate: 0, legacy: 0, ids: 0, npcWrites: 0, playerWrites: 0 };
-  const { game } = createAcceptanceGame({ counters });
+  const pseudo = createPseudoNpcReactionCandidateInvoker();
+  let providerCalls = 0;
+  let privateProviderFailure;
+  const { game } = createDeliveryAcceptanceGame({
+    counters,
+    observer: (event) => observations.push(event),
+    invokeProvider: async (request, options) => {
+      providerCalls += 1;
+      counters.candidate += 1;
+      if (providerCalls === 1) {
+        privateProviderFailure = Object.assign(new Error(PRIVACY_MARKERS[3]), {
+          authorizationMetadata: PRIVACY_MARKERS[4],
+          stack: `Error: ${PRIVACY_MARKERS[5]} at C:\\${PRIVACY_MARKERS[6]}`,
+          cause: new Error(PRIVACY_MARKERS[5]),
+          settlementMarker: PRIVACY_MARKERS[7],
+          code: "provider_unavailable",
+          retryable: false
+        });
+        throw privateProviderFailure;
+      }
+      return pseudo(request, options);
+    }
+  });
+  const privateActor = game.state.players.find((player) => player.id === "npc1");
+  privateActor.hiddenInfo[0].text = PRIVACY_MARKERS[0];
+  privateActor.hiddenInfo[1].text = PRIVACY_MARKERS[1];
+  privateActor.knownInfo.find((entry) => entry.visibility === "private").text = PRIVACY_MARKERS[2];
+  const privateSources = { hiddenInfo: privateActor.hiddenInfo, knownInfo: privateActor.knownInfo };
+  for (const marker of PRIVACY_MARKERS.slice(0, 3)) assert.match(JSON.stringify(privateSources), new RegExp(marker));
+  const rejected = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Private failure audit?" });
+  assert.equal(rejected.result.structuredNpc.routeStatus, "exhausted");
+  for (const marker of PRIVACY_MARKERS.slice(3)) assert.match(JSON.stringify(privateProviderFailure, Object.getOwnPropertyNames(privateProviderFailure)), new RegExp(marker));
+  assertPrivacySafe(rejected);
+
+  const before = authoritativeSnapshot(game);
   const action = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Audit?" });
   const { delivery } = await completePlayerAndNpc(game, action, { counters });
+  const after = authoritativeSnapshot(game);
   assertSafeMonotonicIdentityState(game.state);
+  assert.equal(after.stateVersion, before.stateVersion + 2);
+  assert.equal(after.turnOrder, before.turnOrder + 1);
+  assert.notEqual(after.turnId, before.turnId);
+  const plan = after.conversation.reactionPlans.at(-1);
+  const idempotency = after.conversation.npcReactionCommitIdempotencyRecords.at(-1);
+  const npcPublication = after.conversation.publications.find((entry) => entry.publicationId === action.result.structuredNpc.publicationId);
+  const routeAttemptIds = observations.filter((event) => event.observationType === "npc_structured_reaction_route"
+      && event.reactionPlanId === plan.reactionPlanId)
+    .map((event) => event.reactionAttemptId).filter(Boolean);
+  const deliveryAttemptIds = observations.filter((event) => event.deliveryAttemptId).map((event) => event.deliveryAttemptId);
+  assert.equal(plan.requestId, idempotency.requestId);
+  assert.equal(plan.successfulAttemptId, idempotency.successfulAttemptId);
+  assert.equal(routeAttemptIds.includes(plan.successfulAttemptId), true);
+  assert.equal(npcPublication.publicationId, action.result.structuredNpc.publicationId);
+  assert.equal(new Set(routeAttemptIds).size, 1);
+  assert.equal(new Set(deliveryAttemptIds).size, 1);
+  assert.ok(deliveryAttemptIds[0]);
   assert.equal(Object.isFrozen(action.result.structuredNpc), true);
   assert.equal(Object.isFrozen(delivery), true);
   assertPrivacySafe(action);
   assertPrivacySafe(delivery);
   assertPrivacySafe(game.getPublicSnapshot());
-  assert.equal(counters.candidate, 1);
+  assertPrivacySafe(observations);
+  assert.equal(counters.candidate, 2);
   assert.equal(counters.legacy, 0);
-  assert.equal(counters.playerWrites, 1);
+  assert.equal(counters.playerWrites, 2);
   assert.equal(counters.npcWrites, 1);
   game.destroy();
 });
-
-function integrationResult(deliveryStatus, retryId = null, routeStatus = "committed") {
-  return Object.freeze({
-    schemaVersion: 1,
-    resultType: "npc_structured_production_integration",
-    enabled: true,
-    routeStatus,
-    deliveryStatus,
-    publicationId: null,
-    retryId,
-    errorCode: null,
-    legacyUsed: false,
-    legacySuppressed: true
-  });
-}
 
 function scheduleInMicrotask(callback, delayMs) {
   const handle = { callback, delayMs, cancelled: false };

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createPseudoNpcReactionCandidateInvoker } from "../src/npcReactionCandidateUpstream.mjs";
 import {
   assertPrivacySafe,
   browserPublicationOrder,
+  createDeferred,
   settleMicrotasks,
   submitBrowserQuestion,
   withBrowserApp
@@ -48,30 +50,53 @@ test("ACC-015 actual Browser duplicate submit is rejected by the busy gate witho
   });
 });
 
-test("ACC-016 actual Browser New Game removes old nodes and permits a fresh isolated question", async () => {
+test("ACC-016 actual Browser New Game invalidates a pending old Provider and isolates its late result", async () => {
+  const started = createDeferred();
+  const release = createDeferred();
+  const lateReturned = createDeferred();
+  const pseudo = createPseudoNpcReactionCandidateInvoker();
+  const candidateSessionIds = [];
+  let invocations = 0;
   await withBrowserApp(true, async ({ browser, transport }) => {
-    await submitBrowserQuestion(browser, "npc1", "Old session A?");
-    await submitBrowserQuestion(browser, "npc2", "Old session B?");
-    const oldPlayerIds = browser.elements.logList.querySelectorAll("[data-publication-id]").map((node) => node.dataset.publicationId);
-    const oldNpcIds = browser.elements.logList.querySelectorAll("[data-npc-publication-id]").map((node) => node.dataset.npcPublicationId);
-    assert.equal(oldPlayerIds.length, 2);
-    assert.equal(oldNpcIds.length, 2);
+    const pending = submitBrowserQuestion(browser, "npc1", "Old pending session?");
+    await started.promise;
+    assert.equal(transport.candidateCalls, 1);
 
     browser.elements.newGameButton.listeners.get("click")();
     await settleMicrotasks();
     assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 0);
     assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 0);
+    assert.equal(browser.elements.developerPanel.children.length, 0);
+
+    release.resolve();
+    await lateReturned.promise;
+    await Promise.allSettled([pending]);
+    await settleMicrotasks();
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 0);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 0);
+    assert.equal(nodeText(browser.elements.developerPanel).includes("Old pending session?"), false);
     assert.equal(browser.elements.askButton.textContent, "Ask");
 
-    await submitBrowserQuestion(browser, "npc1", "Fresh session?" );
-    const newPlayerIds = browser.elements.logList.querySelectorAll("[data-publication-id]").map((node) => node.dataset.publicationId);
-    const newNpcIds = browser.elements.logList.querySelectorAll("[data-npc-publication-id]").map((node) => node.dataset.npcPublicationId);
-    assert.equal(newPlayerIds.length, 1);
-    assert.equal(newNpcIds.length, 1);
-    assert.equal(oldPlayerIds.includes(newPlayerIds[0]), false);
-    assert.equal(oldNpcIds.includes(newNpcIds[0]), false);
-    assert.equal(transport.candidateCalls, 3);
+    await submitBrowserQuestion(browser, "npc1", "Fresh session?");
+    assert.equal(browser.elements.logList.querySelectorAll("[data-publication-id]").length, 1);
+    assert.equal(browser.elements.logList.querySelectorAll("[data-npc-publication-id]").length, 1);
+    assert.equal(transport.candidateCalls, 2);
+    assert.equal(candidateSessionIds.length, 2);
+    assert.equal(typeof candidateSessionIds[0], "string");
+    assert.equal(typeof candidateSessionIds[1], "string");
+    assert.notEqual(candidateSessionIds[0], candidateSessionIds[1]);
     assert.deepEqual(browserPublicationOrder(browser), ["player", "npc"]);
+  }, {
+    invokeProvider: async (request, options) => {
+      invocations += 1;
+      candidateSessionIds.push(request.gameSessionId);
+      if (invocations === 1) {
+        started.resolve();
+        await release.promise;
+        lateReturned.resolve();
+      }
+      return pseudo(request, options);
+    }
   });
 });
 

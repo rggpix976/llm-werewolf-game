@@ -25,7 +25,9 @@ export function createLifecycleGame(options = {}) {
   );
   const createId = () => {
     counters.ids = (counters.ids ?? 0) + 1;
-    return `engine-${counters.ids}`;
+    const value = `engine-${counters.ids}`;
+    options.allocatedIds?.push(value);
+    return value;
   };
   const game = WerewolfGame.create({
     seed: 1,
@@ -44,6 +46,7 @@ export function createLifecycleGame(options = {}) {
       }
     },
     npcAuthorityFaultInjector: options.npcAuthorityFaultInjector,
+    interpreterObserver: options.interpreterObserver,
     createNpcStructuredProductionIntegration: options.createNpcStructuredProductionIntegration
       ?? (({ gameSessionId, authorityPort, deliveryReadPort }) => {
         const sink = createNpcCliPublicationSink({
@@ -149,11 +152,13 @@ export function createBrowserEnvironment() {
   return { document, elements };
 }
 
-export function createBrowserTransportHarness(playerStructuredConsumerEnabled) {
+export function createBrowserTransportHarness(playerStructuredConsumerEnabled, options = {}) {
   const interpreter = createLocalInterpreterHttpProvider(new PseudoInterpreterProvider(), {
     createServerCorrelationId: ids("browser-interpreter")
   });
-  const provider = createNpcReactionCandidateProvider({ invokeProvider: createPseudoNpcReactionCandidateInvoker() });
+  const provider = createNpcReactionCandidateProvider({
+    invokeProvider: options.invokeProvider ?? createPseudoNpcReactionCandidateInvoker()
+  });
   const handler = createNpcReactionCandidateHttpHandler({
     provider,
     createServerCorrelationId: ids("browser-candidate")

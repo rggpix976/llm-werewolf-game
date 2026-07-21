@@ -231,9 +231,9 @@ export function assertSafeMonotonicIdentityState(state) {
   );
 }
 
-export async function withBrowserApp(playerStructuredConsumerEnabled, callback) {
+export async function withBrowserApp(playerStructuredConsumerEnabled, callback, transportOptions = {}) {
   const browser = createBrowserEnvironment();
-  const transport = createBrowserTransportHarness(playerStructuredConsumerEnabled);
+  const transport = createBrowserTransportHarness(playerStructuredConsumerEnabled, transportOptions);
   const originalDocument = globalThis.document;
   const originalFetch = globalThis.fetch;
   const originalAlert = globalThis.alert;
@@ -250,6 +250,33 @@ export async function withBrowserApp(playerStructuredConsumerEnabled, callback) 
     globalThis.fetch = originalFetch;
     globalThis.alert = originalAlert;
   }
+}
+
+export function installOneShotAcknowledgementPublicationFault() {
+  const original = Reflect.ownKeys;
+  const seenAcknowledgements = new WeakSet();
+  let acknowledgementAttempts = 0;
+  let restored = false;
+  Reflect.ownKeys = (value) => {
+    if (value && typeof value === "object"
+        && value.acknowledgementType === "npc_publication_acknowledged"
+        && !seenAcknowledgements.has(value)) {
+      seenAcknowledgements.add(value);
+      acknowledgementAttempts += 1;
+      if (acknowledgementAttempts === 1) {
+        throw new Error("LIFECYCLE_SETTLEMENT_MARKER_DO_NOT_LEAK");
+      }
+    }
+    return original(value);
+  };
+  return Object.freeze({
+    get acknowledgementAttempts() { return acknowledgementAttempts; },
+    restore() {
+      if (restored) return;
+      restored = true;
+      Reflect.ownKeys = original;
+    }
+  });
 }
 
 export async function submitBrowserQuestion(browser, targetId, input) {
