@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 ## Current State
 
@@ -12,9 +12,9 @@ Last updated: 2026-07-20
 
 - Finding F-05 rollback hardeningは、approved head `5417d5175aaab16368b3ed57f7e2d08e08c0fe0c`をsecond parentとする通常の2-parent merge commit `35ddce7ffba21253b89c17ece92a98316cfaa7e4`で`master`へ取り込み済みである。日本語operator runbookと決定的なtestsは、Structured-only／process-wide rollback、flag capture、restart、in-flight／commit／delivery、privacy、fail-closed verificationを固定する。Approved headのfull regressionは688/688 PASSであり、merge-commit workflow runは主張しない。Production runtime差分、API key操作、実OpenAI API call、billable smokeは0で、`NPC_STRUCTURED_REACTION_MODE`はdefault-offのままである。
 
-- Replacement F-06 broader pseudo／mock acceptanceは未実行・未完了である。最初に検出したwinner後`advance_vote` defectは通常の2-parent merge commit `1b2db28fad116d3262409e606ba2227de6496f80`で修正済みだが、再監査でStructured Reaction後のlive phase残留とstructured-mode ONからlegacy Provider／displayへのfallthroughを確認した。旧BLOCKED goal-management recordはユーザーにより手動削除済みであり、acceptance完了を意味しない。現在のruntime correction merge後に新baselineから別Goalとして再作成・再実行する必要がある。
+- Structured lifecycle／fallback correctionは、approved head `b9670de1a8c0740321f02dbdcd0861f8ec4a48ec`をsecond parentとする通常の2-parent merge commit `fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`で`master`へ取り込み済みである。Successful structured NPC commitはcanonical graph appendと同じatomic replacementでlive phaseを`player_question -> day_discussion`へ閉じ、terminal pre-NPC failureはexact ownerを確認するengine-private CAS settlementで同じphaseを閉じる。Structured mode ONのaccepted `ask_npc`はInterpreterのnonvalidated／malformed／unknown outcomeでもlegacy Provider／displayへfall throughしない。Approved-head CIは731/731 PASSであり、merge-commit workflow runは主張しない。
 
-- Current independent runtime correctionはbranch `fix/phase6-npc-structured-lifecycle-fallback`をauthoritative baseline `1b2db28fad116d3262409e606ba2227de6496f80`から作成したDraft correctionである。Successful structured NPC commitはcanonical graph appendと同じatomic replacementでlive phaseを`player_question -> day_discussion`へ閉じる。Player commit後かつNPC commit前のterminal route result／throwは、exact ownerを確認するengine-private CAS settlementでPlayer graphを保持したまま同じphaseを閉じる。Structured mode ONのaccepted `ask_npc`はInterpreterのnonvalidated／malformed／unknown outcomeでもlegacy Provider／displayへfall throughしない。Independent reviewとmergeは未完了で、`NPC_STRUCTURED_REACTION_MODE`はdefault-offを維持し、API key操作、実OpenAI API call、billable smokeは0である。
+- Replacement F-06 broader pseudo／mock acceptanceはauthoritative baseline `fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`からfresh branch `test/phase6-f06-npc-structured-acceptance-fa7757f`で実装済みである。新規29/29、focused 511/511、全体760/760とsampleがPASSし、ACC-001〜030およびCORR-A〜Eを`docs/npc-structured-reaction-acceptance-matrix.md`へ記録した。Production runtime差分は0、E4 manual real-browserとE5 real OpenAI candidate routeは未実施、flagはdefault-offで、independent reviewとmergeは未完了である。過去2件の未完了F-06 goal-management recordはユーザーにより手動削除済みであり、再開・完了・上書きしていない。
 
 - The Phase 6 NPC authority-integration architecture decision and Slices 1–6 are merged on `master`; PR #58 was incorporated by the normal two-parent merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572`. Slice 6 wires the existing default-off `NPC_STRUCTURED_REACTION_MODE` to the production Player-question boundary: disabled sessions retain the unchanged legacy NPC provider/display path, while enabled sessions exclusively invoke the Structured Route, suppress legacy fallback for that logical reaction, and use eligible committed outcomes only as hints to the delivery orchestrator. Browser and CLI construct their existing safe sink wrappers; the server registers the strict candidate endpoint only while the flag is enabled. Delivery discovery remains controller-owned, authoritative writes remain `WerewolfGame.state`-owned, route/provider failures stay redacted, reset invalidates route/delivery callbacks, and no delivery failure reruns Provider, Validation, Preparation, or Commit. The original Structured Route Goal was not resumed. It was superseded by the rewritten replacement Goal. After the replacement implementation was merged, the obsolete BLOCKED Goal was manually removed from the goal-management system. Its historical context remains in Git history and project documents.
 
@@ -71,13 +71,13 @@ Last updated: 2026-07-20
 
 ## Last Verified
 
-- Date: 2026-07-20
+- Date: 2026-07-21
 - Commands:
   - `npm.cmd test`
   - `npm.cmd run sample`
   - `git diff --check`
   - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
-- Result: 731/731 local tests, the exact 34/34 new lifecycle／fallback／entrypoint suite, the 78/78 focused correction bundle, and the 245/245 adjacent Phase 3／4／6／Delivery／engine suite pass on the Structured lifecycle correction branch. Coverage proves two consecutive structured questions across Engine／Browser／CLI and consumer OFF／ON, exact `day_discussion N -> player_question N+1 -> day_discussion N+2`, historical `player_question` preservation, closed terminal-failure settlement outcomes with postcondition verification and redacted fail-stop behavior, stale-owner non-overwrite, Delivery nonauthority, closed structured selection with legacy calls zero, flag-OFF compatibility, and the two-version capacity preflight before turn/ID allocation and Interpreter invocation. `npm.cmd run sample` also passes. Independent review and merge remain pending; Draft PR CI is external state that must be checked against its latest HEAD, and no merge-commit workflow run is claimed. No API key was created, read, displayed, or used and no billable OpenAI smoke was run.
+- Result: baseline full regression 731/731、PR #65 correction suites 34/34、post-winner suite 9/9、新規acceptance suites 29/29、focused bundle 511/511、final full regression 760/760がPASSし、`npm.cmd run sample`もPASSする。CoverageはEngine／Browser／CLI／localhost Server、consumer OFF／ON、exact lifecycle、historical trigger preservation、replay／concurrency／retry／terminal recovery、Player-before-NPC、Delivery retry modes、New Game／destroy isolation、vote／night／winner／post-winner no-op、privacy／ID／state invariantsを含む。Independent reviewとmergeはpendingで、Draft PR CIはlatest HEADに対して外部確認する。Production runtime差分、API key操作、実OpenAI API call、billable smokeは0である。
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -94,8 +94,8 @@ Last updated: 2026-07-20
 
 ## Next Recommended Task
 
-1. Independently review and decide the Structured lifecycle／fallback runtime correction while keeping `NPC_STRUCTURED_REACTION_MODE` default-off.
-2. After a normal merge, fix the new authoritative baseline and recreate Replacement F-06 acceptance as a separate Goal. The prior BLOCKED record was manually deleted, but acceptance remains unexecuted and incomplete. This correction does not make a flag-on or production-readiness claim. Persistence/cross-process recovery, authentication, distributed rate limiting, Slice 6 candidate-route billable live smoke, and Phase 7/8 remain out of scope.
+1. Independently review the Draft Replacement F-06 acceptance PR against `docs/npc-structured-reaction-acceptance-matrix.md` while keeping `NPC_STRUCTURED_REACTION_MODE` default-off. Findings must be repaired by a normal correction commit on the same branch; Ready化とmerge判断は別操作である。
+2. Approval and normal mergeの後にnew baselineを固定し、fresh readiness audit、controlled local flag-on判断、E4 manual real-browser、E5 one-call real OpenAI candidate smokeをそれぞれ別工程で判断する。Persistence/cross-process recovery、authentication、distributed rate limiting、Phase 7/8はout of scopeである。
 
 ## Read This First Next Time
 
@@ -115,7 +115,7 @@ Last updated: 2026-07-20
 - GitHub public repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- Current authoritative repository/runtime baseline is the normal PR #64 two-parent merge commit `1b2db28fad116d3262409e606ba2227de6496f80`. Branch `fix/phase6-npc-structured-lifecycle-fallback` contains the independent unmerged Draft correction for Structured phase lifecycle and legacy-fallback defects. Replacement F-06 acceptance remains unexecuted and incomplete; its former BLOCKED goal-management record was manually deleted and must not be treated as completion.
+- Current authoritative repository/runtime baseline is the normal PR #65 two-parent merge commit `fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`, with first parent `1b2db28fad116d3262409e606ba2227de6496f80` and approved second parent `b9670de1a8c0740321f02dbdcd0861f8ec4a48ec`. Branch `test/phase6-f06-npc-structured-acceptance-fa7757f` contains only Replacement F-06 tests and status documentation; independent review and merge remain pending. The two earlier unfinished F-06 goal-management records were manually deleted and are not treated as resumed or completed.
 - The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slices 1–6 production integration was merged through PR #58 by the normal two-parent merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572`, whose approved second parent was `544a1dd2fcc7421a2340ba56074251bbe9eaa80e`. This is the historical production-integration merge baseline, not the current repository baseline. Subsequent F-01 through F-04 hardening is merged on `master`. `NPC_STRUCTURED_REACTION_MODE` remains default-off: disabled sessions preserve the legacy NPC Provider/display path, while enabled sessions select the Structured Route, engine-owned atomic Commit, and canonical Delivery path without a legacy fallback for the same logical reaction. The original Structured Route Goal was superseded and its obsolete BLOCKED goal-management record was manually removed.
 - Game state is intentionally kept in memory only; save/load is not planned.
 
