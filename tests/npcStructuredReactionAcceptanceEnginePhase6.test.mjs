@@ -5,15 +5,18 @@ import { createPseudoNpcReactionCandidateInvoker } from "../src/npcReactionCandi
 import { consumeLiveActionDisplay } from "../src/playerDisplaySink.mjs";
 import {
   assertPrivacySafe,
-  assertSafeMonotonicIdentityState,
+  assertPrivateFailureSource,
+  assertPrivateProjectionAbsent,
+  assertPrivateProjectionSource,
+  assertSafeIdentityShape,
   authoritativeSnapshot,
   completePlayerAndNpc,
   createAcceptanceGame,
+  createPrivateFailureEvidence,
   createDeferred,
   createDeliveryAcceptanceGame,
   createFailingNpcDom,
-  installOneShotAcknowledgementPublicationFault,
-  PRIVACY_MARKERS
+  installOneShotAcknowledgementPublicationFault
 } from "./helpers/npcStructuredReactionAcceptanceHarness.mjs";
 
 test("ACC-001 flag-off engine preserves legacy exclusivity", async () => {
@@ -80,7 +83,7 @@ for (const [id, playerStructuredConsumerEnabled] of [["ACC-002", false], ["ACC-0
     assert.equal(game.state.stateVersion, initialVersion + 4);
     assert.equal(game.state.conversation.reactionPlans.length, 2);
     assert.equal(game.state.conversation.npcReactionCommitIdempotencyRecords.length, 2);
-    assertSafeMonotonicIdentityState(game.state);
+    assertSafeIdentityShape(game.state);
     game.destroy();
   });
 }
@@ -326,6 +329,7 @@ test("ACC-011 ack_only retains one sink effect while explicit completion retries
   const input = { schemaVersion: 1, gameSessionId: game.state.gameSessionId, playerPublicationId: action.result.conversationCommitResult.playerPublicationId };
   const fault = installOneShotAcknowledgementPublicationFault();
   try {
+    assertPrivateFailureSource(fault.failureEvidence);
     const first = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
     const second = await game.completeNpcStructuredReactionDeliveryAfterPlayerDisplay(input);
     const retryObservation = observations.find((event) => event.eventType === "npc_publication_delivery_orchestration"
@@ -342,6 +346,9 @@ test("ACC-011 ack_only retains one sink effect while explicit completion retries
     assert.equal(game.state.conversation.reactionPlans.length - before.conversation.reactionPlans.length, 1);
     assert.equal(game.state.conversation.publications.filter((entry) => entry.publicationId === input.playerPublicationId).length, 1);
     assert.deepEqual(authoritativeSnapshot(game), afterCommit);
+    assertPrivacySafe(first, Object.values(fault.failureEvidence.markers));
+    assertPrivacySafe(second, Object.values(fault.failureEvidence.markers));
+    assertPrivacySafe(observations, Object.values(fault.failureEvidence.markers));
   } finally {
     fault.restore();
   }
@@ -452,7 +459,7 @@ test("ACC-025 ACC-026 ACC-027 ACC-028 public progression, dead NPC, bounded winn
   assert.equal(read.ok, true);
   assert.deepEqual(authoritativeSnapshot(game), terminal);
   assert.deepEqual(counters, calls);
-  assertSafeMonotonicIdentityState(game.state);
+  assertSafeIdentityShape(game.state);
   game.destroy();
 });
 
@@ -483,73 +490,233 @@ test("ACC-030 engine state, identities, immutability, and privacy remain closed"
   const observations = [];
   const counters = { candidate: 0, legacy: 0, ids: 0, npcWrites: 0, playerWrites: 0 };
   const pseudo = createPseudoNpcReactionCandidateInvoker();
+  const failureEvidence = createPrivateFailureEvidence("ENGINE");
   let providerCalls = 0;
-  let privateProviderFailure;
+  let failedProjectionEvidence;
+  let successfulProjectionEvidence;
+  let successfulRequest;
   const { game } = createDeliveryAcceptanceGame({
     counters,
     observer: (event) => observations.push(event),
     invokeProvider: async (request, options) => {
       providerCalls += 1;
       counters.candidate += 1;
+      const projectionEvidence = assertPrivateProjectionSource(request);
       if (providerCalls === 1) {
-        privateProviderFailure = Object.assign(new Error(PRIVACY_MARKERS[3]), {
-          authorizationMetadata: PRIVACY_MARKERS[4],
-          stack: `Error: ${PRIVACY_MARKERS[5]} at C:\\${PRIVACY_MARKERS[6]}`,
-          cause: new Error(PRIVACY_MARKERS[5]),
-          settlementMarker: PRIVACY_MARKERS[7],
-          code: "provider_unavailable",
-          retryable: false
-        });
-        throw privateProviderFailure;
+        failedProjectionEvidence = projectionEvidence;
+        throw failureEvidence.error;
       }
+      successfulProjectionEvidence = projectionEvidence;
+      successfulRequest = request;
       return pseudo(request, options);
     }
   });
-  const privateActor = game.state.players.find((player) => player.id === "npc1");
-  privateActor.hiddenInfo[0].text = PRIVACY_MARKERS[0];
-  privateActor.hiddenInfo[1].text = PRIVACY_MARKERS[1];
-  privateActor.knownInfo.find((entry) => entry.visibility === "private").text = PRIVACY_MARKERS[2];
-  const privateSources = { hiddenInfo: privateActor.hiddenInfo, knownInfo: privateActor.knownInfo };
-  for (const marker of PRIVACY_MARKERS.slice(0, 3)) assert.match(JSON.stringify(privateSources), new RegExp(marker));
+  assertPrivateFailureSource(failureEvidence);
   const rejected = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Private failure audit?" });
   assert.equal(rejected.result.structuredNpc.routeStatus, "exhausted");
-  for (const marker of PRIVACY_MARKERS.slice(3)) assert.match(JSON.stringify(privateProviderFailure, Object.getOwnPropertyNames(privateProviderFailure)), new RegExp(marker));
-  assertPrivacySafe(rejected);
+  assert.ok(failedProjectionEvidence);
+  assertPrivacySafe(rejected, Object.values(failureEvidence.markers));
+  assertPrivateProjectionAbsent(rejected, failedProjectionEvidence);
+  assertPrivacySafe(game.getPublicSnapshot(), Object.values(failureEvidence.markers));
+  assertPrivateProjectionAbsent(game.getPublicSnapshot(), failedProjectionEvidence);
+  assertPrivacySafe(observations, Object.values(failureEvidence.markers));
+  assertPrivateProjectionAbsent(observations, failedProjectionEvidence);
 
   const before = authoritativeSnapshot(game);
+  const observationStart = observations.length;
   const action = await game.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "Audit?" });
-  const { delivery } = await completePlayerAndNpc(game, action, { counters });
+  const intermediate = authoritativeSnapshot(game);
+  const { delivery, bookkeeping } = await completePlayerAndNpc(game, action, { counters });
   const after = authoritativeSnapshot(game);
-  assertSafeMonotonicIdentityState(game.state);
-  assert.equal(after.stateVersion, before.stateVersion + 2);
-  assert.equal(after.turnOrder, before.turnOrder + 1);
-  assert.notEqual(after.turnId, before.turnId);
-  const plan = after.conversation.reactionPlans.at(-1);
-  const idempotency = after.conversation.npcReactionCommitIdempotencyRecords.at(-1);
-  const npcPublication = after.conversation.publications.find((entry) => entry.publicationId === action.result.structuredNpc.publicationId);
-  const routeAttemptIds = observations.filter((event) => event.observationType === "npc_structured_reaction_route"
-      && event.reactionPlanId === plan.reactionPlanId)
-    .map((event) => event.reactionAttemptId).filter(Boolean);
-  const deliveryAttemptIds = observations.filter((event) => event.deliveryAttemptId).map((event) => event.deliveryAttemptId);
-  assert.equal(plan.requestId, idempotency.requestId);
-  assert.equal(plan.successfulAttemptId, idempotency.successfulAttemptId);
-  assert.equal(routeAttemptIds.includes(plan.successfulAttemptId), true);
-  assert.equal(npcPublication.publicationId, action.result.structuredNpc.publicationId);
-  assert.equal(new Set(routeAttemptIds).size, 1);
-  assert.equal(new Set(deliveryAttemptIds).size, 1);
-  assert.ok(deliveryAttemptIds[0]);
+  assertSafeIdentityShape(before);
+  assertSafeIdentityShape(intermediate);
+  assertSafeIdentityShape(game.state);
+  assert.deepEqual(after, intermediate, "Delivery must not mutate canonical authority");
+  assert.equal(intermediate.gameSessionId, before.gameSessionId);
+  assert.equal(after.gameSessionId, before.gameSessionId);
+  assert.equal(intermediate.stateVersion, before.stateVersion + 2);
+  assert.equal(intermediate.turnOrder, before.turnOrder + 1);
+  assert.notEqual(intermediate.turnId, before.turnId);
+
+  const added = assertConversationAppendOnlyDeltas(before.conversation, intermediate.conversation);
+  assertConversationRegistryIdentityUniqueness(intermediate.conversation);
+  const [inputRecord] = added.inputRecords;
+  const [acceptedSpeechAct] = added.acceptedSpeechActs;
+  const [displayPlan] = added.displayPlans;
+  const [plan] = added.reactionPlans;
+  const [playerMapping] = added.playerLegacyDisplayCompatibilityRecords;
+  const [playerIdempotency] = added.idempotencyRecords;
+  const [npcIdempotency] = added.npcReactionCommitIdempotencyRecords;
+  const [playerPublication] = added.publications.filter((entry) => entry.recordType === "player_utterance_published");
+  const [npcPublication] = added.publications.filter((entry) => entry.recordType === "npc_canonical_published");
+  const [playerResult] = added.commitResults.filter((entry) => entry.commitType === "player_conversation");
+  const [npcResult] = added.commitResults.filter((entry) => entry.commitType === "npc_reaction");
+  assert.equal(added.publications.filter((entry) => entry.recordType === "player_utterance_published").length, 1);
+  assert.equal(added.publications.filter((entry) => entry.recordType === "npc_canonical_published").length, 1);
+  assert.equal(added.commitResults.filter((entry) => entry.commitType === "player_conversation").length, 1);
+  assert.equal(added.commitResults.filter((entry) => entry.commitType === "npc_reaction").length, 1);
+
+  assert.deepEqual(action.result.conversationCommitResult, playerResult);
+  assert.equal(inputRecord.requestId, playerResult.requestId);
+  assert.equal(inputRecord.requestId, playerPublication.requestId);
+  assert.equal(inputRecord.requestId, playerIdempotency.requestId);
+  assert.equal(inputRecord.inputRecordId, playerResult.inputRecordId);
+  assert.equal(inputRecord.inputRecordId, playerPublication.inputRecordId);
+  assert.equal(playerResult.playerPublicationId, playerPublication.publicationId);
+  assert.equal(displayPlan.displayPlanId, playerResult.displayPlanId);
+  assert.equal(displayPlan.displayPlanId, playerPublication.displayPlanId);
+  assert.equal(playerMapping.publicationId, playerPublication.publicationId);
+  assert.equal(playerMapping.gameSessionId, intermediate.gameSessionId);
+  assert.equal(playerMapping.displayPlanId, displayPlan.displayPlanId);
+  assert.equal(playerMapping.inputRecordId, inputRecord.inputRecordId);
+  assert.equal(playerMapping.requestId, inputRecord.requestId);
+  assert.equal(action.deliveryPublicationIds.filter((id) => id === playerPublication.publicationId).length, 1);
+
+  assert.equal(plan.originatingInputRecordId, inputRecord.inputRecordId);
+  assert.equal(npcIdempotency.originatingInputRecordId, inputRecord.inputRecordId);
+  assert.equal(npcIdempotency.gameSessionId, intermediate.gameSessionId);
+  assert.equal(npcPublication.originatingInputRecordId, inputRecord.inputRecordId);
+  assert.equal(plan.causationId, playerResult.requestId);
+  assert.equal(npcIdempotency.causationId, playerResult.requestId);
+  assert.equal(npcResult.reactionPlanId, plan.reactionPlanId);
+  assert.equal(npcIdempotency.reactionPlanId, plan.reactionPlanId);
+  assert.equal(npcPublication.reactionPlanId, plan.reactionPlanId);
+  assert.equal(npcResult.requestId, plan.requestId);
+  assert.equal(npcIdempotency.requestId, plan.requestId);
+  assert.equal(npcIdempotency.commitResultRequestId, plan.requestId);
+  assert.equal(npcPublication.reactionCommitRequestId, plan.requestId);
+  assert.equal(npcResult.npcPublicationId, npcPublication.publicationId);
+  assert.equal(npcIdempotency.npcPublicationId, npcPublication.publicationId);
+  assert.equal(action.result.structuredNpc.publicationId, npcPublication.publicationId);
+  assert.equal(delivery.publicationId, npcPublication.publicationId);
+  assert.notEqual(playerPublication.publicationId, npcPublication.publicationId);
+  assert.notEqual(playerResult.requestId, npcResult.requestId);
+
+  assert.ok(successfulRequest);
+  assert.ok(successfulProjectionEvidence);
+  assert.equal(successfulRequest.gameSessionId, intermediate.gameSessionId);
+  assert.equal(successfulRequest.originatingInputRecordId, inputRecord.inputRecordId);
+  assert.equal(successfulRequest.causationId, playerResult.requestId);
+  assert.equal(successfulRequest.reactionPlanId, plan.reactionPlanId);
+  assert.equal(successfulRequest.requestId, plan.requestId);
+  assert.equal(successfulRequest.reactionAttemptId, plan.successfulAttemptId);
+  assert.equal(npcIdempotency.successfulAttemptId, plan.successfulAttemptId);
+  assert.equal(successfulRequest.turnId, intermediate.turnId);
+  assert.equal(successfulRequest.turnOrder, intermediate.turnOrder);
+  assert.equal(inputRecord.turnId, intermediate.turnId);
+  assert.equal(acceptedSpeechAct.acceptedTurnId, intermediate.turnId);
+  assert.equal(playerPublication.turnId, intermediate.turnId);
+  assert.equal(playerMapping.turnId, intermediate.turnId);
+  assert.equal(plan.turnId, intermediate.turnId);
+  assert.equal(npcIdempotency.turnId, intermediate.turnId);
+  assert.equal(npcIdempotency.turnOrder, intermediate.turnOrder);
+  assert.equal(npcPublication.turnId, intermediate.turnId);
+
+  const successObservations = observations.slice(observationStart);
+  const routeObservations = successObservations.filter((event) => event.observationType === "npc_structured_reaction_route");
+  assert.ok(routeObservations.length > 0);
+  for (const event of routeObservations) {
+    assert.equal(event.gameSessionId, intermediate.gameSessionId);
+    assert.equal(event.triggerRequestId, playerResult.requestId);
+    assert.equal(event.originatingInputRecordId, inputRecord.inputRecordId);
+    assert.equal(event.reactionPlanId, plan.reactionPlanId);
+    if (event.reactionAttemptId !== null) assert.equal(event.reactionAttemptId, plan.successfulAttemptId);
+  }
+  const routeAttemptIds = routeObservations.map((event) => event.reactionAttemptId).filter((value) => value !== null);
+  assert.ok(routeAttemptIds.length > 0);
+  assert.deepEqual(new Set(routeAttemptIds), new Set([plan.successfulAttemptId]));
+
+  const controllerObservations = successObservations.filter((event) => typeof event.deliveryAttemptId === "string");
+  const orchestratorObservations = successObservations.filter((event) => event.eventType === "npc_publication_delivery_orchestration");
+  assert.ok(controllerObservations.length > 0);
+  assert.ok(orchestratorObservations.length > 0);
+  for (const event of [...controllerObservations, ...orchestratorObservations]) {
+    assert.equal(event.gameSessionId, intermediate.gameSessionId);
+    assert.equal(event.publicationId, npcPublication.publicationId);
+  }
+  const controllerAttemptIds = new Set(controllerObservations.map((event) => event.deliveryAttemptId));
+  const orchestratorDeliveryIds = new Set(orchestratorObservations.map((event) => event.deliveryId).filter((value) => value !== null));
+  assert.equal(controllerAttemptIds.size, 1);
+  assert.deepEqual(orchestratorDeliveryIds, controllerAttemptIds);
+
+  const playerDeliveryEntries = [...bookkeeping.values()]
+    .filter((entry) => entry.identity?.publicationId === playerPublication.publicationId);
+  assert.equal(playerDeliveryEntries.length, 1);
+  const [{ identity: playerDeliveryIdentity }] = playerDeliveryEntries;
+  assert.equal(playerDeliveryIdentity.gameSessionId, intermediate.gameSessionId);
+  assert.equal(playerDeliveryIdentity.publicationId, playerPublication.publicationId);
+  assert.equal(typeof playerDeliveryIdentity.deliveryAttemptId, "string");
+  assert.ok(playerDeliveryIdentity.deliveryAttemptId.length > 0);
+  assert.equal(typeof playerDeliveryIdentity.receiptId, "string");
+  assert.ok(playerDeliveryIdentity.receiptId.length > 0);
+
   assert.equal(Object.isFrozen(action.result.structuredNpc), true);
   assert.equal(Object.isFrozen(delivery), true);
-  assertPrivacySafe(action);
-  assertPrivacySafe(delivery);
-  assertPrivacySafe(game.getPublicSnapshot());
-  assertPrivacySafe(observations);
+  for (const publicValue of [action, delivery, game.getPublicSnapshot(), observations]) {
+    assertPrivacySafe(publicValue, Object.values(failureEvidence.markers));
+    assertPrivateProjectionAbsent(publicValue, failedProjectionEvidence);
+    assertPrivateProjectionAbsent(publicValue, successfulProjectionEvidence);
+  }
   assert.equal(counters.candidate, 2);
   assert.equal(counters.legacy, 0);
   assert.equal(counters.playerWrites, 2);
   assert.equal(counters.npcWrites, 1);
   game.destroy();
 });
+
+function assertConversationAppendOnlyDeltas(before, after) {
+  const expectedDeltas = {
+    inputRecords: 1,
+    acceptedSpeechActs: 1,
+    claims: 0,
+    events: 2,
+    displayPlans: 1,
+    reactionPlans: 1,
+    publications: 2,
+    playerLegacyDisplayCompatibilityRecords: 1,
+    commitResults: 2,
+    idempotencyRecords: 1,
+    npcReactionCommitIdempotencyRecords: 1
+  };
+  return Object.fromEntries(Object.entries(expectedDeltas).map(([registry, delta]) => {
+    assert.equal(after[registry].length, before[registry].length + delta, `${registry} exact delta`);
+    assert.deepEqual(after[registry].slice(0, before[registry].length), before[registry], `${registry} append-only prefix`);
+    return [registry, after[registry].slice(before[registry].length)];
+  }));
+}
+
+function assertConversationRegistryIdentityUniqueness(conversation) {
+  const identities = [
+    ["inputRecords", "inputRecordId"],
+    ["inputRecords", "requestId"],
+    ["acceptedSpeechActs", "speechActId"],
+    ["claims", "claimId"],
+    ["events", "eventId"],
+    ["displayPlans", "displayPlanId"],
+    ["reactionPlans", "reactionPlanId"],
+    ["reactionPlans", "requestId"],
+    ["reactionPlans", "successfulAttemptId"],
+    ["publications", "publicationId"],
+    ["playerLegacyDisplayCompatibilityRecords", "compatibilityMappingId"],
+    ["commitResults", "requestId"],
+    ["idempotencyRecords", "requestId"],
+    ["npcReactionCommitIdempotencyRecords", "reactionPlanId"],
+    ["npcReactionCommitIdempotencyRecords", "requestId"],
+    ["npcReactionCommitIdempotencyRecords", "successfulAttemptId"]
+  ];
+  for (const [registry, field] of identities) {
+    const values = conversation[registry].map((entry) => entry[field]);
+    for (const value of values) {
+      assert.equal(typeof value, "string", `${registry}.${field}`);
+      assert.ok(value.length > 0, `${registry}.${field}`);
+    }
+    assert.equal(new Set(values).size, values.length, `${registry}.${field} must be unique`);
+  }
+  const playerRequestIds = new Set(conversation.idempotencyRecords.map((entry) => entry.requestId));
+  for (const record of conversation.npcReactionCommitIdempotencyRecords) {
+    assert.equal(playerRequestIds.has(record.requestId), false, "Player and NPC request IDs must be disjoint");
+  }
+}
 
 function scheduleInMicrotask(callback, delayMs) {
   const handle = { callback, delayMs, cancelled: false };

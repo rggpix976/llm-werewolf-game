@@ -3,8 +3,12 @@ import test from "node:test";
 
 import { createPseudoNpcReactionCandidateInvoker } from "../src/npcReactionCandidateUpstream.mjs";
 import {
+  assertPrivateFailureSource,
+  assertPrivateProjectionAbsent,
+  assertPrivateProjectionSource,
   assertPrivacySafe,
   browserPublicationOrder,
+  createPrivateFailureEvidence,
   createDeferred,
   settleMicrotasks,
   submitBrowserQuestion,
@@ -101,11 +105,19 @@ test("ACC-016 actual Browser New Game invalidates a pending old Provider and iso
 });
 
 test("ACC-017 actual Browser keeps normal output clean and exposes only redacted structured observations", async () => {
-  await withBrowserApp(true, async ({ browser }) => {
+  const failureEvidence = createPrivateFailureEvidence("BROWSER");
+  let privateProjectionEvidence;
+  assertPrivateFailureSource(failureEvidence);
+
+  await withBrowserApp(true, async ({ browser, transport }) => {
     await submitBrowserQuestion(browser, "npc1", "Observation question?" );
+    assert.equal(transport.candidateCalls, 1);
+    assert.ok(privateProjectionEvidence);
     assert.equal(browser.elements.developerPanel.children.length, 0);
     assert.equal(nodeText(browser.elements.logList).includes("NPC Structured Observations"), false);
-    assertPrivacySafe(nodeText(browser.elements.logList));
+    const normalOutput = nodeText(browser.elements.logList);
+    assertPrivacySafe(normalOutput, Object.values(failureEvidence.markers));
+    assertPrivateProjectionAbsent(normalOutput, privateProjectionEvidence);
 
     browser.elements.devModeToggle.listeners.get("click")();
     assert.equal(browser.elements.developerPanel.hidden, false);
@@ -115,9 +127,15 @@ test("ACC-017 actual Browser keeps normal output clean and exposes only redacted
     const observationText = nodeText(observationSection);
     assert.match(observationText, /NPC Structured Observations/);
     assert.match(observationText, /(route|delivery|status=)/i);
-    assertPrivacySafe(observationText);
+    assertPrivacySafe(observationText, Object.values(failureEvidence.markers));
+    assertPrivateProjectionAbsent(observationText, privateProjectionEvidence);
     for (const forbidden of ["knownInformation", "ownRole", "ownTeam", "raw prompt", "retryToken", "receiptId"]) {
       assert.equal(observationText.includes(forbidden), false);
+    }
+  }, {
+    invokeProvider: async (request) => {
+      privateProjectionEvidence = assertPrivateProjectionSource(request);
+      throw failureEvidence.error;
     }
   });
 });

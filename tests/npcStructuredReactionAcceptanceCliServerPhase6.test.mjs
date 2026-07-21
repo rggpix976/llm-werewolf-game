@@ -9,11 +9,15 @@ import { createNpcReactionCandidateProvider } from "../src/npcReactionCandidateP
 import { createPseudoNpcReactionCandidateInvoker } from "../src/npcReactionCandidateUpstream.mjs";
 import { createWebServer } from "../src/webServer.mjs";
 import {
+  assertPrivateFailureSource,
+  assertPrivateProjectionAbsent,
+  assertPrivateProjectionSource,
   assertPrivacySafe,
   completePlayerAndNpc,
   createAcceptanceGame,
   createDeferred,
   createDeliveryAcceptanceGame,
+  createPrivateFailureEvidence,
   installOneShotAcknowledgementPublicationFault,
   authoritativeSnapshot
 } from "./helpers/npcStructuredReactionAcceptanceHarness.mjs";
@@ -198,21 +202,98 @@ test("ACC-020 actual CLI retry command preserves Player, repeat_sink, and ack_on
 test("ACC-021 actual CLI observability is bounded, redacted, and absent from normal output", async () => {
   const output = [];
   const errors = [];
-  const commands = ["ask npc1 CLI observation?", "dev", "quit"];
+  const failureEvidence = createPrivateFailureEvidence("CLI_PROVIDER_BOUNDARY");
+  const failureBody = JSON.stringify(failureEvidence.error, Object.getOwnPropertyNames(failureEvidence.error));
+  const commands = ["ask npc1 CLI private failure?", "ask npc1 CLI observation?", "dev", "quit"];
+  let fetchCalls = 0;
+  const fetchInputs = [];
+  let failedProjectionEvidence;
+  let privateFailureResponse;
+  let outputBeforeDev = [];
+  assertPrivateFailureSource(failureEvidence);
   await runCli({
-    runtimeConfig: structuredRuntimeConfig(true),
-    showDev: true,
-    readlineInterface: { async question() { return commands.shift() ?? "quit"; }, close() {} },
+    runtimeConfig: {
+      ...structuredRuntimeConfig(true),
+      provider: "openai",
+      openai: {
+        apiKey: "unit-test-credential",
+        model: "test-model",
+        maxOutputTokens: 220,
+        maxRequestsPerMinute: 60,
+        maxConcurrentRequests: 1,
+        fetch: async (_url, options) => {
+          fetchCalls += 1;
+          const body = JSON.parse(options.body);
+          const request = JSON.parse(body.input[0].content[0].text);
+          fetchInputs.push(request.knownInformation.public.triggeringInput.rawText);
+          if (fetchCalls === 1) {
+            failedProjectionEvidence = captureOutboundPrivateProjectionEvidence(
+              body.input[0].content[0].text,
+              request
+            );
+            privateFailureResponse = new Response(failureBody, {
+              status: 401,
+              headers: { "Content-Type": "application/json; charset=utf-8" }
+            });
+            return privateFailureResponse;
+          }
+          const targetId = request.knownInformation.constraints.allowedLivingTargetIds[0];
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            async json() {
+              return {
+                status: "completed",
+                output_text: JSON.stringify({
+                  schemaVersion: 1,
+                  proposals: [{ proposalType: "suspicion", targetId }]
+                })
+              };
+            }
+          };
+        }
+      }
+    },
+    showDev: false,
+    readlineInterface: {
+      async question() {
+        const command = commands.shift() ?? "quit";
+        if (command === "dev") outputBeforeDev = [...output];
+        return command;
+      },
+      close() {}
+    },
     writeLine: (line) => output.push(String(line)),
     writeError: (line) => errors.push(String(line))
   });
+  assert.equal(fetchCalls, 2);
+  assert.deepEqual(fetchInputs, [
+    "CLI private failure?",
+    "CLI observation?"
+  ]);
+  assert.ok(failedProjectionEvidence);
+  assert.ok(privateFailureResponse);
+  const privateFailureResponseSource = await privateFailureResponse.text();
+  for (const marker of Object.values(failureEvidence.markers)) {
+    assert.ok(privateFailureResponseSource.includes(marker), `missing upstream failure source: ${marker}`);
+  }
   const observationBlocks = output.filter((line) => line.includes("--- NPC Structured Observations ---"));
   assert.ok(observationBlocks.length >= 1);
   const observationText = observationBlocks.join("\n");
   assert.match(observationText, /source=route/);
   assert.match(observationText, /source=delivery_controller/);
   assert.match(observationText, /source=delivery_orchestrator/);
-  assertPrivacySafe(observationText);
+  const privateMarkers = Object.values(failureEvidence.markers);
+  assertPrivacySafe(observationText, privateMarkers);
+  assertPrivateProjectionAbsent(observationText, failedProjectionEvidence);
+  const normalOutputBeforeDev = outputBeforeDev
+    .filter((line) => !line.includes("--- NPC Structured Observations ---"))
+    .join("\n");
+  assertPrivacySafe(normalOutputBeforeDev, privateMarkers);
+  assertPrivacySafe(errors.join("\n"), privateMarkers);
+  assertPrivateProjectionAbsent(normalOutputBeforeDev, failedProjectionEvidence);
+  assertPrivateProjectionAbsent(errors.join("\n"), failedProjectionEvidence);
   for (const forbidden of ["knownInformation", "privateMemory", "promptPreview", "rawResponse", "retryToken", "receiptId"]) {
     assert.equal(observationText.includes(forbidden), false);
   }
@@ -311,7 +392,10 @@ test("ACC-024 actual Server rejects malformed requests, propagates disconnect ab
   const entered = createDeferred();
   const aborted = createDeferred();
   const release = createDeferred();
+  const failureEvidence = createPrivateFailureEvidence("SERVER_PROVIDER_BOUNDARY");
+  let failedProjectionEvidence;
   let capturedSignal;
+  assertPrivateFailureSource(failureEvidence);
   const provider = {
     async generateCandidate(request, { signal }) {
       providerCalls += 1;
@@ -320,6 +404,10 @@ test("ACC-024 actual Server rejects malformed requests, propagates disconnect ab
         signal.addEventListener("abort", () => aborted.resolve(), { once: true });
         entered.resolve();
         await release.promise;
+      }
+      if (providerCalls === 3) {
+        failedProjectionEvidence = assertPrivateProjectionSource(request);
+        throw failureEvidence.error;
       }
       return candidateResultFixture(request);
     }
@@ -408,6 +496,34 @@ test("ACC-024 actual Server rejects malformed requests, propagates disconnect ab
     assert.equal(valid.status, 200);
     assertPrivacySafe(await valid.text());
     assert.equal(providerCalls, 2);
+
+    const closedFailure = await fetch(`${baseUrl}/api/generate-npc-reaction-candidate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: requestBody
+    });
+    assert.equal(closedFailure.status, 503);
+    const closedFailureText = await closedFailure.text();
+    const privateMarkers = Object.values(failureEvidence.markers);
+    assertPrivacySafe(closedFailureText, privateMarkers);
+    assert.ok(failedProjectionEvidence);
+    assertPrivateProjectionAbsent(closedFailureText, failedProjectionEvidence);
+    assert.deepEqual(JSON.parse(closedFailureText).error, {
+      code: "provider_unavailable",
+      retryable: false
+    });
+    assert.equal(providerCalls, 3);
+
+    const reused = await fetch(`${baseUrl}/api/generate-npc-reaction-candidate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: requestBody
+    });
+    assert.equal(reused.status, 200);
+    const reusedText = await reused.text();
+    assertPrivacySafe(reusedText, privateMarkers);
+    assertPrivateProjectionAbsent(reusedText, failedProjectionEvidence);
+    assert.equal(providerCalls, 4);
   });
 });
 
@@ -529,4 +645,24 @@ function candidateResultFixture(request) {
     candidate: { schemaVersion: 1, proposals: [{ proposalType: "suspicion", targetId: "npc2" }] },
     diagnostics: { providerName: "acceptance", model: "deterministic", attemptCount: 1, elapsedMs: 1 }
   };
+}
+
+function captureOutboundPrivateProjectionEvidence(serializedRequest, request) {
+  const actorPrivate = request?.knownInformation?.actorPrivate;
+  assert.equal(typeof actorPrivate?.ownRole, "string");
+  assert.ok(actorPrivate.ownRole.length > 0);
+  assert.equal(typeof actorPrivate?.ownTeam, "string");
+  assert.ok(actorPrivate.ownTeam.length > 0);
+  for (const field of ["investigationResults", "voteHistory", "suspicionScores"]) {
+    assert.equal(Array.isArray(actorPrivate[field]), true, field);
+  }
+  const privateFragment = actorPrivate.investigationResults[0]
+    ?? actorPrivate.suspicionScores[0]
+    ?? actorPrivate.voteHistory[0];
+  assert.ok(privateFragment, "expected an outbound private-only projection fragment");
+  for (const field of ["actorPrivate", "ownRole", "ownTeam", "investigationResults", "suspicionScores"]) {
+    assert.ok(serializedRequest.includes(`\"${field}\"`), `missing outbound private projection source: ${field}`);
+  }
+  assert.ok(serializedRequest.includes(JSON.stringify(privateFragment)));
+  return Object.freeze({ actorPrivate, privateFragment });
 }

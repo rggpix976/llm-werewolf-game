@@ -18,17 +18,7 @@ import {
 
 let browserImportOrder = 0;
 const AUTH_HEADER_NAME = ["Author", "ization"].join("");
-
-export const PRIVACY_MARKERS = Object.freeze([
-  "PRIVATE_ROLE_MARKER_DO_NOT_LEAK",
-  "PRIVATE_TEAM_MARKER_DO_NOT_LEAK",
-  "PRIVATE_KNOWLEDGE_MARKER_DO_NOT_LEAK",
-  "RAW_PROVIDER_MARKER_DO_NOT_LEAK",
-  "AUTHORIZATION_MARKER_DO_NOT_LEAK",
-  "STACK_CAUSE_MARKER_DO_NOT_LEAK",
-  "LOCAL_PATH_MARKER_DO_NOT_LEAK",
-  "LIFECYCLE_SETTLEMENT_MARKER_DO_NOT_LEAK"
-]);
+const STATIC_PRIVACY_MARKERS = Object.freeze(["LIFECYCLE_SETTLEMENT_MARKER_DO_NOT_LEAK"]);
 
 export function createAcceptanceGame(options = {}) {
   const counters = options.counters ?? {
@@ -199,9 +189,74 @@ export function authoritativeSnapshot(game) {
   return structuredClone({ ...state, rngState: rng.state });
 }
 
-export function assertPrivacySafe(value) {
+export function createPrivateFailureEvidence(label) {
+  const normalized = String(label).replace(/[^A-Z0-9_]/gu, "_").toUpperCase();
+  const markers = Object.freeze({
+    rawProvider: `${normalized}_RAW_PROVIDER_MARKER_DO_NOT_LEAK`,
+    authorization: `${normalized}_AUTHORIZATION_MARKER_DO_NOT_LEAK`,
+    stackCause: `${normalized}_STACK_CAUSE_MARKER_DO_NOT_LEAK`,
+    localPath: `${normalized}_LOCAL_PATH_MARKER_DO_NOT_LEAK`,
+    settlement: `${normalized}_SETTLEMENT_MARKER_DO_NOT_LEAK`
+  });
+  const error = Object.assign(new Error(markers.rawProvider), {
+    authorizationMetadata: markers.authorization,
+    stack: `Error: ${markers.stackCause} at C:\\${markers.localPath}`,
+    cause: new Error(markers.stackCause),
+    settlementMarker: markers.settlement,
+    code: "provider_unavailable",
+    retryable: false
+  });
+  return Object.freeze({ error, markers });
+}
+
+export function assertPrivateFailureSource(evidence) {
+  const serialized = JSON.stringify(evidence.error, Object.getOwnPropertyNames(evidence.error));
+  for (const marker of Object.values(evidence.markers)) {
+    assert.ok(serialized.includes(marker), `missing private failure source: ${marker}`);
+  }
+}
+
+export function assertPrivateProjectionSource(request) {
+  const projection = request?.knownInformation;
+  const actorPrivate = projection?.actorPrivate;
+  assert.equal(projection?.projectionType, "npc_known_information");
+  assert.equal(Object.isFrozen(request), true);
+  assert.equal(Object.isFrozen(projection), true);
+  assert.equal(Object.isFrozen(actorPrivate), true);
+  assert.equal(typeof actorPrivate?.ownRole, "string");
+  assert.ok(actorPrivate.ownRole.length > 0);
+  assert.equal(typeof actorPrivate.ownTeam, "string");
+  assert.ok(actorPrivate.ownTeam.length > 0);
+  for (const field of ["investigationResults", "voteHistory", "suspicionScores"]) {
+    assert.equal(Array.isArray(actorPrivate[field]), true, field);
+    assert.equal(Object.isFrozen(actorPrivate[field]), true, field);
+  }
+  const privateFragment = actorPrivate.investigationResults[0]
+    ?? actorPrivate.suspicionScores[0]
+    ?? actorPrivate.voteHistory[0];
+  assert.ok(privateFragment, "expected a private-only projection fragment");
+  assert.equal(Object.isFrozen(privateFragment), true);
+  const source = JSON.stringify({ actorPrivate });
+  for (const field of ["actorPrivate", "ownRole", "ownTeam", "investigationResults", "suspicionScores"]) {
+    assert.ok(source.includes(`\"${field}\"`), `missing private projection source: ${field}`);
+  }
+  return Object.freeze({ actorPrivate, privateFragment });
+}
+
+export function assertPrivateProjectionAbsent(value, evidence) {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
-  for (const marker of PRIVACY_MARKERS) assert.equal(serialized.includes(marker), false, marker);
+  for (const field of ["actorPrivate", "ownRole", "ownTeam", "investigationResults", "suspicionScores"]) {
+    assert.equal(serialized.includes(field), false, `private projection field leaked: ${field}`);
+  }
+  assert.equal(serialized.includes(JSON.stringify(evidence.actorPrivate)), false, "actorPrivate object leaked");
+  assert.equal(serialized.includes(JSON.stringify(evidence.privateFragment)), false, "private projection fragment leaked");
+}
+
+export function assertPrivacySafe(value, extraMarkers = []) {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  for (const marker of [...STATIC_PRIVACY_MARKERS, ...extraMarkers]) {
+    assert.equal(serialized.includes(marker), false, marker);
+  }
   for (const forbidden of [AUTH_HEADER_NAME, "retryToken", "receipt capability", "rawResponse", "stack\"", "cause\""]) {
     assert.equal(serialized.includes(forbidden), false, forbidden);
   }
@@ -211,7 +266,7 @@ export function assertUnique(values, label) {
   assert.equal(values.length, new Set(values).size, `${label} must be unique`);
 }
 
-export function assertSafeMonotonicIdentityState(state) {
+export function assertSafeIdentityShape(state) {
   assert.equal(Number.isSafeInteger(state.stateVersion), true);
   assert.equal(Number.isSafeInteger(state.turnOrder), true);
   assert.ok(state.stateVersion >= 0);
@@ -254,6 +309,7 @@ export async function withBrowserApp(playerStructuredConsumerEnabled, callback, 
 
 export function installOneShotAcknowledgementPublicationFault() {
   const original = Reflect.ownKeys;
+  const failureEvidence = createPrivateFailureEvidence("LIFECYCLE_SETTLEMENT");
   const seenAcknowledgements = new WeakSet();
   let acknowledgementAttempts = 0;
   let restored = false;
@@ -264,13 +320,14 @@ export function installOneShotAcknowledgementPublicationFault() {
       seenAcknowledgements.add(value);
       acknowledgementAttempts += 1;
       if (acknowledgementAttempts === 1) {
-        throw new Error("LIFECYCLE_SETTLEMENT_MARKER_DO_NOT_LEAK");
+        throw failureEvidence.error;
       }
     }
     return original(value);
   };
   return Object.freeze({
     get acknowledgementAttempts() { return acknowledgementAttempts; },
+    failureEvidence,
     restore() {
       if (restored) return;
       restored = true;
