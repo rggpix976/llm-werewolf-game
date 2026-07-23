@@ -817,14 +817,22 @@ function renderLogs() {
     return;
   }
 
-  reconcileBrowserPublicationNodes({ document, container: elements.logList, entries, formatPhase });
-  const playerNodes = [...elements.logList.querySelectorAll("[data-publication-id]")];
-  const merged = [];
-  appendNpcNodesAfterPlayerCount(merged, 0);
-  playerNodes.forEach((node, index) => {
-    merged.push(node);
-    appendNpcNodesAfterPlayerCount(merged, index + 1);
+  const playerNodes = reconcileBrowserPublicationNodes({
+    document,
+    container: elements.logList,
+    entries,
+    formatPhase
   });
+  const merged = [];
+  let publicationBackedPlayerCount = 0;
+  appendNpcNodesAfterPlayerCount(merged, 0);
+  for (const node of playerNodes) {
+    merged.push(node);
+    if (Object.hasOwn(node.dataset, "publicationId")) {
+      publicationBackedPlayerCount += 1;
+      appendNpcNodesAfterPlayerCount(merged, publicationBackedPlayerCount);
+    }
+  }
   elements.logList.replaceChildren(...merged);
   elements.logList.scrollTop = elements.logList.scrollHeight;
   const nodesByPublication = new Map([...elements.logList.querySelectorAll("[data-publication-id]")].map((node) => [node.dataset.publicationId, node]));
