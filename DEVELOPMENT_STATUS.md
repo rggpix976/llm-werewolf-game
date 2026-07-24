@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-07-21
+Last updated: 2026-07-24
 
 ## Current State
 
@@ -14,7 +14,9 @@ Last updated: 2026-07-21
 
 - Structured lifecycle／fallback correctionは、approved head `b9670de1a8c0740321f02dbdcd0861f8ec4a48ec`をsecond parentとする通常の2-parent merge commit `fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`で`master`へ取り込み済みである。Successful structured NPC commitはcanonical graph appendと同じatomic replacementでlive phaseを`player_question -> day_discussion`へ閉じ、terminal pre-NPC failureはexact ownerを確認するengine-private CAS settlementで同じphaseを閉じる。Structured mode ONのaccepted `ask_npc`はInterpreterのnonvalidated／malformed／unknown outcomeでもlegacy Provider／displayへfall throughしない。Approved-head CIは731/731 PASSであり、merge-commit workflow runは主張しない。
 
-- Replacement F-06 broader pseudo／mock acceptanceはauthoritative baseline `fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`からfresh branch `test/phase6-f06-npc-structured-acceptance-fa7757f`で実装済みである。PR #66のreviewed HEAD `21a166d144d389a389b5193b13b6b3c10e3f7b12`と最初のrepair HEAD `9d1e68d94680d8c12ca1732e1190733e298b78fd`への独立レビューはいずれも`CHANGES_REQUESTED`であり、production runtime defectは確認されなかった。現在のtest-only follow-upはactual `ack_only` composition、CLIのPlayer writer／`repeat_sink`／`ack_only`、candidate HTTP／disconnect、Browser New Game late-resultを維持しつつ、direct `game.state` mutationを除去した。Privacy evidenceはproduction-generatedなfrozen Known Informationの`actorPrivate`（`ownRole`、`ownTeam`、private fragment）と注入failure sourceを先に証明し、Engine／Browser／CLI／Server／typed lifecycleの対応public surfaceでoccurrence 0を検証する。Identity evidenceは`before -> intermediate authoritative commit -> after Delivery`のexact registry additions、既存prefix不変、全primary IDのuniqueness、Player／NPC／Route／Delivery binding、Delivery canonical mutation 0を固定する。ACC-026は既存turn allocation contractへ整合し、dead-target closed rejectionがnew turn identityを保持する一方、`stateVersion`、Player／NPC conversation、Delivery、legacy effectは不変であることを固定した。Follow-up後はEngine 17/17、Browser 5/5、CLI／Server 10/10、新規32/32、focused 600/600、全体763/763とsampleがPASSする。Production runtime差分は0、E4 manual real-browserとE5 real OpenAI candidate routeは`NOT_RUN`、flagはdefault-offである。正式状態は`F06_REPLACEMENT_ACCEPTANCE_CHANGES_REQUESTED`で、latest follow-up HEADのindependent rereviewとmergeは未完了である。過去2件の未完了F-06 goal-management recordはユーザーにより手動削除済みであり、再開・完了・上書きしていない。
+- Replacement F-06 broader pseudo／mock acceptanceは、approved head `ed613c7aeb5ce420a73ce045547259129dea9049`をsecond parentとする通常の2-parent merge commit `a5295e2606b55917cae20d937024aebb0d64a4ae`（PR #66）で`master`へ取り込み済みである。Merged evidenceはEngine 17/17、Browser 5/5、CLI／Server 10/10、新規32/32、focused 600/600、全体763/763とsample PASSを含む。このbaselineからE4 manual real-browserを開始し、E4-001〜005、E4-006 source drain、E4-007 source abandonはPASSしたが、fresh disabled Browserのlegacy API／Engine responseが成功しているのに最終DOM reconciliationがIDなしlegacy NPC nodeを除外するHIGH defectを確認したため、E4は未完了のBLOCKED outcomeとして停止した。E4-008／009とE5は`NOT_RUN`である。過去の未完了Goal recordはユーザーにより手動削除済みだが、削除をcompletionまたはresumeとして扱わない。
+
+- Browser legacy display reconciliation correctionは、baseline `a5295e2606b55917cae20d937024aebb0d64a4ae`からbranch `fix/phase6-browser-legacy-display-reconciliation`で実装中である。`playerFacingLog`の全entryをvisible model authorityとして保持し、IDなしlegacy nodeを最終`replaceChildren()`から除外しない。Canonical NPCの`afterPlayerCount`は引き続きpublication-backed Player nodeだけを数える。Production changeは`public/browserApp.mjs`だけで、Engine、API、Provider、Route、Commit、Delivery、schema、feature flag defaultは変更しない。BLR-001〜010 suite 12/12、focused Browser／legacy／rollback bundle 115/115、full regression 775/775、sampleがPASSする。独立レビューとmergeはpendingで、real-browser correction verificationはまだ主張しない。
 
 - The Phase 6 NPC authority-integration architecture decision and Slices 1–6 are merged on `master`; PR #58 was incorporated by the normal two-parent merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572`. Slice 6 wires the existing default-off `NPC_STRUCTURED_REACTION_MODE` to the production Player-question boundary: disabled sessions retain the unchanged legacy NPC provider/display path, while enabled sessions exclusively invoke the Structured Route, suppress legacy fallback for that logical reaction, and use eligible committed outcomes only as hints to the delivery orchestrator. Browser and CLI construct their existing safe sink wrappers; the server registers the strict candidate endpoint only while the flag is enabled. Delivery discovery remains controller-owned, authoritative writes remain `WerewolfGame.state`-owned, route/provider failures stay redacted, reset invalidates route/delivery callbacks, and no delivery failure reruns Provider, Validation, Preparation, or Commit. The original Structured Route Goal was not resumed. It was superseded by the rewritten replacement Goal. After the replacement implementation was merged, the obsolete BLOCKED Goal was manually removed from the goal-management system. Its historical context remains in Git history and project documents.
 
@@ -71,13 +73,13 @@ Last updated: 2026-07-21
 
 ## Last Verified
 
-- Date: 2026-07-21
+- Date: 2026-07-24
 - Commands:
   - `npm.cmd test`
   - `npm.cmd run sample`
   - `git diff --check`
   - documentation JSON/schema/fingerprint, UTF-8, conflict-marker, privacy/secret, and forbidden-Unicode validation
-- Result: baseline full regression 731/731、PR #65 correction suites 34/34、post-winner suite 9/9、follow-up後のEngine 17/17、Browser 5/5、CLI／Server 10/10、新規acceptance suites 32/32、focused bundle 600/600、final full regression 763/763がPASSし、`npm.cmd run sample`もPASSする。Coverageはactual `ack_only`、CLI three-vector retry、strict candidate HTTP／disconnect abort、Browser pending-result isolation、dead-target turn contract、field-aware private source-to-public-zero evidence、`before -> intermediate -> after` full identity graphを含む。Latest follow-up HEADのindependent rereviewとmergeはpendingで、Draft PR CIはlatest HEADに対して外部確認する。Production runtime差分、API key操作、実OpenAI API call、billable smokeは0である。
+- Result: authorized baseline `a5295e2606b55917cae20d937024aebb0d64a4ae`でfull regression 763/763とsampleがPASSした。変更前のactual Browser entrypoint reproducerはlegacy endpoint 1／candidate 0にもかかわらず最終legacy NPC node 0を再現した。Browser-only correction後はBLR-001〜010 suite 12/12、focused Browser／legacy／rollback bundle 115/115、full regression 775/775、sampleがPASSする。Latest Draft PR HEAD CIはPR上で最新HEADに対して確認し、merge-commit workflow runは主張しない。Manual E4再実行、E5、API key操作、実OpenAI API call、billable smokeは0である。
 - **Real OpenAI Smoke Test**:
   - Result: PASS
   - Date: 2026-07-01
@@ -94,8 +96,8 @@ Last updated: 2026-07-21
 
 ## Next Recommended Task
 
-1. Independently rereview the exact review-repair HEAD of Draft PR #66 against `docs/npc-structured-reaction-acceptance-matrix.md` while keeping `NPC_STRUCTURED_REACTION_MODE` default-off. Any further findings must be repaired by another normal follow-up commit on the same branch; Ready化とmerge判断は別操作である。
-2. Approval and normal mergeの後にnew baselineを固定し、fresh readiness audit、controlled local flag-on判断、E4 manual real-browser、E5 one-call real OpenAI candidate smokeをそれぞれ別工程で判断する。Persistence/cross-process recovery、authentication、distributed rate limiting、Phase 7/8はout of scopeである。
+1. Browser reconciliation correctionのexact Draft PR HEADを`docs/browser-legacy-display-reconciliation-decision.md`とBLR-001〜010に対して独立レビューする。追加findingは同じbranchへの通常correction commitで修正し、Ready化とmerge判断は別操作とする。
+2. Approvalとnormal merge後にnew baselineを固定し、replacement E4をfreshに開始する。Human operatorはvisible checkpointsだけ、Codexはtransport count／status／cleanup evidenceを担当する。E5 one-call real OpenAI candidate smokeとflag-on判断はE4 approval後の別工程である。
 
 ## Read This First Next Time
 
@@ -115,7 +117,7 @@ Last updated: 2026-07-21
 - GitHub public repository exists: `https://github.com/rggpix976/llm-werewolf-game`
 - `origin` is configured as `https://github.com/rggpix976/llm-werewolf-game.git`.
 - Local `master` tracks `origin/master`.
-- Current authoritative repository/runtime baseline is the normal PR #65 two-parent merge commit `fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`, with first parent `1b2db28fad116d3262409e606ba2227de6496f80` and approved second parent `b9670de1a8c0740321f02dbdcd0861f8ec4a48ec`. Branch `test/phase6-f06-npc-structured-acceptance-fa7757f` contains only Replacement F-06 tests and status documentation; independent review and merge remain pending. The two earlier unfinished F-06 goal-management records were manually deleted and are not treated as resumed or completed.
+- Current authoritative repository/runtime baseline is the normal PR #66 two-parent merge commit `a5295e2606b55917cae20d937024aebb0d64a4ae`, with first parent `fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b` and approved second parent `ed613c7aeb5ce420a73ce045547259129dea9049`. Branch `fix/phase6-browser-legacy-display-reconciliation` contains the isolated Browser reconciliation correction, BLR-001〜010 tests, and decision/status documentation; independent review and merge remain pending. E4 stopped on the confirmed Browser defect and is unfinished; deletion of its old goal-management record is not completion or resume.
 - The authoritative Phase 6 docs define candidate validation, preparation, commit, coordinator, renderer, delivery, and sole-authority integration. Slices 1–6 production integration was merged through PR #58 by the normal two-parent merge commit `6d10fc9e0d06723bcfd8c24b0fb7b32522664572`, whose approved second parent was `544a1dd2fcc7421a2340ba56074251bbe9eaa80e`. This is the historical production-integration merge baseline, not the current repository baseline. Subsequent F-01 through F-04 hardening is merged on `master`. `NPC_STRUCTURED_REACTION_MODE` remains default-off: disabled sessions preserve the legacy NPC Provider/display path, while enabled sessions select the Structured Route, engine-owned atomic Commit, and canonical Delivery path without a legacy fallback for the same logical reaction. The original Structured Route Goal was superseded and its obsolete BLOCKED goal-management record was manually removed.
 - Game state is intentionally kept in memory only; save/load is not planned.
 

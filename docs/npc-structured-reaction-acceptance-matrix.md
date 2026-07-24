@@ -2,11 +2,11 @@
 
 ## 1. 目的
 
-Phase 6 F-06 replacementとして、default-offでmerge済みのNPC Structured Reaction経路を、実際のEngine、Browser、CLI、Server entrypointと決定論的なpseudo／mock／localhost loopbackだけで検証する。production runtimeを変更せず、PR #66の独立レビューで要求されたacceptance evidenceを補強し、exact latest HEADの再レビューに供する。
+Phase 6 F-06 replacementとして実施したEngine、Browser、CLI、Serverの決定論的なpseudo／mock／localhost evidenceと、その後のE4 manual real-browser結果を記録する。PR #66はmerge済みである。E4で確認したBrowser legacy display reconciliation defectは別のisolated runtime correctionへ分離し、BLR-001〜010で自動回帰を固定する。
 
 ## 2. Authoritative baseline
 
-Baselineは`fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`である。PR #65の通常のtwo-parent mergeであり、approved headは`b9670de1a8c0740321f02dbdcd0861f8ec4a48ec`、merge treeとapproved-head treeは一致する。
+現在のauthoritative baselineは`a5295e2606b55917cae20d937024aebb0d64a4ae`である。PR #66の通常のtwo-parent mergeであり、first parentは`fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`、approved second parentは`ed613c7aeb5ce420a73ce045547259129dea9049`、merge treeとapproved-head treeは一致する。
 
 ## 3. F-06 replacement history
 
@@ -14,9 +14,9 @@ Baselineは`fa7757f72cf4b95b2f52c1f94c0fc6ee2f12b98b`である。PR #65の通常
 - PR #64はpost-winner correctionを`1b2db28…`へmergeした。
 - First replacement F-06は`1b2db28…`でphase／fallback defectを検出し、未完了のまま手動削除された。
 - PR #65はphase lifecycle／fallback correctionを`fa7757f…`へmergeした。
-- Current replacementは`fa7757f…`からfreshに実行する。
+- Final replacementは`fa7757f…`からfreshに実行し、normal merge commit `a5295e…`でmerge済みである。
 
-PR #66のreviewed HEAD `21a166d144d389a389b5193b13b6b3c10e3f7b12`と最初のrepair HEAD `9d1e68d94680d8c12ca1732e1190733e298b78fd`はいずれも独立レビューで`CHANGES_REQUESTED`となった。後者で残ったblocking findingsは、ACC-030のdirect authoritative-state mutation／cross-surface source proof不足とidentity graph不足の2件であり、確認されたproduction runtime defectは0である。現在のfollow-upはproduction codeを変更せず、ACC-030、関連helper、matrix、actual countを記録するstatus docsだけを修正する。
+PR #66のreviewed HEAD `21a166d144d389a389b5193b13b6b3c10e3f7b12`と最初のrepair HEAD `9d1e68d94680d8c12ca1732e1190733e298b78fd`はいずれも独立レビューで`CHANGES_REQUESTED`となった。最終approved HEAD `ed613c7aeb5ce420a73ce045547259129dea9049`は、direct authoritative-state mutationを除去し、cross-surface source proofとexact identity graphを閉じた。確認されたF-06 production runtime defectは0である。E4はmerge baseline `a5295e…`から開始し、別のBrowser legacy display reconciliation defectを検出して停止した。
 
 ## 4. PR #65 correction overlay
 
@@ -32,12 +32,12 @@ PR #66のreviewed HEAD `21a166d144d389a389b5193b13b6b3c10e3f7b12`と最初のrep
 
 - E2: automated module／integration evidence。本Goalで実施する。
 - E3: actual Browser fake DOM、actual CLI、localhost Server evidence。本Goalで実施する。
-- E4: manual real-browser evidence。`NOT_RUN`。
+- E4: manual real-browser evidence。E4-001〜005、E4-006 source drain、E4-007 source abandonはPASS。E4-006 disabled evidenceはdefectによりcompletion evidenceへ不採用、E4-007 disabled verificationはFAIL。E4-008／009は`NOT_RUN`。Outcomeはunfinished／BLOCKED。
 - E5: real OpenAI candidate route evidence。`NOT_RUN`。
 
 ## 6. Scope
 
-testsとdocsだけを変更する。production runtime diffは0、feature flagはdefault-off、API key操作とbillable callは0である。正式状態は`F06_REPLACEMENT_ACCEPTANCE_CHANGES_REQUESTED`で、latest follow-up HEADの独立再レビューとmergeはpendingである。
+PR #66までのF-06 evidenceはtests／docs-onlyでmerge済みである。現在のBrowser correctionは`public/browserApp.mjs`だけをproduction変更し、Engine、API、Provider、Route、Commit、Delivery、schema、flag defaultを変更しない。API key操作とbillable callは0である。Correctionの独立レビューとmerge、replacement E4、E5はpendingである。
 
 ## 7. Cross-surface invariants
 
@@ -65,6 +65,21 @@ authoritative stateは`WerewolfGame.state`だけである。one logical reaction
 | ACC-015 | Browser | duplicate submit／busy gate | dispatch／candidate／DOM effect exactly once | `ACC-015 actual Browser duplicate submit is rejected by the busy gate without duplicate effects` | PASS |
 | ACC-016 | Browser | New Game isolation | pending old Candidate→New Game→late resolveでold DOM／observation／retry／state effect 0。Provider requestでnew `gameSessionId`を確認し、new question usable | `ACC-016 actual Browser New Game invalidates a pending old Provider and isolates its late result` | PASS |
 | ACC-017 | Browser | observability／privacy | actual Candidate requestのfrozen Known Information private projectionとmarker-bearing Provider failureをsource側で証明し、normal DOM／Developer observationsで対応object／field／fragment／marker 0 | `ACC-017 actual Browser keeps normal output clean and exposes only redacted structured observations` | PASS |
+
+### Browser legacy display reconciliation correction
+
+| ID | Surface | Scenario | Expected invariant | Automated evidence | Result |
+|---|---|---|---|---|---|
+| BLR-001 | Browser | flag OFF／consumer OFF／one question | legacy endpoint 1、candidate 0、Player→legacy NPC、legacy nodeにfake ID 0 | `BLR-001 actual flag-off Browser preserves one legacy NPC response with consumer off` | PASS |
+| BLR-002 | Browser | flag OFF／consumer ON／one question | dependency closureを維持し、Player／legacy NPC各1、canonical NPC 0 | `BLR-002 actual flag-off Browser preserves one legacy NPC response with consumer on` | PASS |
+| BLR-003 | Browser | two legacy questions／repeated reconciliation | Player-A→NPC-A→Player-B→NPC-B、各1、first pair保持 | `BLR-003 two flag-off questions survive repeated reconciliation in source order` | PASS |
+| BLR-004 | Browser | later public render | existing legacy pair保持、duplicate 0 | `BLR-004 an additional public render keeps the legacy pair exactly once` | PASS |
+| BLR-005 | Browser | New Game isolation | old pair 0、fresh pair各1、old Retry Display 0 | `BLR-005 New Game removes the old legacy pair and a fresh pair renders once` | PASS |
+| BLR-006 | Browser | fresh disabled postcondition | legacy answer visible、structured observation unavailable、Retry Display 0 | `BLR-006 a fresh disabled Browser shows the legacy answer and unavailable structured observations` | PASS |
+| BLR-007 | Browser | Structured ON／consumer OFF | candidate 2、Player／canonical NPC各2、legacy fallback 0、exact order | `BLR-007 structured Browser ordering and identity remain unchanged with consumer off` | PASS |
+| BLR-008 | Browser | Structured ON／consumer ON | BLR-007と同じstructured identity／order contract | `BLR-008 structured Browser ordering and identity remain unchanged with consumer on` | PASS |
+| BLR-009 | Browser／helper seam | IDなしnodeとpublication anchor | full reconciliation resultを保持し、anchor countはpublication-backed Playerだけ | `BLR-009 reconciliation keeps ID-less nodes while the Browser anchor counter remains publication-only` | PASS |
+| BLR-010 | Browser | text／identity／authority | literal `textContent`、fake ID 0、private marker 0、reconciliation authority mutation 0 | `BLR-010 legacy text and identity stay UI-only, safe, and authority-neutral` | PASS |
 
 ## 10. CLI acceptance
 
@@ -124,12 +139,12 @@ ACC-030のexact automated identity graphは次を固定する。
 
 ## 16. Test execution
 
-Baseline full regressionは731/731 PASS、PR #65 correction suitesは34/34 PASS、post-winner suiteは9/9 PASSである。Review-repair後のEngine acceptanceは17/17、Browser acceptanceは5/5、CLI／Server acceptanceは10/10、新規acceptance suitesは32/32、focused bundleは600/600、final full regressionは763/763 PASSであり、`npm.cmd run sample`もPASSである。
+PR #66 merge前のfinal evidenceはEngine 17/17、Browser 5/5、CLI／Server 10/10、新規acceptance suites 32/32、focused bundle 600/600、full regression 763/763、sample PASSである。Browser correction baselineでも763/763とsampleがPASSした。変更前actual-entrypoint reproducerはlegacy endpoint 1／candidate 0／visible Player 1に対してvisible legacy NPC 0を再現した。Correction後はBLR-001〜010 suite 12/12、focused Browser／legacy／rollback bundle 115/115、full regression 775/775、sample PASSである。
 
 ## 17. Evidence limitations
 
-E4 manual real-browserは`NOT_RUN`、E5 real OpenAI candidate routeは`NOT_RUN`である。fake DOMをreal-browser evidenceとせず、injected transport／localhostをreal OpenAI evidenceとしない。production-ready、release-ready、flag-on readyは主張しない。
+E4 manual real-browserは部分実施後、confirmed Browser defectによりunfinished／BLOCKEDである。E4-001〜005、E4-006 source drain、E4-007 source abandonはPASS、E4-006 disabled evidenceはcompletion evidenceへ不採用、E4-007 disabled verificationはFAIL、E4-008／009は`NOT_RUN`である。E5 real OpenAI candidate routeも`NOT_RUN`である。BLR fake DOMをreal-browser correction evidenceとせず、injected transport／localhostをreal OpenAI evidenceとしない。production-ready、release-ready、flag-on readyは主張しない。
 
 ## 18. Remaining operational steps
 
-すべてのE2／E3 evidenceを確定後、Draft PRのlatest follow-up HEADを独立レビューする。approval後のmerge判断、新baseline固定、fresh readiness audit、controlled local flag-on判断、real one-call OpenAI candidate smokeは別工程である。
+Browser correctionのexact Draft PR HEADを独立レビューする。Approval後にnormal mergeし、新baselineを固定した後だけreplacement E4をfreshに開始する。Human operatorはvisible checkpoints、Codexはtransport count／status／cleanup evidenceを担当し、humanへF12／DevTools操作を要求しない。E4 approval後のflag-on判断とreal one-call OpenAI candidate smokeは別工程である。
