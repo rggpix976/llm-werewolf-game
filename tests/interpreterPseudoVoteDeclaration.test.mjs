@@ -64,6 +64,17 @@ test("pseudo interpreter: deliberation about voting is not a declaration", async
   assert.equal(act.type, "question");
   assert.equal(act.targetId, "npc1");
 
+  // Suspecting the person who votes for Aoi is not itself a vote for Aoi:
+  // the phrase does not close the sentence.
+  const attributive = await interpret(game(), "私はAoiに投票する人を疑う", { targetNpcId: "npc2" });
+  assert.equal(attributive.act.type, "question");
+  assert.equal(attributive.act.targetId, "npc2");
+
+  // A negated intention is not a declaration either.
+  const negated = await interpret(game(), "Aoiに投票するつもりはない", { targetNpcId: "npc1" });
+  assert.equal(negated.act.type, "question");
+  assert.equal(negated.act.targetId, "npc1");
+
   const withParticle = await interpret(game(), "Aoiに投票するよ", { targetNpcId: "npc2" });
   assert.equal(withParticle.act.type, "vote_declaration");
   assert.equal(withParticle.act.targetId, "npc1");
