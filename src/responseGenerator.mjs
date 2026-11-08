@@ -337,14 +337,23 @@ function maybeCreateRoleClaim(npc, gameState) {
     return null;
   }
 
+  // Seer keeps its established ask-path wording ("人狼判定") so it matches
+  // the proactive claim; medium uses the wording from the issue sheet.
+  const isSeer = npc.role === ROLES.SEER;
   const resultLines = freshResults.map((result) => {
     const target = gameState.players.find((player) => player.id === result.targetId);
-    const label = result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした";
+    const label = isSeer
+      ? result.result === "werewolf" ? "人狼判定" : "人狼ではない判定"
+      : result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした";
     return `${target?.name ?? result.targetId}は${label}`;
   });
 
+  const text = isSeer
+    ? `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`
+    : `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`;
+
   return {
-    text: `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`,
+    text,
     publicClaim: {
       day: gameState.day,
       actorId: npc.id,
