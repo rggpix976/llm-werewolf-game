@@ -98,9 +98,9 @@ function claimLines(game) {
   return game.state.playerLog.map((entry) => entry.message).filter((line) => line.includes("占い"));
 }
 
-test("engine: the seer claims proactively at the start of day 2", () => {
+test("engine: the seer claims proactively at the start of day 2", async () => {
   const game = arrangedGame();
-  game.runNight();
+  await game.runNight();
 
   assert.equal(game.state.day, 2);
   assert.equal(game.getPlayer("npc3").alive, false);
@@ -124,9 +124,9 @@ test("engine: the seer claims proactively at the start of day 2", () => {
   assert.ok(dayStartIndex >= 0 && claimIndex > dayStartIndex);
 });
 
-test("engine: a follow-up result is announced once, then silence", () => {
+test("engine: a follow-up result is announced once, then silence", async () => {
   const game = arrangedGame();
-  game.runNight();
+  await game.runNight();
   const seer = game.getPlayer("npc2");
   assert.equal(seer.publicClaims.length, 1);
 
@@ -143,13 +143,13 @@ test("engine: a follow-up result is announced once, then silence", () => {
   assert.equal(seer.publicClaims.length, 2);
 });
 
-test("engine: a result about the player killed that night is not announced", () => {
+test("engine: a result about the player killed that night is not announced", async () => {
   const game = WerewolfGame.create({ seed: 1, shuffleRoles: false });
   const seer = game.getPlayer("npc2");
   const werewolf = game.getPlayer("npc1");
   seer.suspicionScores = { npc1: 0, npc3: 5, npc4: 0, npc5: 0 };
   werewolf.suspicionScores = { npc2: 0, npc3: -5, npc4: 0, npc5: 0 };
-  game.runNight();
+  await game.runNight();
 
   assert.equal(game.getPlayer("npc3").alive, false);
   assert.ok(seer.knownInfo.some((info) => info.type === "seer_result" && info.targetId === "npc3"));

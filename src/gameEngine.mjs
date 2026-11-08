@@ -1,4 +1,4 @@
-import { buildNpcResponseRequest, buildProactiveSeerClaim } from "./responseGenerator.mjs";
+import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveSeerClaim } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
@@ -1105,7 +1105,7 @@ export class WerewolfGame {
     };
   }
 
-  runNight() {
+  async runNight() {
     if (this.state.winner) {
       return {
         skipped: true,
@@ -1136,7 +1136,8 @@ export class WerewolfGame {
         type: "day_start",
         text: `${this.state.day}日目の昼が始まった。`
       });
-      this.emitProactiveSeerClaim();
+      const triggeringClaim = this.emitProactiveSeerClaim();
+      if (triggeringClaim) await this.resolveMadmanSeerDecision(triggeringClaim);
     }
 
     return {
@@ -1145,6 +1146,73 @@ export class WerewolfGame {
       attackResult,
       winner: this.state.winner
     };
+  }
+
+  async resolveMadmanSeerDecision(triggeringClaim) {
+    const madman = this.state.players.find((player) => player.role === ROLES.MADMAN && player.alive);
+    if (!madman) return null;
+    const hasClaim = madman.publicClaims.some((claim) => claim.role === ROLES.SEER);
+    const decisionPoint = hasClaim ? "follow_up_publication" : "first_counter_claim";
+    const candidates = hasClaim
+      ? [{ id: "publish_more", description: "最新の夜について偽の占い結果を一件公開する" }, { id: "stay_silent", description: "何も公開しない" }]
+      : [{ id: "counter_claim", description: "今すぐ占い師として対抗COする" }, { id: "stay_silent", description: "何も公開しない" }];
+    const request = buildNpcDecisionRequest(madman, this.state, triggeringClaim, candidates, decisionPoint);
+    let result = null;
+    let fallbackReason = null;
+    if (typeof this.responseProvider.chooseAction !== "function") fallbackReason = "method_missing";
+    else {
+      try { result = await this.responseProvider.chooseAction(request); }
+      catch { fallbackReason = "provider_error"; }
+    }
+    const offered = new Set(candidates.map(({ id }) => id));
+    if (!fallbackReason && (!result || typeof result !== "object" || !offered.has(result.choiceId))) fallbackReason = "invalid_choice";
+    const choiceId = fallbackReason ? "stay_silent" : result.choiceId;
+    this.addDeveloperLog("madman_seer_decision", {
+      madmanId: madman.id, decisionPoint, candidates: candidates.map(({ id }) => id), choiceId,
+      fallbackReason, providerName: result?.providerName ?? getProviderName(this.responseProvider),
+      model: result?.model ?? null, reason: typeof result?.reason === "string" ? result.reason : null
+    });
+    if (choiceId === "stay_silent") return null;
+    return this.registerFabricatedSeerClaim(madman, triggeringClaim, hasClaim);
+  }
+
+  registerFabricatedSeerClaim(madman, triggeringClaim, isFollowUp) {
+    const priorTargets = new Set(madman.publicClaims.flatMap((claim) => claim.results ?? []).map(({ targetId }) => targetId));
+    const newest = triggeringClaim.results.at(-1);
+    const aliveOthers = this.getAlivePlayers().filter((player) => player.id !== madman.id);
+    let newestTarget;
+    let newestResult;
+    if (newest.result === "werewolf") {
+      newestTarget = this.getPlayer(newest.targetId);
+      newestResult = "not_werewolf";
+    } else {
+      newestTarget = aliveOthers.filter((player) => player.id !== newest.targetId && !priorTargets.has(player.id))
+        .sort((a, b) => (madman.suspicionScores[b.id] ?? 0) - (madman.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0]
+        ?? aliveOthers.filter((player) => player.id !== newest.targetId)
+          .sort((a, b) => (madman.suspicionScores[b.id] ?? 0) - (madman.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0];
+      newestResult = "werewolf";
+    }
+    if (!newestTarget?.alive) return null;
+    const results = [{ targetId: newestTarget.id, result: newestResult }];
+    if (!isFollowUp) {
+      const needed = Math.max(0, this.state.day - 1 - results.length);
+      const used = new Set(results.map(({ targetId }) => targetId));
+      results.unshift(...aliveOthers.filter((player) => !used.has(player.id)).sort((a, b) => a.name.localeCompare(b.name)).slice(0, needed)
+        .map((player) => ({ targetId: player.id, result: "not_werewolf" })));
+    }
+    const resultLines = results.map(({ targetId, result }) => `${this.getPlayer(targetId).name}は${result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
+    const text = isFollowUp
+      ? `占い結果を追加で公開します。${resultLines.join("、")}です。`
+      : `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`;
+    const claim = { day: this.state.day, actorId: madman.id, actorName: madman.name, role: ROLES.SEER, results };
+    this.addPlayerLog(`${madman.name}: ${text}`);
+    this.addPublicInfo({ type: "npc_response", actorId: madman.id, actorName: madman.name, text: `${madman.name}: ${text}` });
+    madman.publicClaims.push(claim);
+    this.addPublicInfo({ type: "public_claim", actorId: madman.id, actorName: madman.name, text: `${madman.name}が${publicRoleName(ROLES.SEER)}COをした。`, claim });
+    madman.privateMemory.push({ day: this.state.day, type: "fabricated_seer_claim", results: structuredClone(results) });
+    this.addDeveloperLog("public_claim_registered", claim);
+    this.addDeveloperLog("fabricated_seer_claim", { madmanId: madman.id, results });
+    return claim;
   }
 
   emitProactiveSeerClaim() {

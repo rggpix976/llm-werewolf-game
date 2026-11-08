@@ -124,6 +124,31 @@ export function generatePseudoResponseText(request) {
   );
 }
 
+export function buildNpcDecisionRequest(npc, gameState, triggeringClaim, candidates, decisionPoint) {
+  const mentionedIds = (triggeringClaim.results ?? []).map(({ targetId }) => targetId);
+  return deepFreeze(structuredClone({
+    npc: {
+      id: npc.id,
+      name: npc.name,
+      personality: npc.personality,
+      speechStyle: npc.speechStyle,
+      conversationPolicy: npc.conversationPolicy
+    },
+    context: {
+      day: gameState.day,
+      phase: gameState.phase,
+      publicEvidence: selectRelevantPublicInfo(gameState, mentionedIds),
+      triggeringClaim
+    },
+    candidates,
+    decisionPoint,
+    private: {
+      role: npc.role,
+      goals: ["村を混乱させる", "人狼をかばう"]
+    }
+  }));
+}
+
 export function buildProactiveSeerClaim(npc, gameState) {
   if (npc.role !== ROLES.SEER) {
     return null;
