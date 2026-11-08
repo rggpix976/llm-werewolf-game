@@ -47,6 +47,17 @@ export class HttpResponseProvider {
     }
   }
 
+  async chooseAction(request, options = {}) {
+    const response = await (this.fetch ?? globalThis.fetch)("/api/npc-decision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal: options.signal
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  }
+
   async interpretPlayerInput(request, options = {}) {
     validateInterpreterRequest(request);
     const controller = new AbortController(), onExternalAbort = () => controller.abort(options.signal.reason), pending = { schemaVersion: 1, pendingType: "interpreter", requestId: request.requestId, correlationId: request.correlationId, turnId: request.turnId, preconditionStateVersion: request.preconditionStateVersion, inputRecordId: request.inputRecordId, targetNpcId: options.targetNpcId ?? request.publicRoster.find((entry) => entry.playerId !== request.playerContext.playerId)?.playerId ?? request.playerContext.playerId, operation: "interpret_player_input", status: "pending", startedAt: new Date().toISOString() };

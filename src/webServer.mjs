@@ -59,6 +59,10 @@ export function createRequestHandler(options = {}) {
         return await handleNpcResponse(request, response, provider, rateLimiter);
       }
 
+      if (pathname === "/api/npc-decision" && request.method === "POST") {
+        return await handleNpcDecision(request, response, provider, rateLimiter);
+      }
+
       if (pathname === "/api/generate-npc-reaction-candidate" && request.method === "POST") {
         if (!candidateHandler) { response.writeHead(404, { "Content-Type": "application/json; charset=utf-8" }); response.end(JSON.stringify({ error: "Not found" })); return; }
         return await handleNpcCandidateRequest(request, response, candidateHandler);
@@ -257,6 +261,21 @@ async function handleNpcResponse(request, response, provider, rateLimiter) {
     // response listener removal is trickier as 'close' is used for many things,
     // but in Node.js 18+ it should be fine as it's terminal.
   }
+}
+
+async function handleNpcDecision(request, response, provider, rateLimiter) {
+  if (!rateLimiter.allow()) return sendError(response, 429, "Too many requests", "rate_limit");
+  const mediaType = (request.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (mediaType !== "application/json") return sendError(response, 415, "Unsupported Content-Type. Use application/json", "bad_request");
+  let body;
+  try { body = await readJsonBody(request, 64 * 1024); }
+  catch (error) { return sendError(response, error.status || 400, error.message, "bad_request"); }
+  try {
+    if (!body || typeof body !== "object" || !Array.isArray(body.candidates)) throw createHttpError(400, "Invalid decision request");
+    const result = await provider.chooseAction(structuredClone(body));
+    response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    response.end(JSON.stringify(result));
+  } catch (error) { sendError(response, error.status || 502, "Decision provider failed", error.type); }
 }
 
 function mapErrorToHttpStatus(type, upstreamStatus) {

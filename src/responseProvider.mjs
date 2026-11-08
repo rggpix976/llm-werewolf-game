@@ -15,6 +15,18 @@ export class PseudoResponseProvider {
       notes: ["deterministic_pseudo_response"]
     };
   }
+
+  async chooseAction(request) {
+    const preferred = request.candidates.some(({ id }) => id === "counter_claim")
+      ? "counter_claim"
+      : "publish_more";
+    return {
+      choiceId: request.candidates.some(({ id }) => id === preferred) ? preferred : "stay_silent",
+      providerName: this.name,
+      model: "template-v1",
+      notes: ["deterministic_pseudo_choice"]
+    };
+  }
 }
 
 export function validateProviderResponse(value, fallbackProviderName = "unknown") {

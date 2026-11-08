@@ -81,3 +81,9 @@ Only a narrow engine-owned read/atomic-commit port may publish a prepared NPC re
 D-004 is preserved in substance: night seer results live in the seer's `knownInfo` and are exposed only through a public claim registered by engine code; they are never copied raw into `publicInfo`.
 
 The claim trigger is no longer ask-only. When a day begins after a night (`runNight`), a living seer NPC with results that are not yet public announces them proactively through the same claim-registration path as an ask-based claim. Only results about still-living players are announced proactively; results about dead players stay private unless the seer is asked directly. A result that is already public is never registered as a claim a second time, on either the proactive or the ask-based path.
+
+## D-014: Providers May Select From Engine-Owned Candidate Actions
+
+In addition to D-007's text generation contract, a provider may implement optional asynchronous `chooseAction(request)` for narrowly scoped decisions. The engine offers a closed list of legal candidates in a frozen cloned request, validates the returned candidate ID, and treats the selection as advisory. A missing method, provider error, or invalid selection falls back to the engine-designated safe candidate and is recorded only in developer diagnostics.
+
+The engine remains the sole owner of all effects: it fabricates claim contents, registers claims, updates memory and state, and decides what is public. Decision requests contain public evidence plus only the acting NPC's own role and goals; they never reveal another player's role or private knowledge. The first use is the madman's optional seer counter-claim and later fake-result publication after a real seer's proactive day-start claim. D-007 is otherwise unchanged.

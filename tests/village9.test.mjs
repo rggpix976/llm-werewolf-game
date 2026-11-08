@@ -19,18 +19,18 @@ test("village9 has nine specified players and fixed roles without changing five-
   assert.equal(WerewolfGame.create({ scenario: "sample", shuffleRoles: false }).state.players.length, 5);
 });
 
-test("knight prevents an attack, cannot guard the same target twice, and remains private", () => {
+test("knight prevents an attack, cannot guard the same target twice, and remains private", async () => {
   const game = village9();
   const seer = game.getPlayer("npc3");
   game.state.publicInfo.push({ type: "public_claim", actorId: seer.id, claim: { role: ROLES.SEER } });
-  const first = game.runNight();
+  const first = await game.runNight();
   assert.equal(game.getPlayer("npc5").privateMemory.at(-1).targetId, seer.id);
   assert.equal(first.attackResult.prevented, true);
   assert.equal(seer.alive, true);
   assert.equal(game.state.playerLog.some((entry) => /犠牲者はいません/.test(entry.message)), true);
   assert.doesNotMatch(JSON.stringify(game.getPublicSnapshot()), /knight_guard|knight_action/);
 
-  const second = game.runNight();
+  const second = await game.runNight();
   assert.notEqual(game.getPlayer("npc5").privateMemory.at(-1).targetId, seer.id);
   assert.equal(seer.alive, false);
 });
@@ -72,9 +72,9 @@ test("madman reads not-werewolf and counts as human for both win conditions", ()
   assert.equal(parity.checkWin("test"), TEAMS.WEREWOLF);
 });
 
-test("village9 progresses through night, vote, execution, and win check", () => {
+test("village9 progresses through night, vote, execution, and win check", async () => {
   const game = village9();
-  assert.doesNotThrow(() => game.runNight());
+  await assert.doesNotReject(() => game.runNight());
   assert.doesNotThrow(() => game.runVote());
   assert.ok(game.state.voteHistory.at(-1).executedId);
   assert.ok(game.state.developerLog.some((entry) => entry.kind === "win_check"));

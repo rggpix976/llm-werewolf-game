@@ -1,5 +1,10 @@
 # Development Status
 
+## Phase 6 madman counter-CO decision slice
+
+The D-014 controlled `chooseAction` trial is implemented for the nine-player madman countering proactive seer claims. The engine owns candidate validation, safe-silence fallback, fabricated results, claim registration, and privacy boundaries. `runNight()` now awaits the day-start decision; the existing browser, CLI, and sample dispatch paths already await commands. Default and sample five-player behavior remains unchanged.
+
+
 Last updated: 2026-11-08
 
 ## Current State
