@@ -66,6 +66,22 @@ const DEFAULT_PLAYERS = [
     aliases: ["E", "絵真", "エマ"],
     personality: "論理重視で発言を整理する",
     speechStyle: "logical"
+  },
+  {
+    id: "npc6", name: "Fumi", aliases: ["F", "文", "フミ"],
+    personality: "世話焼きで面倒見がいい", speechStyle: "soft"
+  },
+  {
+    id: "npc7", name: "Gaku", aliases: ["G", "岳", "ガク"],
+    personality: "無口だが観察が鋭い", speechStyle: "calm"
+  },
+  {
+    id: "npc8", name: "Hana", aliases: ["H", "花", "ハナ"],
+    personality: "明るく話題を回すのがうまい", speechStyle: "direct"
+  },
+  {
+    id: "npc9", name: "Itsuki", aliases: ["I", "樹", "イツキ"],
+    personality: "皮肉屋だが頭の回転が速い", speechStyle: "logical"
   }
 ];
 
@@ -109,9 +125,10 @@ export class WerewolfGame {
     const createId = options.createId ?? (() => globalThis.crypto.randomUUID());
     const rng = new SeededRandom(options.seed ?? Date.now());
     const roles = assignRoles({ rng, shuffleRoles: options.shuffleRoles ?? true, scenario: options.scenario });
-    const players = DEFAULT_PLAYERS.map((template) => {
+    const playerTemplates = options.scenario === "village9" ? DEFAULT_PLAYERS : DEFAULT_PLAYERS.slice(0, 5);
+    const players = playerTemplates.map((template) => {
       const role = roles[template.id];
-      return createPlayerState(template, role);
+      return createPlayerState(template, role, options.scenario);
     });
 
     initializeSuspicion(players, rng, options.scenario);
@@ -151,11 +168,14 @@ export class WerewolfGame {
       options.responseProvider ?? new PseudoResponseProvider(),
       { createId, interpreterProvider: options.interpreterProvider, interpreterValidationEnabled: options.interpreterValidationEnabled === true, playerConversationCommitEnabled: options.playerConversationCommitEnabled === true, playerStructuredConsumerEnabled: options.playerStructuredConsumerEnabled === true, npcStructuredReactionEnabled: options.npcStructuredReactionEnabled === true, playerStructuredConsumerObserver: options.playerStructuredConsumerObserver, phase4FaultInjector: options.phase4FaultInjector, npcAuthorityFaultInjector: options.npcAuthorityFaultInjector, interpreterObserver: options.interpreterObserver, now: options.now }
     );
+    const village9 = options.scenario === "village9";
     game.addPublicInfo({
       type: "setup",
-      text: "公開情報: 5人村。内訳は人狼1、占い師1、市民3。役職欠けなし。"
+      text: village9
+        ? "公開情報: 9人村。内訳は人狼2、占い師1、霊媒師1、騎士1、狂人1、市民3。役職欠けなし。"
+        : "公開情報: 5人村。内訳は人狼1、占い師1、市民3。役職欠けなし。"
     });
-    game.addPlayerLog("1日目の昼。5人のNPCが議論を始めました。");
+    game.addPlayerLog(`1日目の昼。${players.length}人のNPCが議論を始めました。`);
     game.addDeveloperLog("initial_roles", {
       roles: players.map((player) => ({
         id: player.id,
@@ -1012,6 +1032,7 @@ export class WerewolfGame {
       role: executed.role,
       team: executed.team
     });
+    this.recordMediumResults(executed);
 
     this.setPhase("win_check");
     this.checkWin("after_execution");
@@ -1098,8 +1119,11 @@ export class WerewolfGame {
     this.setPhase("seer_action");
     const seerResult = this.runSeerAction();
 
+    this.setPhase("knight_action");
+    const privateKnightResult = this.runKnightAction();
+
     this.setPhase("werewolf_attack");
-    const attackResult = this.runWerewolfAttack();
+    const attackResult = this.runWerewolfAttack(privateKnightResult?.targetId);
 
     this.setPhase("win_check");
     this.checkWin("after_werewolf_attack");
@@ -1117,6 +1141,7 @@ export class WerewolfGame {
 
     return {
       seerResult,
+      knightResult: { acted: Boolean(privateKnightResult) },
       attackResult,
       winner: this.state.winner
     };
@@ -1235,7 +1260,43 @@ export class WerewolfGame {
     };
   }
 
-  runWerewolfAttack() {
+  runKnightAction() {
+    const knight = this.state.players.find((player) => player.role === ROLES.KNIGHT && player.alive);
+    if (!knight) {
+      this.addDeveloperLog("knight_action", { skipped: true, reason: "knight_dead_or_missing" });
+      return null;
+    }
+    const candidates = this.getAlivePlayers().filter((player) => player.id !== knight.id);
+    if (!candidates.length) return null;
+    const publicSeer = this.state.publicInfo
+      .filter((info) => info.type === "public_claim" && info.claim?.role === ROLES.SEER)
+      .map((info) => this.getPlayer(info.actorId))
+      .find((player) => player?.alive && player.id !== knight.id);
+    const ordered = candidates
+      .map((candidate) => ({ candidate, score: knight.suspicionScores[candidate.id] ?? 0 }))
+      .sort((a, b) => a.score - b.score || a.candidate.name.localeCompare(b.candidate.name))
+      .map(({ candidate }) => candidate);
+    if (publicSeer) {
+      ordered.splice(ordered.indexOf(publicSeer), 1);
+      ordered.unshift(publicSeer);
+    }
+    const previous = [...knight.privateMemory].reverse().find((info) => info.type === "knight_action");
+    const target = ordered.find((candidate) => candidate.id !== previous?.targetId) ?? ordered[0];
+    knight.privateMemory.push({ day: this.state.day, type: "knight_action", targetId: target.id });
+    knight.knownInfo.push({ day: this.state.day, type: "knight_guard", visibility: "private", shareable: false, targetId: target.id, targetName: target.name });
+    this.addDeveloperLog("knight_action", { knightId: knight.id, targetId: target.id, targetName: target.name });
+    return { knightId: knight.id, targetId: target.id };
+  }
+
+  recordMediumResults(executed) {
+    for (const medium of this.state.players.filter((player) => player.role === ROLES.MEDIUM && player.alive)) {
+      const result = executed.role === ROLES.WEREWOLF ? "werewolf" : "not_werewolf";
+      medium.knownInfo.push({ day: this.state.day, type: "medium_result", visibility: "private", shareable: false, targetId: executed.id, targetName: executed.name, result });
+      this.addDeveloperLog("medium_result", { mediumId: medium.id, targetId: executed.id, result });
+    }
+  }
+
+  runWerewolfAttack(guardedTargetId = null) {
     const werewolves = this.state.players.filter((player) => player.role === ROLES.WEREWOLF && player.alive);
     if (!werewolves.length) {
       this.addDeveloperLog("werewolf_attack", {
@@ -1266,6 +1327,12 @@ export class WerewolfGame {
         }))
         .sort((a, b) => a.score - b.score || a.candidate.name.localeCompare(b.candidate.name))[0].candidate;
 
+    if (target.id === guardedTargetId) {
+      this.addPlayerLog("夜が明けました。昨夜の犠牲者はいませんでした。");
+      this.addPublicInfo({ type: "night_no_death", text: "昨夜の犠牲者はいなかった。" });
+      this.addDeveloperLog("werewolf_attack", { werewolfId: werewolf.id, targetId: target.id, guarded: true });
+      return { werewolfId: werewolf.id, prevented: true };
+    }
     this.killPlayer(target.id, "werewolf_attack");
     this.addPlayerLog(`夜が明けました。${target.name}が無残な姿で発見されました。`);
     this.addPublicInfo({
@@ -1920,6 +1987,12 @@ function assignRoles({ rng, shuffleRoles, scenario }) {
     return { ...SAMPLE_ROLE_BY_ID };
   }
 
+  if (scenario === "village9") {
+    const roles = [ROLES.WEREWOLF, ROLES.WEREWOLF, ROLES.SEER, ROLES.MEDIUM, ROLES.KNIGHT, ROLES.MADMAN, ROLES.CITIZEN, ROLES.CITIZEN, ROLES.CITIZEN];
+    const assigned = shuffleRoles ? rng.shuffle(roles) : roles;
+    return Object.fromEntries(DEFAULT_PLAYERS.map((player, index) => [player.id, assigned[index]]));
+  }
+
   const roles = [ROLES.WEREWOLF, ROLES.SEER, ROLES.CITIZEN, ROLES.CITIZEN, ROLES.CITIZEN];
   const assignedRoles = shuffleRoles ? rng.shuffle(roles) : roles;
   const result = {};
@@ -1931,7 +2004,7 @@ function assignRoles({ rng, shuffleRoles, scenario }) {
   return result;
 }
 
-function createPlayerState(template, role) {
+function createPlayerState(template, role, scenario) {
   const team = teamForRole(role);
   const player = {
     ...template,
@@ -1963,7 +2036,9 @@ function createPlayerState(template, role) {
     type: "setup",
     visibility: "public",
     shareable: true,
-    text: "5人村の公開内訳は人狼1、占い師1、市民3。"
+    text: scenario === "village9"
+      ? "9人村の公開内訳は人狼2、占い師1、霊媒師1、騎士1、狂人1、市民3。"
+      : "5人村の公開内訳は人狼1、占い師1、市民3。"
   });
   player.knownInfo.push({
     day: 1,
@@ -1978,7 +2053,7 @@ function createPlayerState(template, role) {
     player.hiddenInfo.push({
       type: "werewolf_identity",
       value: player.id,
-      text: "自分が唯一の人狼。"
+      text: scenario === "village9" ? "自分は2人いる人狼の一人。" : "自分が唯一の人狼。"
     });
   }
 
@@ -1995,7 +2070,7 @@ function createConversationPolicy(role) {
     };
   }
 
-  if (role === ROLES.SEER) {
+  if (role === ROLES.SEER || role === ROLES.MEDIUM) {
     return {
       truthfulness: "honest_but_may_withhold_private_info",
       roleClaim: "claim_when_directly_asked_after_result",

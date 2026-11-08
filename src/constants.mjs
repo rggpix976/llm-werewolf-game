@@ -1,6 +1,9 @@
 export const ROLES = Object.freeze({
   WEREWOLF: "werewolf",
   SEER: "seer",
+  MEDIUM: "medium",
+  KNIGHT: "knight",
+  MADMAN: "madman",
   CITIZEN: "citizen"
 });
 
@@ -17,6 +20,7 @@ export const PHASES = Object.freeze([
   "execution",
   "night",
   "seer_action",
+  "knight_action",
   "werewolf_attack",
   "win_check"
 ]);
@@ -31,6 +35,12 @@ export function publicRoleName(role) {
       return "人狼";
     case ROLES.SEER:
       return "占い師";
+    case ROLES.MEDIUM:
+      return "霊媒師";
+    case ROLES.KNIGHT:
+      return "騎士";
+    case ROLES.MADMAN:
+      return "狂人";
     case ROLES.CITIZEN:
       return "市民";
     default:

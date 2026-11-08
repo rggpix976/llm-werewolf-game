@@ -11,6 +11,7 @@ import { PseudoInterpreterProvider, createLocalInterpreterHttpProvider } from ".
 const elements = {
   statusLine: document.querySelector("#statusLine"),
   newGameButton: document.querySelector("#newGameButton"),
+  scenarioSelect: document.querySelector("#scenarioSelect"),
   playerGrid: document.querySelector("#playerGrid"),
   askForm: document.querySelector("#askForm"),
   targetSelect: document.querySelector("#targetSelect"),
@@ -148,6 +149,7 @@ function startNewGame() {
 
   const capturedGameId = currentGameId;
   game = WerewolfGame.create({
+    scenario: elements.scenarioSelect?.value ?? "default",
     seed: Date.now(),
     shuffleRoles: true,
     responseProvider,

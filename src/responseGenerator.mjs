@@ -184,7 +184,7 @@ export function buildProactiveSeerClaim(npc, gameState) {
 function classifyIntent(input) {
   return {
     asksWerewolfIdentity: containsAny(input, ["あなたは人狼", "君は人狼", "お前は人狼", "人狼ですか", "are you a werewolf"]),
-    asksRoleOrClaim: containsAny(input, ["役職", "co", "カミングアウト", "占いco", "占い師", "seer"]),
+    asksRoleOrClaim: containsAny(input, ["役職", "co", "カミングアウト", "占いco", "占い師", "seer", "霊媒師", "medium"]),
     asksVoteReason: containsAny(input, ["投票", "票", "なぜ", "どうして", "vote"])
   };
 }
@@ -313,12 +313,13 @@ function answerAboutTarget(npc, target, privateKnownEvidence) {
 }
 
 function maybeCreateRoleClaim(npc, gameState) {
-  if (npc.role !== ROLES.SEER) {
+  if (npc.role !== ROLES.SEER && npc.role !== ROLES.MEDIUM) {
     return null;
   }
 
-  const seerResults = npc.knownInfo.filter((info) => info.type === "seer_result");
-  if (seerResults.length === 0) {
+  const resultType = npc.role === ROLES.SEER ? "seer_result" : "medium_result";
+  const roleResults = npc.knownInfo.filter((info) => info.type === resultType);
+  if (roleResults.length === 0) {
     return null;
   }
 
@@ -331,24 +332,24 @@ function maybeCreateRoleClaim(npc, gameState) {
   const claimedTargetIds = new Set(
     npc.publicClaims.flatMap((claim) => (claim.results ?? []).map((result) => result.targetId))
   );
-  const freshResults = seerResults.filter((result) => !claimedTargetIds.has(result.targetId));
+  const freshResults = roleResults.filter((result) => !claimedTargetIds.has(result.targetId));
   if (freshResults.length === 0) {
     return null;
   }
 
   const resultLines = freshResults.map((result) => {
     const target = gameState.players.find((player) => player.id === result.targetId);
-    const label = result.result === "werewolf" ? "人狼判定" : "人狼ではない判定";
+    const label = result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした";
     return `${target?.name ?? result.targetId}は${label}`;
   });
 
   return {
-    text: `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`,
+    text: `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`,
     publicClaim: {
       day: gameState.day,
       actorId: npc.id,
       actorName: npc.name,
-      role: ROLES.SEER,
+      role: npc.role,
       results: freshResults.map((result) => ({
         targetId: result.targetId,
         result: result.result
@@ -356,7 +357,7 @@ function maybeCreateRoleClaim(npc, gameState) {
     },
     evidenceUsed: [
       "hiddenInfo:self_role intentionally disclosed by CO",
-      ...freshResults.map((result) => `knownInfo:seer_result:${result.targetId}`)
+      ...freshResults.map((result) => `knownInfo:${resultType}:${result.targetId}`)
     ]
   };
 }
