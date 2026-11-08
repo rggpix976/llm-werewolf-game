@@ -1,4 +1,4 @@
-import { buildNpcResponseRequest } from "./responseGenerator.mjs";
+import { buildNpcResponseRequest, buildProactiveSeerClaim } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
@@ -1112,6 +1112,7 @@ export class WerewolfGame {
         type: "day_start",
         text: `${this.state.day}日目の昼が始まった。`
       });
+      this.emitProactiveSeerClaim();
     }
 
     return {
@@ -1119,6 +1120,49 @@ export class WerewolfGame {
       attackResult,
       winner: this.state.winner
     };
+  }
+
+  emitProactiveSeerClaim() {
+    const seer = this.state.players.find((player) => player.role === ROLES.SEER && player.alive);
+    if (!seer) {
+      return null;
+    }
+
+    const claim = buildProactiveSeerClaim(seer, this.state);
+    if (!claim) {
+      return null;
+    }
+
+    this.addPlayerLog(`${seer.name}: ${claim.text}`);
+    this.addPublicInfo({
+      type: "npc_response",
+      actorId: seer.id,
+      actorName: seer.name,
+      text: `${seer.name}: ${claim.text}`
+    });
+    seer.privateMemory.push({
+      day: this.state.day,
+      type: "proactive_claim",
+      response: claim.text
+    });
+
+    seer.publicClaims.push(claim.publicClaim);
+    this.addPublicInfo({
+      type: "public_claim",
+      actorId: seer.id,
+      actorName: seer.name,
+      text: `${seer.name}が${publicRoleName(claim.publicClaim.role)}COをした。`,
+      claim: claim.publicClaim
+    });
+    this.addDeveloperLog("public_claim_registered", claim.publicClaim);
+    this.addDeveloperLog("proactive_seer_claim", {
+      seerId: seer.id,
+      seerName: seer.name,
+      results: claim.publicClaim.results,
+      evidenceUsed: claim.evidenceUsed
+    });
+
+    return claim.publicClaim;
   }
 
   runSeerAction() {

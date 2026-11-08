@@ -75,3 +75,9 @@ The `npm run smoke:openai` command requires a mandatory opt-in flag `OPENAI_LIVE
 Canonical NPC reaction plans and NPC commit idempotency records become fields of the existing authoritative `state.conversation` root. Existing players remain the sole stored NPC source; Commit participants are deterministically derived and are never persisted as a second participant registry.
 
 Only a narrow engine-owned read/atomic-commit port may publish a prepared NPC reaction. Generic route-owned compare-and-swap, whole replacement with the Commit projection, route-side partial merge, and a second authoritative structured state are forbidden. See [NPC Authoritative State Integration Decision](docs/npc-authoritative-state-integration-decision.md).
+
+## D-013: The Seer Claims Proactively at Day Start
+
+D-004 is preserved in substance: night seer results live in the seer's `knownInfo` and are exposed only through a public claim registered by engine code; they are never copied raw into `publicInfo`.
+
+The claim trigger is no longer ask-only. When a day begins after a night (`runNight`), a living seer NPC with results that are not yet public announces them proactively through the same claim-registration path as an ask-based claim. Only results about still-living players are announced proactively; results about dead players stay private unless the seer is asked directly. A result that is already public is never registered as a claim a second time, on either the proactive or the ask-based path.
