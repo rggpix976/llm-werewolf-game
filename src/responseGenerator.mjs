@@ -133,9 +133,9 @@ function classifyIntent(input) {
 }
 
 function selectRelevantPublicInfo(gameState, mentionedIds) {
-  const recent = gameState.publicInfo.slice(-8);
+  const recent = gameState.publicInfo.slice(-16);
   if (mentionedIds.length === 0) {
-    return recent.slice(-4);
+    return recent.slice(-8);
   }
 
   const mentioned = recent.filter((info) => {
@@ -143,7 +143,23 @@ function selectRelevantPublicInfo(gameState, mentionedIds) {
     return mentionedIds.some((id) => text.includes(id));
   });
 
-  return mentioned.length > 0 ? mentioned : recent.slice(-4);
+  if (mentioned.length === 0) {
+    return recent.slice(-8);
+  }
+
+  // Keep the most recent mentioned entries, and fill with the latest context
+  // so the provider can follow the flow of the discussion, in original order.
+  const chosen = new Set(mentioned.slice(-8));
+  if (chosen.size < 4) {
+    for (const info of [...recent].reverse()) {
+      if (chosen.size >= 4) {
+        break;
+      }
+      chosen.add(info);
+    }
+  }
+
+  return recent.filter((info) => chosen.has(info));
 }
 
 function selectShareableKnownInfo(npc, mentionedIds) {
