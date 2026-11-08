@@ -1,4 +1,5 @@
 import { generatePseudoResponseText } from "./responseGenerator.mjs";
+import { validateNpcUtteranceStructure } from "./utteranceGuard.mjs";
 
 export class PseudoResponseProvider {
   constructor(options = {}) {
@@ -21,10 +22,29 @@ export function validateProviderResponse(value, fallbackProviderName = "unknown"
     throw new TypeError("Response provider must return an object");
   }
 
-  const text = typeof value.text === "string" ? value.text.trim() : "";
-  if (!text) {
+  if (typeof value.text !== "string" || value.text.trim() === "") {
     throw new TypeError("Response provider returned empty text");
   }
+
+  // Generated utterances must satisfy the structural rules the game
+  // applies to NPC speech (single line, no wrappers or role prefixes,
+  // bounded length). Rejected text raises here so callers treat it as an
+  // invalid provider response instead of publishing it as an NPC utterance.
+  // Markup is the one exception: HTML-like text is not rejected at this
+  // layer because every display path neutralizes it (the browser renders
+  // provider text with textContent and the CLI sanitizes terminal output),
+  // and legacy provider text containing markup literals must stay
+  // displayable. The guard itself still reports the violation.
+  const structure = validateNpcUtteranceStructure(value.text);
+  const fatalViolations = structure.violations.filter(
+    (violation) => violation.code !== "html_markup_not_allowed"
+  );
+  if (fatalViolations.length > 0) {
+    const codes = fatalViolations.map((violation) => violation.code).join(", ");
+    throw new TypeError(`Response provider returned invalid utterance structure: ${codes}`);
+  }
+
+  const text = structure.ok ? structure.normalizedText : value.text.trim();
 
   return {
     text,

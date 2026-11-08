@@ -1,8 +1,10 @@
 # Development Status
 
-Last updated: 2026-07-24
+Last updated: 2026-11-08
 
 ## Current State
+
+- 生成NPC発話の構造検証は、branch `feat/validate-provider-utterance-structure` で実装中である。既存の `validateNpcUtteranceStructure`（`src/utteranceGuard.mjs`）は単体テストのみで本番経路から呼ばれていなかったため、共有の受け入れ点である `validateProviderResponse`（`src/responseProvider.mjs`）に接続した。改行、制御文字、JSON／Markdownラッパー、役割接頭辞、段階指示、240コードポイント超過などの形式違反は、違反コード付きの `TypeError` で invalid provider response として拒否され、Engine 側の既存の provider-error 経路で graceful に処理される。HTML マークアップだけはこの層では拒否しない。表示側が Browser の `textContent` と CLI の terminal sanitizer で無力化する契約（BLR-010）に従い、ガード自体は引き続き違反として報告する。Phase 6 Structured Route、Candidate Validation、Commit、Delivery、schema、feature flag default は変更していない。新規 `tests/responseProvider.test.mjs` 10件を含む full regression 785/785、sample PASS、実 OpenAI call なし。独立レビューと merge は pending である。
 
 - Release-readiness audit Finding F-01のOpenAI NPC candidate cost-control hardeningは、通常の2-parent merge commit `4a510d902c7d455d7ed7c3c1e96a5d89c814f9ea`で`master`へ取り込み済みである。Candidate invoker instanceはprocess-localな60秒rolling fetch-start budget、bounded concurrency lease、configured `max_output_tokens`を所有し、Server handler lifetime／CLI process lifetimeで共有する。Local denialはqueue、hidden retry、synthetic Retry-After、pseudo fallbackなしでfail closedする。
 
