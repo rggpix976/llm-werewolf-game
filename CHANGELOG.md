@@ -1,5 +1,12 @@
 # Changelog
 
+## Phase 6: playable nine-player village slice
+
+- Added the optional `village9` scenario with four new NPCs and the fixed roles of two werewolves, one seer, one medium, one knight, one madman, and three citizens.
+- Added private medium results after executions, ask-triggered medium claims, deterministic knight protection with no consecutive protection of the same target, and standard madman counting and divination behavior.
+- Added a five-player/nine-player selector to the browser's new-game controls while preserving the default and sample five-player games.
+- Added regression coverage for setup, role behavior, privacy, win conditions, and end-to-end nine-player progression.
+
 ## Unreleased
 
 - Added proactive seer claims at the start of a day. Until now an NPC seer only claimed when the player directly asked about roles (the ask-based claim added earlier), so in normal play nobody ever came out (observed in the user's playtests on 2026-11-08). `WerewolfGame.runNight()` now calls the new `emitProactiveSeerClaim()` right after the day-start announcement: if the living seer NPC has seer results that are not yet in their public claims, the engine announces them through the same registration path as ask-based claims (player log utterance, `npc_response` and `public_claim` public info, `publicClaims`, developer logs). The new pure builder `buildProactiveSeerClaim` (`src/responseGenerator.mjs`) keeps the existing gates (seer role and the `claim_when_directly_asked_after_result` conversation policy), announces only results whose target is still alive — results about dead players stay private and remain available to the ask-based path — and never repeats an already-claimed result; the first announcement uses the CO wording, later ones announce additional results. Werewolves still never claim, and claims/state remain engine-controlled (D-007); the claim text is deterministic and does not go through a provider. Note the existing dynamic this creates: `runWerewolfAttack` already prioritizes a publicly claimed seer, so a proactive claim trades the seer's safety for information, as in a real game. New `tests/proactiveSeerClaim.test.mjs` adds 7 cases; full regression 804/804 and `npm run sample` PASS. No live OpenAI call was made.

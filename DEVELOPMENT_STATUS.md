@@ -52,6 +52,7 @@ Last updated: 2026-11-08
 - Validation-only success is explicitly nonauthoritative: no descriptor/claim/event/publication/commit ID, delta, `N+1 -> N+2`, display, acknowledgement, or legacy fallback is created by candidate validation.
 - Exact replay performs no redisplay or provider call, and all migration feature flags remain default-off.
 - `WerewolfGame` owns session/turn/order/version metadata for both browser and CLI and applies each compatibility command as one isolated authoritative transaction.
+- The optional `village9` Phase 6 slice is implemented with medium, knight, and madman fundamentals; the default and `sample` scenarios remain five-player games.
 - 5-player werewolf prototype is implemented.
 - Current roles are 1 werewolf, 1 seer, and 3 citizens.
 - The game can run through player question, NPC response, vote, execution, night, seer action, werewolf attack, and win check.
