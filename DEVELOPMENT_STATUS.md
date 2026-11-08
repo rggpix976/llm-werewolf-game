@@ -1,8 +1,10 @@
 # Development Status
 
-Last updated: 2026-07-24
+Last updated: 2026-11-08
 
 ## Current State
+
+- 自然言語の意図解析の最小改善は、branch `feat/pseudo-interpreter-vote-declaration` で実装中である。Issue #68 での Codex 調査提案に基づき、`PseudoInterpreterProvider` に決定的なフィクスチャを1件追加した。生存している他メンバーを名指しし、文末（文の終わり、句読点、終助詞）で閉じる明示的な投票宣言（例:「Aoiに投票する」）だけを `vote_declaration` として解釈し、それ以外（対象なし、死亡・本人への言及、複数名の言及、「投票するかどうか迷っている」のような逡巡）は従来の question / non_game_statement フォールバックを維持する。schema、validation、commit pipeline は変更しておらず、vote フェーズでのみ `validatePhase3Response` が candidate_valid として受け入れることを新規テストで確認した。TODO の「Improve natural language intent parsing」自体は未完了のままで、これはその第一歩である。新規 `tests/interpreterPseudoVoteDeclaration.test.mjs` 9件を含む full regression 784/784、sample PASS、実 OpenAI call なし。独立レビューと merge は pending である。
 
 - Release-readiness audit Finding F-01のOpenAI NPC candidate cost-control hardeningは、通常の2-parent merge commit `4a510d902c7d455d7ed7c3c1e96a5d89c814f9ea`で`master`へ取り込み済みである。Candidate invoker instanceはprocess-localな60秒rolling fetch-start budget、bounded concurrency lease、configured `max_output_tokens`を所有し、Server handler lifetime／CLI process lifetimeで共有する。Local denialはqueue、hidden retry、synthetic Retry-After、pseudo fallbackなしでfail closedする。
 
