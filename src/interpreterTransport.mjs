@@ -9,9 +9,40 @@ export const interpreterModelOutputJsonSchema = Object.freeze({ type: "object", 
 
 function providerError(code, message, { retryable = false, retryAfterMs } = {}) { const error = new Error(message); error.name = "InterpreterProviderError"; error.code = code; error.retryable = retryable; error.retryAfterMs = retryAfterMs; return error; }
 
+const VOTE_DECLARATION_SUFFIXES = Object.freeze(["に投票する", "に投票します", "へ投票する", "へ投票します"]);
+
+// Minimal deterministic intent fixture: an explicit vote declaration that
+// names exactly one living roster member other than the player, such as
+// "Aoiに投票する", is interpreted as a vote_declaration for that member.
+// The declaration must close the sentence (end of text, sentence-ending
+// punctuation, or a final particle), so deliberation such as
+// "Aoiに投票するかどうか迷っている" does not count. Anything else (no
+// match, a dead or self target, or more than one named member) returns
+// null and keeps the provider's previous fallback behavior.
+const VOTE_DECLARATION_FOLLOWERS = "。.．！？!?よね";
+function detectExplicitVoteDeclaration(request) {
+  const matches = [];
+  for (const entry of request.publicRoster) {
+    if (entry.playerId === request.playerContext.playerId || entry.publicStatus !== "alive") continue;
+    for (const suffix of VOTE_DECLARATION_SUFFIXES) {
+      const phrase = entry.displayName + suffix;
+      const index = request.rawText.indexOf(phrase);
+      if (index < 0) continue;
+      const follower = [...request.rawText.slice(index + phrase.length)][0];
+      if (follower !== undefined && !VOTE_DECLARATION_FOLLOWERS.includes(follower)) continue;
+      matches.push({ entry, phrase, index });
+      break;
+    }
+  }
+  if (matches.length !== 1) return null;
+  const { entry, phrase, index } = matches[0];
+  const start = [...request.rawText.slice(0, index)].length;
+  return { type: "vote_declaration", targetId: entry.playerId, sourceSpan: { start, end: start + [...phrase].length } };
+}
+
 export class PseudoInterpreterProvider {
   constructor(options = {}) { this.name = options.name ?? "pseudo"; this.now = options.now ?? Date.now; }
-  async interpretPlayerInput(request, { signal, targetNpcId } = {}) { validateInterpreterRequest(request); if (signal?.aborted) throw signal.reason; const started = this.now(), target = request.publicRoster.some((entry) => entry.playerId === targetNpcId && entry.playerId !== request.playerContext.playerId) ? targetNpcId : null, speechAct = target ? { type: "question", targetId: target, topic: "opinion", sourceSpan: { start: 0, end: [...request.rawText].length } } : { type: "non_game_statement", sourceSpan: { start: 0, end: [...request.rawText].length } }, modelOutput = { schemaVersion: 1, alternatives: [{ alternativeId: "alternative-1", speechActs: [speechAct], confidence: 1 }] }, result = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, modelOutput, diagnostics: { providerName: this.name, model: "deterministic-interpreter-v1", attemptCount: 1, elapsedMs: Math.max(0, this.now() - started) } }; return validateInterpreterProviderResult(result, request); }
+  async interpretPlayerInput(request, { signal, targetNpcId } = {}) { validateInterpreterRequest(request); if (signal?.aborted) throw signal.reason; const started = this.now(), target = request.publicRoster.some((entry) => entry.playerId === targetNpcId && entry.playerId !== request.playerContext.playerId) ? targetNpcId : null, speechAct = detectExplicitVoteDeclaration(request) ?? (target ? { type: "question", targetId: target, topic: "opinion", sourceSpan: { start: 0, end: [...request.rawText].length } } : { type: "non_game_statement", sourceSpan: { start: 0, end: [...request.rawText].length } }), modelOutput = { schemaVersion: 1, alternatives: [{ alternativeId: "alternative-1", speechActs: [speechAct], confidence: 1 }] }, result = { schemaVersion: 1, requestId: request.requestId, correlationId: request.correlationId, modelOutput, diagnostics: { providerName: this.name, model: "deterministic-interpreter-v1", attemptCount: 1, elapsedMs: Math.max(0, this.now() - started) } }; return validateInterpreterProviderResult(result, request); }
 }
 
 export function createLocalInterpreterHttpProvider(provider, { createServerCorrelationId } = {}) {
