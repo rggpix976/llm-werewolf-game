@@ -358,7 +358,7 @@ test("votes target living opponents and execution updates life state", async () 
   assert.equal(game.state.voteHistory.at(-1).executedId, executedId);
 });
 
-test("seer results remain private until the seer explicitly claims", async () => {
+test("seer results are disclosed only through a claim (proactive at day start)", async () => {
   const game = createSampleGame();
 
   await game.dispatchPlayerAction({ type: "advance_vote" });
@@ -370,13 +370,27 @@ test("seer results remain private until the seer explicitly claims", async () =>
   assert.ok(privateResult);
   assert.equal(privateResult.visibility, "private");
   assert.equal(privateResult.shareable, false);
+  // The raw result is never leaked as its own public info entry; disclosure
+  // happens only through the seer's public claim.
   assert.equal(
-    game.state.publicInfo.some(
-      (info) => info.type === "seer_action" || info.type === "public_claim"
-    ),
+    game.state.publicInfo.some((info) => info.type === "seer_action"),
     false
   );
 
+  // The seer claimed proactively when the day started.
+  assert.equal(seer.publicClaims.length, 1);
+  assert.equal(seer.publicClaims[0].role, ROLES.SEER);
+  assert.equal(
+    game.state.publicInfo.some(
+      (info) => info.type === "public_claim" && info.actorId === seer.id
+    ),
+    true
+  );
+  for (const result of seer.publicClaims[0].results) {
+    assert.equal(game.getPlayer(result.targetId).alive, true);
+  }
+
+  // Asking again does not register the same results a second time.
   const claim = await game.dispatchPlayerAction({
     type: "ask_npc",
     target: seer.id,
@@ -384,14 +398,8 @@ test("seer results remain private until the seer explicitly claims", async () =>
   });
 
   assert.equal(claim.result.responded, true);
-  assert.equal(claim.result.publicClaim?.role, ROLES.SEER);
+  assert.equal(claim.result.publicClaim, null);
   assert.equal(seer.publicClaims.length, 1);
-  assert.equal(
-    game.state.publicInfo.some(
-      (info) => info.type === "public_claim" && info.actorId === seer.id
-    ),
-    true
-  );
 });
 
 test("werewolf attacks only a living non-werewolf target", async () => {
