@@ -23,9 +23,9 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   let disclosedHiddenInfo = false;
 
   if (intent.asksWerewolfIdentity) {
-    const stance = npc.role === ROLES.WEREWOLF
-      ? "私は人狼ではありません。今は、疑い先を一つずつ公開情報で確認したいです。"
-      : "私は人狼ではありません。ただ、口だけでは証明にならないので発言と投票で見てください。";
+    // The denial wording is identical for every role on purpose: a
+    // werewolf-only phrasing would leak the role to anyone who asks.
+    const stance = "私は人狼ではありません。ただ、口だけでは証明にならないので発言と投票で見てください。";
     text = addSuspectSentence(stance, npc, topSuspect);
     if (npc.role === ROLES.WEREWOLF) {
       evidenceUsed.push("conversationPolicy: werewolf denies identity and redirects");
@@ -40,7 +40,9 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
       evidenceUsed.push(...claimResult.evidenceUsed);
       disclosedHiddenInfo = true;
     } else if (npc.role === ROLES.WEREWOLF) {
-      text = addSuspectSentence("役職COはしません。ここで役職の話だけに寄せるより、投票理由を見たいです。", npc, topSuspect);
+      // Same deflection wording as every other role on purpose: a
+      // werewolf-only phrasing would leak the role to anyone who asks.
+      text = addSuspectSentence("今は役職COを急ぎません。公開されている発言と投票から考えます。", npc, topSuspect);
       evidenceUsed.push("conversationPolicy: werewolf avoids role claim");
     } else {
       text = addSuspectSentence("今は役職COを急ぎません。公開されている発言と投票から考えます。", npc, topSuspect);
