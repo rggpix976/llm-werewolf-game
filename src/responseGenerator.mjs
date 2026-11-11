@@ -208,6 +208,76 @@ export function buildProactiveSeerClaim(npc, gameState) {
   };
 }
 
+export function buildRescueClaim(npc, gameState) {
+  if (npc.role !== ROLES.SEER && npc.role !== ROLES.MEDIUM && npc.role !== ROLES.KNIGHT) {
+    return null;
+  }
+
+  // Rescue claims are engine-triggered survival actions (see D-015), so the
+  // conversation ask-policy does not gate them. Contents come only from the
+  // claimant's own private knowledge.
+  const claimedTargetIds = new Set(
+    npc.publicClaims.flatMap((claim) => (claim.results ?? []).map((result) => result.targetId))
+  );
+
+  if (npc.role === ROLES.KNIGHT) {
+    return {
+      text: "騎士COします。私が村を守っています。",
+      publicClaim: {
+        day: gameState.day,
+        actorId: npc.id,
+        actorName: npc.name,
+        role: ROLES.KNIGHT,
+        results: []
+      },
+      evidenceUsed: ["hiddenInfo:self_role intentionally disclosed by rescue CO"]
+    };
+  }
+
+  const isSeer = npc.role === ROLES.SEER;
+  const resultType = isSeer ? "seer_result" : "medium_result";
+  const freshResults = npc.knownInfo.filter((info) => {
+    return info.type === resultType && !claimedTargetIds.has(info.targetId);
+  });
+
+  const resultLines = freshResults.map((result) => {
+    const target = gameState.players.find((player) => player.id === result.targetId);
+    const label = isSeer
+      ? result.result === "werewolf" ? "人狼判定" : "人狼ではない判定"
+      : result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした";
+    return `${target?.name ?? result.targetId}は${label}`;
+  });
+
+  let text;
+  if (resultLines.length === 0) {
+    text = isSeer
+      ? "占い師COします。まだ占い結果はありません。"
+      : `${publicRoleName(npc.role)}COします。まだ結果はありません。`;
+  } else if (isSeer) {
+    text = `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`;
+  } else {
+    text = `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`;
+  }
+
+  return {
+    text,
+    publicClaim: {
+      day: gameState.day,
+      actorId: npc.id,
+      actorName: npc.name,
+      role: npc.role,
+      results: freshResults.map((result) => ({
+        targetId: result.targetId,
+        result: result.result
+      }))
+    },
+    evidenceUsed: [
+      "hiddenInfo:self_role intentionally disclosed by rescue CO",
+      ...freshResults.map((result) => `knownInfo:${resultType}:${result.targetId}`)
+    ]
+  };
+}
+
 function classifyIntent(input) {
   return {
     asksWerewolfIdentity: containsAny(input, ["あなたは人狼", "君は人狼", "お前は人狼", "人狼ですか", "are you a werewolf"]),

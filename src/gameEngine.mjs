@@ -1,4 +1,4 @@
-import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveSeerClaim } from "./responseGenerator.mjs";
+import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveSeerClaim, buildRescueClaim } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
@@ -928,6 +928,7 @@ export class WerewolfGame {
         claim: result.publicClaim
       });
       this.addDeveloperLog("public_claim_registered", result.publicClaim);
+      this.applyClaimToSuspicion(result.publicClaim);
     }
 
     this.addDeveloperLog("npc_response_generated", {
@@ -971,13 +972,37 @@ export class WerewolfGame {
     });
   }
 
-  runVote() {
+  async runVote() {
     if (this.state.winner) {
       return null;
     }
 
     this.setPhase("vote");
-    const votes = this.getAlivePlayers().map((voter) => this.chooseVote(voter));
+    let votes = this.getAlivePlayers().map((voter) => this.chooseVote(voter));
+    let result = this.resolveVote(votes);
+
+    // Rescue claims (D-015): a power role about to be executed may claim
+    // before the execution is finalised; the vote is then re-cast with the
+    // claim's suspicion effects applied.
+    for (;;) {
+      const candidate = this.getPlayer(result.executedId);
+      if (!candidate?.alive || candidate.publicClaims.length > 0) {
+        break;
+      }
+      if (candidate.role !== ROLES.SEER && candidate.role !== ROLES.MEDIUM && candidate.role !== ROLES.KNIGHT) {
+        break;
+      }
+      const claim = this.registerRescueClaim(candidate);
+      if (!claim) {
+        break;
+      }
+      if (candidate.role === ROLES.SEER && claim.results.length > 0) {
+        await this.resolveMadmanSeerDecision(claim);
+      }
+      votes = this.getAlivePlayers().map((voter) => this.chooseVote(voter));
+      result = this.resolveVote(votes);
+    }
+
     for (const vote of votes) {
       const voter = this.getPlayer(vote.voterId);
       voter.voteHistory.push({
@@ -988,7 +1013,6 @@ export class WerewolfGame {
       });
     }
 
-    const result = this.resolveVote(votes);
     this.state.voteHistory.push({
       day: this.state.day,
       votes,
@@ -1179,6 +1203,7 @@ export class WerewolfGame {
   registerFabricatedSeerClaim(madman, triggeringClaim, isFollowUp) {
     const priorTargets = new Set(madman.publicClaims.flatMap((claim) => claim.results ?? []).map(({ targetId }) => targetId));
     const newest = triggeringClaim.results.at(-1);
+    if (!newest) return null;
     const aliveOthers = this.getAlivePlayers().filter((player) => player.id !== madman.id);
     let newestTarget;
     let newestResult;
@@ -1212,7 +1237,92 @@ export class WerewolfGame {
     madman.privateMemory.push({ day: this.state.day, type: "fabricated_seer_claim", results: structuredClone(results) });
     this.addDeveloperLog("public_claim_registered", claim);
     this.addDeveloperLog("fabricated_seer_claim", { madmanId: madman.id, results });
+    this.applyClaimToSuspicion(claim);
     return claim;
+  }
+
+  registerRescueClaim(player) {
+    const built = buildRescueClaim(player, this.state);
+    if (!built) {
+      return null;
+    }
+
+    this.addPlayerLog(`投票が固まる直前、${player.name}が名乗り出た。`);
+    this.addPlayerLog(`${player.name}: ${built.text}`);
+    this.addPublicInfo({
+      type: "npc_response",
+      actorId: player.id,
+      actorName: player.name,
+      text: `${player.name}: ${built.text}`
+    });
+    player.publicClaims.push(built.publicClaim);
+    this.addPublicInfo({
+      type: "public_claim",
+      actorId: player.id,
+      actorName: player.name,
+      text: `${player.name}が${publicRoleName(built.publicClaim.role)}COをした。`,
+      claim: built.publicClaim
+    });
+    player.privateMemory.push({
+      day: this.state.day,
+      type: "rescue_claim",
+      response: built.text
+    });
+    this.addDeveloperLog("public_claim_registered", built.publicClaim);
+    this.addDeveloperLog("rescue_claim", {
+      playerId: player.id,
+      playerName: player.name,
+      role: player.role,
+      day: this.state.day
+    });
+    this.applyClaimToSuspicion(built.publicClaim);
+    return built.publicClaim;
+  }
+
+  // A public claim is believed by default (D-015): it lowers suspicion of
+  // the claimant and shifts suspicion according to any published seer
+  // results. A seer claim made while another seer claim is already public
+  // is contested instead: both claimants become more suspicious and the
+  // results count for less.
+  applyClaimToSuspicion(claim) {
+    const rivalSeerClaimantIds = claim.role === ROLES.SEER
+      ? [...new Set(
+        this.state.publicInfo
+          .filter((info) => info.type === "public_claim" && info.claim?.role === ROLES.SEER && info.actorId !== claim.actorId)
+          .map((info) => info.actorId)
+      )]
+      : [];
+    const contested = rivalSeerClaimantIds.length > 0;
+    const claimantDelta = contested ? 2 : -3;
+    const resultStrength = contested ? 2 : 4;
+
+    for (const npc of this.getAlivePlayers()) {
+      if (npc.id === claim.actorId) {
+        continue;
+      }
+      npc.suspicionScores[claim.actorId] = (npc.suspicionScores[claim.actorId] ?? 0) + claimantDelta;
+      for (const rivalId of rivalSeerClaimantIds) {
+        if (rivalId === npc.id) {
+          continue;
+        }
+        npc.suspicionScores[rivalId] = (npc.suspicionScores[rivalId] ?? 0) + 2;
+      }
+      for (const { targetId, result } of claim.results ?? []) {
+        if (targetId === npc.id) {
+          continue;
+        }
+        const delta = result === "werewolf" ? resultStrength : -resultStrength;
+        npc.suspicionScores[targetId] = (npc.suspicionScores[targetId] ?? 0) + delta;
+      }
+    }
+
+    this.addDeveloperLog("claim_suspicion_applied", {
+      actorId: claim.actorId,
+      role: claim.role,
+      contested,
+      claimantDelta,
+      resultStrength
+    });
   }
 
   emitProactiveSeerClaim() {
@@ -1254,6 +1364,7 @@ export class WerewolfGame {
       results: claim.publicClaim.results,
       evidenceUsed: claim.evidenceUsed
     });
+    this.applyClaimToSuspicion(claim.publicClaim);
 
     return claim.publicClaim;
   }
