@@ -1,5 +1,9 @@
 # Development Status
 
+## Log export (Save Log) slice
+
+A Save Log button (D-017) downloads a text export of the current game: player log and votes from the public snapshot, plus the developer snapshot and full developer event log when Developer Mode is on. The pure builder lives in `public/logExport.mjs`; sessions remain unpersisted (D-009). New `tests/logExport.test.mjs` adds 3 cases; full regression 833/833 and `npm run sample` PASS.
+
 ## Broadcast question （全員に話しかける) slice
 
 Broadcast questions (D-016) are implemented. The new `ask_all` player action asks one question to every living NPC in roster order through the ordinary per-NPC response path: the question is logged once (addressed to 全員）, question pressure is applied exactly once, and ask-based claims can fire for any NPC under the existing conditions. The browser gained an "Ask All" button next to Ask, and the CLI an `ask-all` command. New `tests/askAll.test.mjs` adds 6 cases; full regression 830/830 and `npm run sample` PASS. Awaiting the user's real-AI playtest.
