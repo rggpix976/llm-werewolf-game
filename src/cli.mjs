@@ -45,6 +45,7 @@ export async function runCli(options = {}) {
       "",
       "Commands:",
       "  ask <npcId|name|alias> <質問文>  NPCに自由入力で質問する",
+      "  ask-all <質問文>               生きている全NPCに同じ質問をする",
       "  retry                        失敗したPlayer表示またはNPC Deliveryを再試行する",
       "  vote                         投票、処刑、夜行動、勝敗判定まで進める",
       "  state                        公開状態を見る",
@@ -214,6 +215,17 @@ export async function runCli(options = {}) {
             continue;
           }
           const action = await dispatchCommand({ type: "ask_npc", target, input: question, logCursor: printedLogIndex });
+          await printNewPlayerLog(action);
+          maybePrintDevTailSafely();
+          continue;
+        }
+        if (command === "ask-all") {
+          const question = rest.join(" ");
+          if (!question) {
+            writeLine("使い方: ask-all <質問文>");
+            continue;
+          }
+          const action = await dispatchCommand({ type: "ask_all", input: question, logCursor: printedLogIndex });
           await printNewPlayerLog(action);
           maybePrintDevTailSafely();
           continue;

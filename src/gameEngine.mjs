@@ -356,6 +356,7 @@ export class WerewolfGame {
 
   async _executeCompatibilityAction(action) {
     if (action.type === "ask_npc") return await this.handlePlayerQuestion(action.targetId ?? action.target ?? action.npcId, action.input ?? action.question);
+    if (action.type === "ask_all") return await this.handleBroadcastQuestion(action.input ?? action.question);
     if (action.type === "advance_vote") return this.runVote();
     if (action.type === "run_night") return this.runNight();
     throw new Error(`Unknown player action type: ${action.type}`);
@@ -621,13 +622,15 @@ export class WerewolfGame {
   }
 
   _validateCommand(action) {
-    if (!["ask_npc", "advance_vote", "run_night", "get_state"].includes(action.type)) throw new Error(`Unknown player action type: ${action.type}`);
+    if (!["ask_npc", "ask_all", "advance_vote", "run_night", "get_state"].includes(action.type)) throw new Error(`Unknown player action type: ${action.type}`);
     if (this.state.winner) {
       if (action.type === "ask_npc") return returnCommandDecision({ responded: false, reason: "game_already_finished" });
+      if (action.type === "ask_all") return returnCommandDecision({ responded: false, reason: "game_already_finished" });
       if (action.type === "advance_vote") return returnCommandDecision(null);
       if (action.type === "run_night") return returnCommandDecision({ skipped: true, reason: "game_already_finished" });
     }
     if (action.type === "ask_npc") { const target = action.targetId ?? action.target ?? action.npcId; if (!this.getPlayer(target)) throw new Error(`Unknown NPC: ${target}`); if (!String(action.input ?? action.question ?? "").trim()) throw new TypeError("Player input is required"); }
+    if (action.type === "ask_all") { if (!String(action.input ?? action.question ?? "").trim()) throw new TypeError("Player input is required"); }
     if (action.clarificationRequestId && !this._clarificationContinuation(action)) throw typedError("invalid_clarification_continuation");
     return EXECUTE_COMMAND_DECISION;
   }
@@ -943,6 +946,42 @@ export class WerewolfGame {
     });
 
     return result;
+  }
+
+  async handleBroadcastQuestion(playerInput) {
+    if (this.state.winner) {
+      return {
+        responded: false,
+        reason: "game_already_finished"
+      };
+    }
+
+    const questionText = String(playerInput ?? "").trim();
+    if (!questionText) {
+      throw new TypeError("Player input is required");
+    }
+
+    const targets = this.state.players.filter((player) => player.alive);
+    this.setPhase("player_question");
+    this.addPlayerLog(`あなた -> 全員: ${questionText}`);
+    this.addPublicInfo({ type: "player_question", actorId: "player", targetId: "all", text: `プレイヤーが全員に質問: ${questionText}` });
+    this.applyQuestionPressure(questionText);
+    this.addDeveloperLog("broadcast_question", {
+      playerInput: questionText,
+      targetIds: targets.map((player) => player.id)
+    });
+
+    const responses = [];
+    for (const npc of targets) {
+      const result = await this.handlePlayerQuestion(npc.id, questionText, { skipPlayerSide: true });
+      responses.push({ npcId: npc.id, npcName: npc.name, ...result });
+    }
+
+    return {
+      responded: responses.some((response) => response.responded),
+      broadcast: true,
+      responses
+    };
   }
 
   applyQuestionPressure(questionText) {

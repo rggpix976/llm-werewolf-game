@@ -17,6 +17,7 @@ const elements = {
   targetSelect: document.querySelector("#targetSelect"),
   questionInput: document.querySelector("#questionInput"),
   askButton: document.querySelector("#askButton"),
+  askAllButton: document.querySelector("#askAllButton"),
   voteButton: document.querySelector("#voteButton"),
   nightButton: document.querySelector("#nightButton"),
   logList: document.querySelector("#logList"),
@@ -96,6 +97,23 @@ elements.askForm.addEventListener("submit", async (event) => {
   const result = await dispatch({
     type: "ask_npc",
     target,
+    input
+  });
+
+  if (result && sessionManager.isCurrentGame(gameIdAtSubmit)) {
+    elements.questionInput.value = "";
+  }
+});
+
+elements.askAllButton.addEventListener("click", async () => {
+  const input = elements.questionInput.value.trim();
+  if (!input || snapshot.winner) {
+    return;
+  }
+
+  const gameIdAtSubmit = currentGameId;
+  const result = await dispatch({
+    type: "ask_all",
     input
   });
 
@@ -911,6 +929,7 @@ function updateControls() {
   elements.questionInput.disabled = !questionAvailable;
   elements.askButton.textContent = pendingBrowserDisplayHandoff ? "Retry Display" : "Ask";
   elements.askButton.disabled = !questionAvailable || (!pendingBrowserDisplayHandoff && !elements.questionInput.value.trim());
+  elements.askAllButton.disabled = !questionAvailable || !elements.questionInput.value.trim();
   elements.voteButton.disabled = gameOver || canRunNight;
   elements.nightButton.disabled = gameOver || !canRunNight;
 }
@@ -918,6 +937,7 @@ function updateControls() {
 function setBusy(isBusy) {
   elements.askButton.textContent = pendingBrowserDisplayHandoff ? "Retry Display" : "Ask";
   elements.askButton.disabled = isBusy || (!pendingBrowserDisplayHandoff && !elements.questionInput.value.trim());
+  elements.askAllButton.disabled = isBusy || !elements.questionInput.value.trim();
   elements.voteButton.disabled = isBusy || Boolean(snapshot?.winner) || canRunNight;
   elements.nightButton.disabled = isBusy || Boolean(snapshot?.winner) || !canRunNight;
 }
