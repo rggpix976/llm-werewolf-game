@@ -1,5 +1,9 @@
 # Development Status
 
+## Rescue claim （土壇場CO) slice
+
+Rescue claims (D-015) are implemented. Inside the now-asynchronous `runVote()`, a living, not-yet-claimed seer, medium, or knight who would be executed by the provisional tally claims first — engine-fabricated from their own private knowledge, including a bare declaration when they have no results yet — and the vote is re-cast with the claim's suspicion effects applied. Registered public claims now shift other NPCs' suspicion on every registration path: uncontested claims are believed by default (claimant −3, seer results ±4), contested seer claims raise suspicion of both claimants (+2) with weaker results (±2). A rescue seer claim with results runs the existing D-014 madman counter-claim decision before the re-vote, so a rescue claim is not automatically believed. Only final votes are recorded. Werewolves and the madman do not rescue-claim. Awaiting the user's real-AI playtest.
+
 ## Role-leak wording unification
 
 The deterministic denial and deflection wordings in `buildNpcResponseRequest` no longer depend on the hidden role: the werewolf-only phrasings found in the 2026-11-09 playtest are gone, and every role uses the same text. Regression coverage in `tests/deflectionWording.test.mjs`. This covers the fixed template (pseudo) wording; the real-AI composition path can only be checked by playtest.

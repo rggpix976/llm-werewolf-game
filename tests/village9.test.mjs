@@ -40,7 +40,7 @@ test("execution privately gives the living medium a result and direct questions 
   for (const voter of game.getAlivePlayers()) {
     if (voter.id !== "npc1") voter.suspicionScores.npc1 = 100;
   }
-  const vote = game.runVote();
+  const vote = await game.runVote();
   assert.equal(vote.executedId, "npc1");
   const medium = game.getPlayer("npc4");
   const result = medium.knownInfo.find((info) => info.type === "medium_result");
