@@ -63,7 +63,7 @@ test("parseConfig - NPC candidate cost-control defaults and strict concurrency s
   const base = { LLM_PROVIDER: "openai", OPENAI_API_KEY: "unit-test-credential" };
   const config = parseConfig(base);
   assert.equal(config.openai.maxOutputTokens, 220);
-  assert.equal(config.openai.maxRequestsPerMinute, 10);
+  assert.equal(config.openai.maxRequestsPerMinute, 30);
   assert.equal(config.openai.maxConcurrentRequests, 1);
 
   for (const [name, maximum] of [
