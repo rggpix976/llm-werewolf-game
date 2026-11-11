@@ -1,5 +1,8 @@
 # Development Status
 
+## Broadcast rate-limit fix
+
+The answer failures in the 2026-11-11 real-AI playtests (NPCs failing to answer during broadcast questions) were traced to the web server's own rate limiter, not OpenAI: `/api/npc-response` rejected requests past the configured per-minute cap with the same 429 "Too many requests" shape, and the default cap was 10/minute — less than one nine-NPC broadcast plus a follow-up. The default `OPENAI_MAX_REQUESTS_PER_MINUTE` is now 30, which fits broadcasts and normal paced play while keeping the cost guard; the limiter itself is unchanged. New `tests/rateLimitBroadcast.test.mjs` adds 2 cases; full regression passes and `npm run sample` PASS.
 ## Mention-matching fix (romaji names)
 
 Fixed the defect behind the 2026-11-11 playtest slip in which an NPC asked about Hana (romaji "hanaと対決するか？") answered about the dead Aoi: `extractMentionedPlayerIds` substring-matched Aoi's one-letter alias "A" inside "hana" and returned roster order, so the first "mentioned" player was Aoi. One-letter labels now count only when they stand alone (non-letter boundaries), and matches are ordered by longest matching label. New `tests/mentionMatching.test.mjs` adds 6 cases; full regression 839/839 and `npm run sample` PASS.
