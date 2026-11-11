@@ -7,6 +7,7 @@ import { createNpcBrowserPublicationSink } from "../src/npcBrowserPublicationSin
 import { createProductionNpcStructuredDeliveryIntegration } from "../src/npcProductionIntegration.mjs";
 import { createNpcProductionObservationLedger, formatNpcProductionObservationRecord } from "../src/npcProductionObservationLedger.mjs";
 import { PseudoInterpreterProvider, createLocalInterpreterHttpProvider } from "../src/interpreterTransport.mjs";
+import { buildGameLogExport, buildGameLogFilename } from "./logExport.mjs";
 
 const elements = {
   statusLine: document.querySelector("#statusLine"),
@@ -20,6 +21,7 @@ const elements = {
   askAllButton: document.querySelector("#askAllButton"),
   voteButton: document.querySelector("#voteButton"),
   nightButton: document.querySelector("#nightButton"),
+  saveLogButton: document.querySelector("#saveLogButton"),
   logList: document.querySelector("#logList"),
   voteList: document.querySelector("#voteList"),
   devModeToggle: document.querySelector("#devModeToggle"),
@@ -144,6 +146,36 @@ elements.nightButton.addEventListener("click", async () => {
   if (action) {
     render(action.publicSnapshot);
   }
+});
+
+elements.saveLogButton.addEventListener("click", () => {
+  if (!game) {
+    return;
+  }
+
+  let developerSnapshot = null;
+  let developerLogText = null;
+  if (isDevMode) {
+    try {
+      developerSnapshot = game.getDeveloperDiagnostics({ logCursor: 0 }).snapshot;
+      developerLogText = game.formatDeveloperLog();
+    } catch { /* diagnostic isolation: export the public log only */ }
+  }
+
+  const now = new Date();
+  const text = buildGameLogExport({
+    exportedAt: now,
+    snapshot: game.getPublicSnapshot(),
+    playerLogText: game.formatPlayerLog(),
+    developerSnapshot,
+    developerLogText
+  });
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = buildGameLogFilename(now);
+  link.click();
+  URL.revokeObjectURL(url);
 });
 
 function startNewGame() {
