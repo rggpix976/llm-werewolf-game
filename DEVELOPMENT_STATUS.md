@@ -1,5 +1,9 @@
 # Development Status
 
+## Mention-matching fix (romaji names)
+
+Fixed the defect behind the 2026-11-11 playtest slip in which an NPC asked about Hana (romaji "hanaと対決するか？") answered about the dead Aoi: `extractMentionedPlayerIds` substring-matched Aoi's one-letter alias "A" inside "hana" and returned roster order, so the first "mentioned" player was Aoi. One-letter labels now count only when they stand alone (non-letter boundaries), and matches are ordered by longest matching label. New `tests/mentionMatching.test.mjs` adds 6 cases; full regression 839/839 and `npm run sample` PASS.
+
 ## Log export (Save Log) slice
 
 A Save Log button (D-017) downloads a text export of the current game: player log and votes from the public snapshot, plus the developer snapshot and full developer event log when Developer Mode is on. The pure builder lives in `public/logExport.mjs`; sessions remain unpersisted (D-009). New `tests/logExport.test.mjs` adds 3 cases; full regression 833/833 and `npm run sample` PASS.
