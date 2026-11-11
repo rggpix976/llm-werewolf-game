@@ -1,5 +1,9 @@
 # Development Status
 
+## Broadcast question （全員に話しかける) slice
+
+Broadcast questions (D-016) are implemented. The new `ask_all` player action asks one question to every living NPC in roster order through the ordinary per-NPC response path: the question is logged once (addressed to 全員）, question pressure is applied exactly once, and ask-based claims can fire for any NPC under the existing conditions. The browser gained an "Ask All" button next to Ask, and the CLI an `ask-all` command. New `tests/askAll.test.mjs` adds 6 cases; full regression 830/830 and `npm run sample` PASS. Awaiting the user's real-AI playtest.
+
 ## Rescue claim （土壇場CO) slice
 
 Rescue claims (D-015) are implemented. Inside the now-asynchronous `runVote()`, a living, not-yet-claimed seer, medium, or knight who would be executed by the provisional tally claims first — engine-fabricated from their own private knowledge, including a bare declaration when they have no results yet — and the vote is re-cast with the claim's suspicion effects applied. Registered public claims now shift other NPCs' suspicion on every registration path: uncontested claims are believed by default (claimant −3, seer results ±4), contested seer claims raise suspicion of both claimants (+2) with weaker results (±2). A rescue seer claim with results runs the existing D-014 madman counter-claim decision before the re-vote, so a rescue claim is not automatically believed. Only final votes are recorded. Werewolves and the madman do not rescue-claim. Awaiting the user's real-AI playtest.
