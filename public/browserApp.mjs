@@ -20,6 +20,7 @@ const elements = {
   askButton: document.querySelector("#askButton"),
   askAllButton: document.querySelector("#askAllButton"),
   voteButton: document.querySelector("#voteButton"),
+  playerVoteSelect: document.querySelector("#playerVoteSelect"),
   nightButton: document.querySelector("#nightButton"),
   saveLogButton: document.querySelector("#saveLogButton"),
   logList: document.querySelector("#logList"),
@@ -129,9 +130,10 @@ elements.voteButton.addEventListener("click", async () => {
     return;
   }
 
-  const action = await dispatch({ type: "advance_vote" });
+  const playerTargetId = elements.playerVoteSelect.value || undefined;
+  const action = await dispatch({ type: "advance_vote", playerTargetId });
   if (action) {
-    canRunNight = !action.publicSnapshot.winner;
+    canRunNight = !action.result?.revoteRequired && !action.publicSnapshot.winner;
     render(action.publicSnapshot);
   }
 });
@@ -964,6 +966,24 @@ function updateControls() {
   elements.askAllButton.disabled = !questionAvailable || !elements.questionInput.value.trim();
   elements.voteButton.disabled = gameOver || canRunNight;
   elements.nightButton.disabled = gameOver || !canRunNight;
+  renderPlayerVoteOptions(gameOver);
+}
+
+function renderPlayerVoteOptions(gameOver) {
+  const alive = snapshot.players.filter((player) => player.alive);
+  const previous = elements.playerVoteSelect.value;
+  elements.playerVoteSelect.replaceChildren(
+    ...alive.map((player) => {
+      const option = document.createElement("option");
+      option.value = player.id;
+      option.textContent = `Your vote: ${player.name}`;
+      return option;
+    })
+  );
+  if (alive.some((player) => player.id === previous)) {
+    elements.playerVoteSelect.value = previous;
+  }
+  elements.playerVoteSelect.disabled = gameOver || canRunNight || alive.length === 0;
 }
 
 function setBusy(isBusy) {

@@ -47,7 +47,7 @@ export async function runCli(options = {}) {
       "  ask <npcId|name|alias> <質問文>  NPCに自由入力で質問する",
       "  ask-all <質問文>               生きている全NPCに同じ質問をする",
       "  retry                        失敗したPlayer表示またはNPC Deliveryを再試行する",
-      "  vote                         投票、処刑、夜行動、勝敗判定まで進める",
+      "  vote [<npcId|name|alias>]    投票（対象を書くと自分の票も入れる）、処刑、夜行動、勝敗判定まで進める",
       "  state                        公開状態を見る",
       "  log                          プレイヤー表示用ログを見る",
       "  dev                          開発者用ログの末尾を見る",
@@ -231,9 +231,14 @@ export async function runCli(options = {}) {
           continue;
         }
         if (command === "vote") {
-          const voteAction = await dispatchCommand({ type: "advance_vote", logCursor: printedLogIndex });
+          const voteTarget = rest.shift();
+          const voteAction = await dispatchCommand({ type: "advance_vote", playerTarget: voteTarget, logCursor: printedLogIndex });
           await printNewPlayerLog(voteAction);
           maybePrintDevTailSafely();
+          if (game.state.voteResolutionPending) {
+            writeLine("土壇場COが出ました。もう一度 vote すると投票が確定します（対象を変える場合は vote <対象>）。");
+            continue;
+          }
           if (!game.state.winner) {
             const nightAction = await dispatchCommand({ type: "run_night", logCursor: printedLogIndex });
             await printNewPlayerLog(nightAction);

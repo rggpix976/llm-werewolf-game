@@ -457,7 +457,7 @@ function fakeBrowserEnvironment() {
 
   const elementIds = [
     "statusLine", "newGameButton", "playerGrid", "askForm", "targetSelect", "questionInput",
-    "askButton", "askAllButton", "saveLogButton", "voteButton", "nightButton", "logList", "voteList", "devModeToggle", "developerPanel"
+    "askButton", "askAllButton", "playerVoteSelect", "saveLogButton", "voteButton", "nightButton", "logList", "voteList", "devModeToggle", "developerPanel"
   ];
   const elements = Object.fromEntries(elementIds.map((id) => [id, new FakeNode(id)]));
   const document = {
