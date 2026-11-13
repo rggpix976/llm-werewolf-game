@@ -1,5 +1,9 @@
 # Development Status
 
+## Evidence text fix
+
+Fixed the mid-game "no response" failures from the 2026-11-13 real-AI playtest: the `knight_guard` and `medium_result` knownInfo entries carried no `text`, so when a question mentioning the relevant player selected one as private stance evidence, the server-side request validator rejected the whole NPC response request (`bad_request: context.privateStanceEvidence[0].text must be a string`) and the NPC failed to answer. In the playtest this silenced the knight three times in a row on day 5 (every question mentioned the player he had guarded on night 4). Both entry types now record a `text`, matching the seer_result entry. New `tests/evidenceText.test.mjs` adds 2 cases; full regression passes and `npm run sample` PASS.
+
 ## Player vote
 
 The player now holds one vote (D-018), decided with the user on 2026-11-13: equal weight to an NPC's, cast simultaneously so NPC votes never react to it, and changeable when a rescue claim pauses the resolution for a re-vote. Engine: `cast_player_vote` action plus an optional target on `advance_vote`; the vote is tallied and recorded as voter `player` （あなた）, ties still break by aggregate NPC suspicion, and `runNight` refuses while a re-vote is pending. Browser: a "Your vote" target selector beside the Vote button; CLI: `vote [<npcId|name|alias>]` with a pause notice instead of the usual night auto-chain. New `tests/playerVote.test.mjs` adds 6 cases; full regression passes and `npm run sample` PASS.

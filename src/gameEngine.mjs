@@ -1583,7 +1583,7 @@ export class WerewolfGame {
     const previous = [...knight.privateMemory].reverse().find((info) => info.type === "knight_action");
     const target = ordered.find((candidate) => candidate.id !== previous?.targetId) ?? ordered[0];
     knight.privateMemory.push({ day: this.state.day, type: "knight_action", targetId: target.id });
-    knight.knownInfo.push({ day: this.state.day, type: "knight_guard", visibility: "private", shareable: false, targetId: target.id, targetName: target.name });
+    knight.knownInfo.push({ day: this.state.day, type: "knight_guard", visibility: "private", shareable: false, targetId: target.id, targetName: target.name, text: `護衛記録: ${target.name}を守った。` });
     this.addDeveloperLog("knight_action", { knightId: knight.id, targetId: target.id, targetName: target.name });
     return { knightId: knight.id, targetId: target.id };
   }
@@ -1591,7 +1591,7 @@ export class WerewolfGame {
   recordMediumResults(executed) {
     for (const medium of this.state.players.filter((player) => player.role === ROLES.MEDIUM && player.alive)) {
       const result = executed.role === ROLES.WEREWOLF ? "werewolf" : "not_werewolf";
-      medium.knownInfo.push({ day: this.state.day, type: "medium_result", visibility: "private", shareable: false, targetId: executed.id, targetName: executed.name, result });
+      medium.knownInfo.push({ day: this.state.day, type: "medium_result", visibility: "private", shareable: false, targetId: executed.id, targetName: executed.name, result, text: `霊媒結果: ${executed.name}は${result === "werewolf" ? "人狼" : "人狼ではない"}。` });
       this.addDeveloperLog("medium_result", { mediumId: medium.id, targetId: executed.id, result });
     }
   }
