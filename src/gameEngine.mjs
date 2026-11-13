@@ -146,6 +146,8 @@ export class WerewolfGame {
       deadPlayers: [],
       publicInfo: [],
       voteHistory: [],
+      playerVoteTargetId: null,
+      voteResolutionPending: false,
       winner: null,
       playerLog: [],
       developerLog: [],
@@ -357,7 +359,8 @@ export class WerewolfGame {
   async _executeCompatibilityAction(action) {
     if (action.type === "ask_npc") return await this.handlePlayerQuestion(action.targetId ?? action.target ?? action.npcId, action.input ?? action.question);
     if (action.type === "ask_all") return await this.handleBroadcastQuestion(action.input ?? action.question);
-    if (action.type === "advance_vote") return this.runVote();
+    if (action.type === "cast_player_vote") return this.castPlayerVote(action.targetId ?? action.target);
+    if (action.type === "advance_vote") return this.runVote(action.playerTargetId ?? action.playerTarget ?? action.targetId);
     if (action.type === "run_night") return this.runNight();
     throw new Error(`Unknown player action type: ${action.type}`);
   }
@@ -622,15 +625,18 @@ export class WerewolfGame {
   }
 
   _validateCommand(action) {
-    if (!["ask_npc", "ask_all", "advance_vote", "run_night", "get_state"].includes(action.type)) throw new Error(`Unknown player action type: ${action.type}`);
+    if (!["ask_npc", "ask_all", "cast_player_vote", "advance_vote", "run_night", "get_state"].includes(action.type)) throw new Error(`Unknown player action type: ${action.type}`);
     if (this.state.winner) {
       if (action.type === "ask_npc") return returnCommandDecision({ responded: false, reason: "game_already_finished" });
       if (action.type === "ask_all") return returnCommandDecision({ responded: false, reason: "game_already_finished" });
+      if (action.type === "cast_player_vote") return returnCommandDecision({ cast: false, reason: "game_already_finished" });
       if (action.type === "advance_vote") return returnCommandDecision(null);
       if (action.type === "run_night") return returnCommandDecision({ skipped: true, reason: "game_already_finished" });
     }
     if (action.type === "ask_npc") { const target = action.targetId ?? action.target ?? action.npcId; if (!this.getPlayer(target)) throw new Error(`Unknown NPC: ${target}`); if (!String(action.input ?? action.question ?? "").trim()) throw new TypeError("Player input is required"); }
     if (action.type === "ask_all") { if (!String(action.input ?? action.question ?? "").trim()) throw new TypeError("Player input is required"); }
+    if (action.type === "cast_player_vote") { const target = action.targetId ?? action.target; if (!this.getPlayer(target)) throw new Error(`Unknown NPC: ${target}`); }
+    if (action.type === "advance_vote") { const target = action.playerTargetId ?? action.playerTarget ?? action.targetId; if (target !== undefined && target !== null && target !== "" && !this.getPlayer(target)) throw new Error(`Unknown NPC: ${target}`); }
     if (action.clarificationRequestId && !this._clarificationContinuation(action)) throw typedError("invalid_clarification_continuation");
     return EXECUTE_COMMAND_DECISION;
   }
@@ -1011,18 +1017,68 @@ export class WerewolfGame {
     });
   }
 
-  async runVote() {
+  castPlayerVote(targetIdOrName) {
+    if (this.state.winner) {
+      return { cast: false, reason: "game_already_finished" };
+    }
+    const target = this.getPlayer(targetIdOrName);
+    if (!target) {
+      throw new Error(`Unknown NPC: ${targetIdOrName}`);
+    }
+    if (!target.alive) {
+      return { cast: false, reason: "target_not_alive" };
+    }
+    this.state.playerVoteTargetId = target.id;
+    this.addDeveloperLog("player_vote_cast", {
+      targetId: target.id,
+      targetName: target.name
+    });
+    return { cast: true, targetId: target.id, targetName: target.name };
+  }
+
+  buildPlayerVoteEntry(targetId) {
+    const target = this.getPlayer(targetId);
+    return {
+      voterId: "player",
+      voterName: "あなた",
+      targetId: target.id,
+      targetName: target.name,
+      reasonPublic: "プレイヤーの投票",
+      reasonDeveloper: "player vote (simultaneous, D-018)"
+    };
+  }
+
+  collectVotes() {
+    const votes = this.getAlivePlayers().map((voter) => this.chooseVote(voter));
+    if (this.state.playerVoteTargetId) {
+      const target = this.getPlayer(this.state.playerVoteTargetId);
+      if (target?.alive) {
+        votes.push(this.buildPlayerVoteEntry(target.id));
+      }
+    }
+    return votes;
+  }
+
+  async runVote(playerTargetIdOrName) {
     if (this.state.winner) {
       return null;
     }
+    if (playerTargetIdOrName !== undefined && playerTargetIdOrName !== null && playerTargetIdOrName !== "") {
+      const castResult = this.castPlayerVote(playerTargetIdOrName);
+      if (!castResult.cast) {
+        throw new Error(`Invalid player vote target: ${playerTargetIdOrName}`);
+      }
+    }
 
     this.setPhase("vote");
-    let votes = this.getAlivePlayers().map((voter) => this.chooseVote(voter));
+    let votes = this.collectVotes();
     let result = this.resolveVote(votes);
 
     // Rescue claims (D-015): a power role about to be executed may claim
     // before the execution is finalised; the vote is then re-cast with the
-    // claim's suspicion effects applied.
+    // claim's suspicion effects applied. When the player holds a vote
+    // (D-018), the re-cast pauses instead, so the player may change their
+    // vote first; without a player vote the re-cast stays in this call.
     for (;;) {
       const candidate = this.getPlayer(result.executedId);
       if (!candidate?.alive || candidate.publicClaims.length > 0) {
@@ -1038,11 +1094,34 @@ export class WerewolfGame {
       if (candidate.role === ROLES.SEER && claim.results.length > 0) {
         await this.resolveMadmanSeerDecision(claim);
       }
-      votes = this.getAlivePlayers().map((voter) => this.chooseVote(voter));
+      if (this.state.playerVoteTargetId) {
+        this.state.voteResolutionPending = true;
+        this.setPhase("day_discussion");
+        this.addDeveloperLog("vote_paused_for_player_revote", {
+          claimedBy: candidate.id,
+          claimRole: candidate.role
+        });
+        return {
+          votes: null,
+          executedId: null,
+          winner: null,
+          revoteRequired: true,
+          claimedBy: candidate.id,
+          claimedRole: candidate.role
+        };
+      }
+      votes = this.collectVotes();
       result = this.resolveVote(votes);
     }
 
+    const playerVoted = votes.some((vote) => vote.voterId === "player");
+    this.state.playerVoteTargetId = null;
+    this.state.voteResolutionPending = false;
+
     for (const vote of votes) {
+      if (vote.voterId === "player") {
+        continue;
+      }
       const voter = this.getPlayer(vote.voterId);
       voter.voteHistory.push({
         day: this.state.day,
@@ -1059,11 +1138,7 @@ export class WerewolfGame {
       tie: result.tie
     });
 
-    const voteSummary = votes.map((vote) => {
-      const voter = this.getPlayer(vote.voterId);
-      const target = this.getPlayer(vote.targetId);
-      return `${voter.name}->${target.name}`;
-    }).join("、");
+    const voteSummary = votes.map((vote) => `${vote.voterName}->${vote.targetName}`).join("、");
 
     this.addPlayerLog(`投票結果: ${voteSummary}`);
     this.addPublicInfo({
@@ -1102,7 +1177,8 @@ export class WerewolfGame {
     return {
       votes,
       executedId: result.executedId,
-      winner: this.state.winner
+      winner: this.state.winner,
+      playerVoted
     };
   }
 
@@ -1173,6 +1249,12 @@ export class WerewolfGame {
       return {
         skipped: true,
         reason: "game_already_finished"
+      };
+    }
+    if (this.state.voteResolutionPending) {
+      return {
+        skipped: true,
+        reason: "vote_in_progress"
       };
     }
 

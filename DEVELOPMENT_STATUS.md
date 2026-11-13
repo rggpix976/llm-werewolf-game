@@ -1,5 +1,9 @@
 # Development Status
 
+## Player vote
+
+The player now holds one vote (D-018), decided with the user on 2026-11-13: equal weight to an NPC's, cast simultaneously so NPC votes never react to it, and changeable when a rescue claim pauses the resolution for a re-vote. Engine: `cast_player_vote` action plus an optional target on `advance_vote`; the vote is tallied and recorded as voter `player` （あなた）, ties still break by aggregate NPC suspicion, and `runNight` refuses while a re-vote is pending. Browser: a "Your vote" target selector beside the Vote button; CLI: `vote [<npcId|name|alias>]` with a pause notice instead of the usual night auto-chain. New `tests/playerVote.test.mjs` adds 6 cases; full regression passes and `npm run sample` PASS.
+
 ## Broadcast rate-limit fix
 
 The answer failures in the 2026-11-11 real-AI playtests (NPCs failing to answer during broadcast questions) were traced to the web server's own rate limiter, not OpenAI: `/api/npc-response` rejected requests past the configured per-minute cap with the same 429 "Too many requests" shape, and the default cap was 10/minute — less than one nine-NPC broadcast plus a follow-up. The default `OPENAI_MAX_REQUESTS_PER_MINUTE` is now 30, which fits broadcasts and normal paced play while keeping the cost guard; the limiter itself is unchanged. New `tests/rateLimitBroadcast.test.mjs` adds 2 cases; full regression passes and `npm run sample` PASS.
