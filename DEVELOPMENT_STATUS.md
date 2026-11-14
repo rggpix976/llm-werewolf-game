@@ -25,11 +25,15 @@ Broadcast questions (D-016) are implemented. The new `ask_all` player action ask
 
 ## Rescue claim （土壇場CO) slice
 
-Rescue claims (D-015) are implemented. Inside the now-asynchronous `runVote()`, a living, not-yet-claimed seer, medium, or knight who would be executed by the provisional tally claims first — engine-fabricated from their own private knowledge, including a bare declaration when they have no results yet — and the vote is re-cast with the claim's suspicion effects applied. Registered public claims now shift other NPCs' suspicion on every registration path: uncontested claims are believed by default (claimant −3, seer results ±4), contested seer claims raise suspicion of both claimants (+2) with weaker results (±2). A rescue seer claim with results runs the existing D-014 madman counter-claim decision before the re-vote, so a rescue claim is not automatically believed. Only final votes are recorded. Werewolves and the madman do not rescue-claim. Awaiting the user's real-AI playtest.
+Rescue claims (D-015) are implemented. Inside the now-asynchronous `runVote()`, a living, not-yet-claimed seer, medium, or knight who would be executed by the provisional tally claims first — engine-fabricated from their own private knowledge, including a bare declaration when they have no results yet — and the vote is re-cast with the claim's suspicion effects applied. Registered public claims now shift other NPCs' suspicion on every registration path: uncontested claims are believed by default (claimant −3, seer results ±4), contested seer claims raise suspicion of both claimants (+2) with weaker results (±2). A rescue seer claim with results runs the D-019 werewolf decision and then the existing D-014 madman decision before the re-vote, so a rescue claim is not automatically believed. Only final votes are recorded. Werewolves and the madman do not rescue-claim. Awaiting the user's real-AI playtest.
 
 ## Role-leak wording unification
 
 The deterministic denial and deflection wordings in `buildNpcResponseRequest` no longer depend on the hidden role: the werewolf-only phrasings found in the 2026-11-09 playtest are gone, and every role uses the same text. Regression coverage in `tests/deflectionWording.test.mjs`. This covers the fixed template (pseudo) wording; the real-AI composition path can only be checked by playtest.
+
+## Phase 6 werewolf fake-seer decision slice
+
+D-019 is implemented for `village9`. The first living werewolf may counter a genuine proactive or rescue seer publication (W-A), an alive werewolf claimant may add one result after a later proactive publication (W-B), and a werewolf may claim first during the existing day-start sequence when no proactive or public seer claim exists (W-C). Werewolf decisions run before the madman, provider failures safely become silence, the engine owns fabricated contents and claim effects, black fabrications exclude both werewolves, and decision requests expose no other role or private knowledge. Default five-player and `sample` behavior remain unchanged. Automated regression: 862/862; sample audit PASS.
 
 ## Phase 6 madman counter-CO decision slice
 

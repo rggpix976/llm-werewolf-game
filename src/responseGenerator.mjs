@@ -127,7 +127,7 @@ export function generatePseudoResponseText(request) {
 }
 
 export function buildNpcDecisionRequest(npc, gameState, triggeringClaim, candidates, decisionPoint) {
-  const mentionedIds = (triggeringClaim.results ?? []).map(({ targetId }) => targetId);
+  const mentionedIds = (triggeringClaim?.results ?? []).map(({ targetId }) => targetId);
   return deepFreeze(structuredClone({
     npc: {
       id: npc.id,
@@ -140,7 +140,7 @@ export function buildNpcDecisionRequest(npc, gameState, triggeringClaim, candida
       day: gameState.day,
       phase: gameState.phase,
       publicEvidence: selectRelevantPublicInfo(gameState, mentionedIds),
-      triggeringClaim
+      ...(triggeringClaim ? { triggeringClaim } : { publicSituation: "no seer claim has been made yet" })
     },
     candidates,
     decisionPoint,
