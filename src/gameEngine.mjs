@@ -1095,6 +1095,9 @@ export class WerewolfGame {
         await this.resolveWerewolfSeerDecision(claim, { allowFollowUp: false });
         await this.resolveMadmanSeerDecision(claim);
       }
+      if (candidate.role === ROLES.KNIGHT && claim.results.length > 0) {
+        await this.resolveWerewolfKnightDecision(claim, "rescue_counter_claim");
+      }
       if (this.state.playerVoteTargetId) {
         this.state.voteResolutionPending = true;
         this.setPhase("day_discussion");
@@ -1289,6 +1292,10 @@ export class WerewolfGame {
       } else if (!this.hasPublicSeerClaim()) {
         await this.resolveWerewolfSeerDecision(null);
       }
+      if (attackResult?.prevented && !this.hasPublicKnightClaim()) {
+        const fakeClaim = await this.resolveWerewolfKnightDecision(null, "gj_morning_first_claim");
+        if (fakeClaim) await this.resolveRealKnightCounterDecision(fakeClaim);
+      }
     }
 
     return {
@@ -1303,6 +1310,10 @@ export class WerewolfGame {
     return this.state.players.some((player) => player.publicClaims.some((claim) => claim.role === ROLES.SEER));
   }
 
+  hasPublicKnightClaim() {
+    return this.state.players.some((player) => player.publicClaims.some((claim) => claim.role === ROLES.KNIGHT));
+  }
+
   async resolveWerewolfSeerDecision(triggeringClaim, { allowFollowUp = true } = {}) {
     if (this.state.config.scenario !== "village9") return null;
     const werewolves = this.state.players.filter((player) => player.role === ROLES.WEREWOLF);
@@ -1310,7 +1321,7 @@ export class WerewolfGame {
     if (claimant && !claimant.alive) return null;
     if (claimant && !triggeringClaim) return null;
     if (claimant && !allowFollowUp) return null;
-    const werewolf = claimant ?? werewolves.find((player) => player.alive);
+    const werewolf = claimant ?? werewolves.find((player) => player.alive && player.publicClaims.length === 0);
     if (!werewolf) return null;
 
     const hasClaim = Boolean(claimant);
@@ -1347,6 +1358,69 @@ export class WerewolfGame {
       model: result?.model ?? null, reason: typeof result?.reason === "string" ? result.reason : null
     });
     return claim;
+  }
+
+  async resolveWerewolfKnightDecision(triggeringClaim, decisionPoint) {
+    if (this.state.config.scenario !== "village9") return null;
+    if (this.state.players.some((p) => p.role === ROLES.WEREWOLF && p.publicClaims.some((c) => c.role === ROLES.KNIGHT))) return null;
+    const werewolf = this.state.players.find((p) => p.role === ROLES.WEREWOLF && p.alive && p.publicClaims.length === 0);
+    if (!werewolf) return null;
+    const candidates = [{ id: triggeringClaim ? "counter_claim" : "claim_knight", description: "騎士としてCOする" }, { id: "stay_silent", description: "何も公開しない" }];
+    const { choiceId, fallbackReason, result } = await this.chooseSafeAction(werewolf, triggeringClaim, candidates, decisionPoint);
+    let claim = null;
+    let finalChoice = choiceId;
+    let finalFallback = fallbackReason;
+    if (choiceId !== "stay_silent") {
+      claim = this.registerFabricatedKnightClaim(werewolf);
+      if (!claim) { finalChoice = "stay_silent"; finalFallback = "fabrication_impossible"; }
+    }
+    this.addDeveloperLog("werewolf_knight_decision", { werewolfId: werewolf.id, decisionPoint, candidates: candidates.map((c) => c.id), choiceId: finalChoice, fallbackReason: finalFallback, providerName: result?.providerName ?? getProviderName(this.responseProvider), model: result?.model ?? null, reason: typeof result?.reason === "string" ? result.reason : null });
+    return claim;
+  }
+
+  async resolveRealKnightCounterDecision(triggeringClaim) {
+    const knight = this.state.players.find((p) => p.role === ROLES.KNIGHT && p.alive && p.publicClaims.length === 0);
+    if (!knight) return null;
+    const candidates = [{ id: "counter_claim", description: "真の護衛記録とともに対抗COする" }, { id: "stay_silent", description: "何も公開しない" }];
+    const { choiceId, fallbackReason, result } = await this.chooseSafeAction(knight, triggeringClaim, candidates, "real_knight_counter_claim");
+    this.addDeveloperLog("real_knight_counter_decision", { knightId: knight.id, decisionPoint: "real_knight_counter_claim", candidates: candidates.map((c) => c.id), choiceId, fallbackReason, providerName: result?.providerName ?? getProviderName(this.responseProvider), model: result?.model ?? null, reason: typeof result?.reason === "string" ? result.reason : null });
+    return choiceId === "counter_claim" ? this.registerRescueClaim(knight) : null;
+  }
+
+  async chooseSafeAction(actor, triggeringClaim, candidates, decisionPoint) {
+    const request = buildNpcDecisionRequest(actor, this.state, triggeringClaim, candidates, decisionPoint);
+    let result = null; let fallbackReason = null;
+    if (typeof this.responseProvider.chooseAction !== "function") fallbackReason = "method_missing";
+    else { try { result = await this.responseProvider.chooseAction(request); } catch { fallbackReason = "provider_error"; } }
+    if (!fallbackReason && (!result || typeof result !== "object" || !candidates.some((c) => c.id === result.choiceId))) fallbackReason = "invalid_choice";
+    return { choiceId: fallbackReason ? "stay_silent" : result.choiceId, fallbackReason, result };
+  }
+
+  registerFabricatedKnightClaim(claimant) {
+    const attacks = this.state.developerLog.filter((entry) => entry.kind === "werewolf_attack" && entry.detail?.targetId && !entry.detail?.skipped);
+    const results = []; let previousTargetId = null;
+    for (const attack of attacks) {
+      const night = attack.day;
+      let target = null;
+      if (attack.detail.guarded) target = this.getPlayer(attack.detail.targetId);
+      else {
+        const eligible = this.state.players.filter((player) => {
+          if (player.id === claimant.id || player.id === attack.detail.targetId || player.id === previousTargetId) return false;
+          const death = player.privateMemory.find((item) => item.type === "death");
+          return !death || death.day > night || (death.day === night && death.cause === "werewolf_attack");
+        });
+        target = eligible.sort((a, b) => (claimant.suspicionScores[a.id] ?? 0) - (claimant.suspicionScores[b.id] ?? 0) || a.name.localeCompare(b.name))[0];
+      }
+      if (!target || target.id === previousTargetId) return null;
+      results.push({ night, targetId: target.id, result: "guarded" }); previousTargetId = target.id;
+    }
+    if (results.length !== Math.max(0, this.state.day - 1)) return null;
+    const text = `騎士COします。${results.map(({ night, targetId }) => `${night}日目の夜は${this.getPlayer(targetId).name}を護衛`).join("、")}しました。`;
+    const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.KNIGHT, results };
+    this.addPlayerLog(`${claimant.name}: ${text}`); this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });
+    claimant.publicClaims.push(claim); this.addPublicInfo({ type: "public_claim", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}が${publicRoleName(ROLES.KNIGHT)}COをした。`, claim });
+    claimant.privateMemory.push({ day: this.state.day, type: "fabricated_knight_claim", results: structuredClone(results) });
+    this.addDeveloperLog("public_claim_registered", claim); this.addDeveloperLog("fabricated_knight_claim", { werewolfId: claimant.id, results }); this.applyClaimToSuspicion(claim); return claim;
   }
 
   async resolveMadmanSeerDecision(triggeringClaim) {
@@ -1472,10 +1546,10 @@ export class WerewolfGame {
   // is contested instead: both claimants become more suspicious and the
   // results count for less.
   applyClaimToSuspicion(claim) {
-    const rivalSeerClaimantIds = claim.role === ROLES.SEER
+    const rivalSeerClaimantIds = (claim.role === ROLES.SEER || claim.role === ROLES.KNIGHT)
       ? [...new Set(
         this.state.publicInfo
-          .filter((info) => info.type === "public_claim" && info.claim?.role === ROLES.SEER && info.actorId !== claim.actorId)
+          .filter((info) => info.type === "public_claim" && info.claim?.role === claim.role && info.actorId !== claim.actorId)
           .map((info) => info.actorId)
       )]
       : [];
@@ -1494,7 +1568,7 @@ export class WerewolfGame {
         }
         npc.suspicionScores[rivalId] = (npc.suspicionScores[rivalId] ?? 0) + 2;
       }
-      for (const { targetId, result } of claim.results ?? []) {
+      for (const { targetId, result } of claim.role === ROLES.SEER ? (claim.results ?? []) : []) {
         if (targetId === npc.id) {
           continue;
         }
@@ -2436,7 +2510,7 @@ function createConversationPolicy(role) {
     };
   }
 
-  if (role === ROLES.SEER || role === ROLES.MEDIUM) {
+  if (role === ROLES.SEER || role === ROLES.MEDIUM || role === ROLES.KNIGHT) {
     return {
       truthfulness: "honest_but_may_withhold_private_info",
       roleClaim: "claim_when_directly_asked_after_result",

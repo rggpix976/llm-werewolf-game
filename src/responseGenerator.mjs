@@ -140,13 +140,13 @@ export function buildNpcDecisionRequest(npc, gameState, triggeringClaim, candida
       day: gameState.day,
       phase: gameState.phase,
       publicEvidence: selectRelevantPublicInfo(gameState, mentionedIds),
-      ...(triggeringClaim ? { triggeringClaim } : { publicSituation: "no seer claim has been made yet" })
+      ...(triggeringClaim ? { triggeringClaim } : { publicSituation: decisionPoint === "uncontested_first_claim" ? "no seer claim has been made yet" : "no knight claim has been made yet" })
     },
     candidates,
     decisionPoint,
     private: {
       role: npc.role,
-      goals: ["村を混乱させる", "人狼をかばう"]
+      goals: npc.role === ROLES.WEREWOLF ? ["村を混乱させる", "人狼をかばう"] : ["村を守る", "真実の護衛記録を適切に公開する"]
     }
   }));
 }
@@ -221,14 +221,15 @@ export function buildRescueClaim(npc, gameState) {
   );
 
   if (npc.role === ROLES.KNIGHT) {
+    const results = knightGuardResults(npc);
     return {
-      text: "騎士COします。私が村を守っています。",
+      text: knightClaimText(results),
       publicClaim: {
         day: gameState.day,
         actorId: npc.id,
         actorName: npc.name,
         role: ROLES.KNIGHT,
-        results: []
+        results
       },
       evidenceUsed: ["hiddenInfo:self_role intentionally disclosed by rescue CO"]
     };
@@ -281,7 +282,7 @@ export function buildRescueClaim(npc, gameState) {
 function classifyIntent(input) {
   return {
     asksWerewolfIdentity: containsAny(input, ["あなたは人狼", "君は人狼", "お前は人狼", "人狼ですか", "are you a werewolf"]),
-    asksRoleOrClaim: containsAny(input, ["役職", "co", "カミングアウト", "占いco", "占い師", "seer", "霊媒師", "medium"]),
+    asksRoleOrClaim: containsAny(input, ["役職", "co", "カミングアウト", "占いco", "占い師", "seer", "霊媒師", "medium", "騎士", "knight"]),
     asksVoteReason: containsAny(input, ["投票", "票", "なぜ", "どうして", "vote"])
   };
 }
@@ -410,6 +411,17 @@ function answerAboutTarget(npc, target, privateKnownEvidence) {
 }
 
 function maybeCreateRoleClaim(npc, gameState) {
+  if (npc.role === ROLES.KNIGHT) {
+    const results = knightGuardResults(npc);
+    const publishedNights = new Set(npc.publicClaims.flatMap((claim) => claim.results ?? []).map((result) => result.night));
+    const freshResults = results.filter((result) => !publishedNights.has(result.night));
+    if (freshResults.length === 0) return null;
+    return {
+      text: knightClaimText(results),
+      publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.KNIGHT, results },
+      evidenceUsed: ["hiddenInfo:self_role intentionally disclosed by CO", ...results.map(({ night }) => `knownInfo:knight_guard:${night}`)]
+    };
+  }
   if (npc.role !== ROLES.SEER && npc.role !== ROLES.MEDIUM) {
     return null;
   }
@@ -466,6 +478,17 @@ function maybeCreateRoleClaim(npc, gameState) {
       ...freshResults.map((result) => `knownInfo:${resultType}:${result.targetId}`)
     ]
   };
+}
+
+function knightGuardResults(npc) {
+  return npc.knownInfo.filter((info) => info.type === "knight_guard")
+    .sort((a, b) => a.day - b.day)
+    .map((info) => ({ night: info.day, targetId: info.targetId, targetName: info.targetName, result: "guarded" }));
+}
+
+function knightClaimText(results) {
+  if (results.length === 0) return "騎士COします。まだ護衛記録はありません。";
+  return `騎士COします。${results.map(({ night, targetId, targetName }) => `${night}日目の夜は${targetName ?? targetId}を護衛`).join("、")}しました。`;
 }
 
 function applySpeechStyle(npc, text) {

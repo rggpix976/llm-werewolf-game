@@ -15,6 +15,7 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Player vote (one equal vote, simultaneous) | merged | 2026-11-13 | PR #84; DECISIONS.md D-018 |
 | Evidence-text fix for mid-game "no response" failures | merged | 2026-11-13 | PR #85; DEVELOPMENT_STATUS.md |
 | Werewolf fake CO | implemented | 2026-11-14 | D-019; DEVELOPMENT_STATUS.md |
+| Knight guard-history and fake knight CO | in review | 2026-11-14 | D-020; DEVELOPMENT_STATUS.md |
 | Recording protocol (this index + AGENTS.md rules) | in review | 2026-11-14 | This file; AGENTS.md "Project Memory and Recording" |
 
 Maintenance: update a row in the same pull request that starts, changes, or
