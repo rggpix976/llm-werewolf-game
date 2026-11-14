@@ -175,3 +175,7 @@ At the end of each development session:
 - Update this file with the latest status.
 - Update `CHANGELOG.md`.
 - Commit the completed work.
+
+## Knight claim history and fake knight CO (2026-11-14)
+
+Implemented on `feat/knight-claim-history`. Genuine knight claims publish private guard records only at the controlled claim boundary. In `village9`, an eligible werewolf can claim knight on a no-victim morning or counter a rescue claim with engine-fabricated history; the real knight can counter the morning claim through the D-014 choice contract. Role-fake exclusivity, deterministic fabrication, contested suspicion, and safe-silence failures are enforced by the engine. See D-020 and `tests/knightClaimHistory.test.mjs`.
