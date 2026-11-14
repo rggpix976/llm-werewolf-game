@@ -14,7 +14,7 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Rescue claim before execution, with re-vote | merged | 2026-11-11 | PR #79; DEVELOPMENT_STATUS.md |
 | Player vote (one equal vote, simultaneous) | merged | 2026-11-13 | PR #84; DECISIONS.md D-018 |
 | Evidence-text fix for mid-game "no response" failures | merged | 2026-11-13 | PR #85; DEVELOPMENT_STATUS.md |
-| Werewolf fake CO | planned | 2026-11-13 | Remaining agreed slice; TODO.md |
+| Werewolf fake CO | implemented | 2026-11-14 | D-019; DEVELOPMENT_STATUS.md |
 | Recording protocol (this index + AGENTS.md rules) | in review | 2026-11-14 | This file; AGENTS.md "Project Memory and Recording" |
 
 Maintenance: update a row in the same pull request that starts, changes, or

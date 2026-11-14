@@ -19,7 +19,9 @@ export class PseudoResponseProvider {
   async chooseAction(request) {
     const preferred = request.candidates.some(({ id }) => id === "counter_claim")
       ? "counter_claim"
-      : "publish_more";
+      : request.candidates.some(({ id }) => id === "claim_seer")
+        ? "claim_seer"
+        : "publish_more";
     return {
       choiceId: request.candidates.some(({ id }) => id === preferred) ? preferred : "stay_silent",
       providerName: this.name,

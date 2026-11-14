@@ -31,6 +31,10 @@ Rescue claims (D-015) are implemented. Inside the now-asynchronous `runVote()`, 
 
 The deterministic denial and deflection wordings in `buildNpcResponseRequest` no longer depend on the hidden role: the werewolf-only phrasings found in the 2026-11-09 playtest are gone, and every role uses the same text. Regression coverage in `tests/deflectionWording.test.mjs`. This covers the fixed template (pseudo) wording; the real-AI composition path can only be checked by playtest.
 
+## Phase 6 werewolf fake-seer decision slice
+
+D-019 is implemented for `village9`. The first living werewolf may counter a genuine proactive or rescue seer publication (W-A), an alive werewolf claimant may add one result after a later proactive publication (W-B), and a werewolf may claim first during the existing day-start sequence when no proactive or public seer claim exists (W-C). Werewolf decisions run before the madman, provider failures safely become silence, the engine owns fabricated contents and claim effects, black fabrications exclude both werewolves, and decision requests expose no other role or private knowledge. Default five-player and `sample` behavior remain unchanged. Automated regression: 862/862; sample audit PASS.
+
 ## Phase 6 madman counter-CO decision slice
 
 The D-014 controlled `chooseAction` trial is implemented for the nine-player madman countering proactive seer claims. The engine owns candidate validation, safe-silence fallback, fabricated results, claim registration, and privacy boundaries. `runNight()` now awaits the day-start decision; the existing browser, CLI, and sample dispatch paths already await commands. Default and sample five-player behavior remains unchanged.

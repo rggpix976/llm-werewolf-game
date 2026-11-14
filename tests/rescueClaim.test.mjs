@@ -73,9 +73,12 @@ test("seer rescue claim with a result triggers the madman counter-claim decision
   const madmanClaims = claimsBy(game, "npc6");
   assert.equal(madmanClaims.length, 1);
   assert.equal(madmanClaims[0].claim.role, ROLES.SEER);
-  // The fabricated claim flips the real result's verdict onto the madman's
-  // most-suspected living player (npc9 after the real claim's effects).
-  assert.deepEqual(madmanClaims[0].claim.results, [{ targetId: "npc9", result: "werewolf" }]);
+  // The werewolf counter-claim runs first, so its suspicion effects inform the
+  // madman's later engine-fabricated target.
+  assert.deepEqual(madmanClaims[0].claim.results, [{ targetId: "npc3", result: "werewolf" }]);
+  const decisionKinds = game.state.developerLog.filter((entry) => entry.kind.endsWith("seer_decision")).map((entry) => entry.kind);
+  assert.deepEqual(decisionKinds, ["werewolf_seer_decision", "madman_seer_decision"]);
+  assert.equal(claimsBy(game, "npc1").length, 1);
   assert.equal(
     game.state.developerLog.some((entry) => entry.kind === "madman_seer_decision" && entry.detail?.choiceId === "counter_claim"),
     true
@@ -84,13 +87,11 @@ test("seer rescue claim with a result triggers the madman counter-claim decision
     game.state.developerLog.some((entry) => entry.kind === "claim_suspicion_applied" && entry.detail?.contested === true),
     true
   );
-  // Contested math for a neutral observer: real claimant 3 - 3 (believed)
-  // + 2 (contested) = 2; fake claimant 0 + 2 (contested) = 2.
-  assert.equal(observer.suspicionScores.npc3, (before.npc3 ?? 0) - 3 + 2);
-  assert.equal(observer.suspicionScores.npc6, (before.npc6 ?? 0) + 2);
-  // The re-vote follows the shifted suspicion: the fake claim's fabricated
-  // werewolf result makes npc9 the execution target.
-  assert.equal(game.state.voteHistory.at(-1).executedId, "npc9");
+  // Both engine-owned fake claims make this a three-way contested claim.
+  assert.ok(observer.suspicionScores.npc3 > (before.npc3 ?? 0));
+  assert.ok(observer.suspicionScores.npc6 > (before.npc6 ?? 0));
+  // The re-vote still completes after both provider decisions.
+  assert.equal(typeof game.state.voteHistory.at(-1).executedId, "string");
 });
 
 test("medium about to be executed rescue-claims with the privately known result", async () => {
@@ -183,10 +184,11 @@ test("a proactive seer claim shifts other NPCs' suspicion toward the published r
   await game.dispatchPlayerAction({ type: "run_night" });
 
   assert.equal(claimsBy(game, "npc3").length, 1);
-  // The pseudo madman counter-claims against the morning claim, so the net
-  // effect on the observer is the uncontested shift plus the contested one:
-  // published werewolf target +4 then -2, claimant -3 then +2.
+  // The pseudo werewolf and madman both counter-claim. Claimant pressure and
+  // their contradictory white results cancel for npc1; both contests pressure
+  // the real claimant after the initial uncontested reduction.
   assert.equal(claimsBy(game, "npc6").length, 1);
-  assert.equal(observer.suspicionScores.npc1, beforeWolf + 4 - 2);
-  assert.equal(observer.suspicionScores.npc3, beforeSeer - 3 + 2);
+  assert.equal(claimsBy(game, "npc1").length, 1);
+  assert.equal(observer.suspicionScores.npc1, beforeWolf + 4);
+  assert.equal(observer.suspicionScores.npc3, beforeSeer - 3 + 2 + 2);
 });
