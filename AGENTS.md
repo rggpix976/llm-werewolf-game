@@ -30,7 +30,21 @@ This repository is a prototype of an LLM-integrated Werewolf game. As an AI agen
 - `npm run web`: Starts the browser UI.
 - `git diff --check`: Checks for whitespace errors.
 
-## Maintenance
+## Project Memory and Recording
 
-- Update `DEVELOPMENT_STATUS.md` and `CHANGELOG.md` upon completion of a task.
+The files listed under Essential Reading are this project's memory. When
+they conflict with issue or chat context, they take priority.
+
 - Follow existing design decisions documented in `DECISIONS.md`.
+- `DECISIONS.md` records what was decided, and why. When a task involves a
+  design choice that `DECISIONS.md` does not cover, add a new entry (next
+  `D-0xx` number, same format: the decision and its reason) in the same
+  pull request. Never silently diverge from an existing decision; if one
+  must change, add a new entry that explicitly supersedes it.
+- Update `DEVELOPMENT_STATUS.md` and `CHANGELOG.md` upon completion of a
+  task, in the same pull request as the change they describe.
+- `docs/INDEX.md` is a compact index of slices and features: state, last
+  update, and where the detail lives. When a slice starts, changes state,
+  or is merged, update its one-line entry in the same pull request. Keep
+  entries to one line; detail belongs in `DEVELOPMENT_STATUS.md` and
+  `DECISIONS.md`.
