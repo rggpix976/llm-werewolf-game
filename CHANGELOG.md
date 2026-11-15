@@ -219,6 +219,11 @@
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
 
+## 2026-11-15 — Werewolf attack reason label fix
+
+- Fixed a log-only bug found while analysing the user's 2026-11-15 playtest: in `runWerewolfAttack`'s kill branch, the developer log's `reason` was computed after the target had been killed, at which point the claimed seer was already dead — so a kill of the claimed seer was always recorded as `lowest_suspicion_target_to_keep_suspects_alive` instead of `attacked_public_seer_claim`. Attack target selection was never affected. The reason is now decided from the pre-kill state, with an explicit check that the target is the claimed seer.
+- New `tests/attackReasonLabel.test.mjs` adds 2 regression cases: the playtest pattern (the claimed seer is guarded on night 1, killed on night 2, and the log must say `attacked_public_seer_claim`) and a no-claim control that keeps the lowest-suspicion label. Full regression 921/921 and `npm run sample` PASS. No live OpenAI call was made.
+
 ## 2026-11-15 — Vote intention named in target answers (D-026)
 
 - Answers about a specific player now also name the responder's actual vote intention when it is someone else. In the user's 2026-11-15 playtest, NPCs called the seer suspicious in answer to a leading question and then voted for the seer-blacked player — the votes were exactly the suspicion math, but the discussion never surfaced who each NPC meant to execute, because a mentioned-target answer evaluated only the named player. The response builder's mentioned-target branch now appends the existing top-suspect sentence (ranked identically to vote selection) whenever the discussed player is not the top suspect.
