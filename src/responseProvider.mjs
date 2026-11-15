@@ -17,13 +17,10 @@ export class PseudoResponseProvider {
   }
 
   async chooseAction(request) {
-    const preferred = request.candidates.some(({ id }) => id === "counter_claim")
-      ? "counter_claim"
-      : request.candidates.some(({ id }) => id === "claim_seer")
-        ? "claim_seer"
-        : "publish_more";
+    const preference = ["counter_claim_accuse", "counter_claim", "claim_seer", "publish_more_accuse", "publish_more"];
+    const preferred = preference.find((id) => request.candidates.some((candidate) => candidate.id === id));
     return {
-      choiceId: request.candidates.some(({ id }) => id === preferred) ? preferred : "stay_silent",
+      choiceId: preferred ?? "stay_silent",
       providerName: this.name,
       model: "template-v1",
       notes: ["deterministic_pseudo_choice"]

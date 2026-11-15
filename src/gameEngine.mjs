@@ -120,6 +120,48 @@ const NPC_STRUCTURED_LIFECYCLE_SETTLED = "settled";
 const NPC_STRUCTURED_LIFECYCLE_OWNER_LOST = "owner_lost";
 const NPC_STRUCTURED_LIFECYCLE_SETTLEMENT_FAILED = "settlement_failed";
 
+// D-021: when the triggering claim's newest result is a werewolf result on
+// the deciding player himself, the counter / follow-up decision offers two
+// claim shapes (accuse the claimant who blacked him, or publish white
+// results only) instead of the single default shape. A fabricated claim
+// never contains a result about the claimant: a real seer cannot divine
+// themselves.
+function isSelfBlackedClaim(triggeringClaim, actor) {
+  const newest = triggeringClaim?.results?.at(-1);
+  return newest?.result === "werewolf" && newest?.targetId === actor?.id;
+}
+
+function seerClaimCandidates(decisionPoint, selfBlacked) {
+  if (decisionPoint === "follow_up_publication") {
+    return selfBlacked
+      ? [
+          { id: "publish_more_accuse", description: "結果を追加で公開し、自分に黒を出した相手を人狼だと主張する" },
+          { id: "publish_more_deny", description: "結果を追加で公開し、自分への判定には触れず白い結果だけを出す" },
+          { id: "stay_silent", description: "何も公開しない" }
+        ]
+      : [
+          { id: "publish_more", description: "最新の夜について偽の占い結果を一件公開する" },
+          { id: "stay_silent", description: "何も公開しない" }
+        ];
+  }
+  return selfBlacked
+    ? [
+        { id: "counter_claim_accuse", description: "占い師として対抗COし、自分に黒を出した相手を人狼だと主張する結果を公開する" },
+        { id: "counter_claim_deny", description: "占い師として対抗COし、自分への判定には触れず白い結果だけを公開する" },
+        { id: "stay_silent", description: "何も公開しない" }
+      ]
+    : [
+        { id: "counter_claim", description: "今すぐ占い師として対抗COする" },
+        { id: "stay_silent", description: "何も公開しない" }
+      ];
+}
+
+function claimShapeForChoice(choiceId) {
+  if (choiceId?.endsWith("_accuse")) return "accuse";
+  if (choiceId?.endsWith("_deny")) return "deny";
+  return null;
+}
+
 export class WerewolfGame {
   static create(options = {}) {
     const createId = options.createId ?? (() => globalThis.crypto.randomUUID());
@@ -1328,11 +1370,9 @@ export class WerewolfGame {
     const decisionPoint = hasClaim
       ? "follow_up_publication"
       : triggeringClaim ? "first_counter_claim" : "uncontested_first_claim";
-    const candidates = hasClaim
-      ? [{ id: "publish_more", description: "最新の夜について偽の占い結果を一件公開する" }, { id: "stay_silent", description: "何も公開しない" }]
-      : triggeringClaim
-        ? [{ id: "counter_claim", description: "今すぐ占い師として対抗COする" }, { id: "stay_silent", description: "何も公開しない" }]
-        : [{ id: "claim_seer", description: "まだ占い師COがないため今すぐ占い師としてCOする" }, { id: "stay_silent", description: "何も公開しない" }];
+    const candidates = decisionPoint === "uncontested_first_claim"
+      ? [{ id: "claim_seer", description: "まだ占い師COがないため今すぐ占い師としてCOする" }, { id: "stay_silent", description: "何も公開しない" }]
+      : seerClaimCandidates(decisionPoint, isSelfBlackedClaim(triggeringClaim, werewolf));
     const request = buildNpcDecisionRequest(werewolf, this.state, triggeringClaim, candidates, decisionPoint);
     let result = null;
     let fallbackReason = null;
@@ -1346,7 +1386,7 @@ export class WerewolfGame {
     let choiceId = fallbackReason ? "stay_silent" : result.choiceId;
     let claim = null;
     if (choiceId !== "stay_silent") {
-      claim = this.registerFabricatedSeerClaim(werewolf, triggeringClaim, hasClaim, { werewolf: true, uncontested: !triggeringClaim });
+      claim = this.registerFabricatedSeerClaim(werewolf, triggeringClaim, hasClaim, { werewolf: true, uncontested: !triggeringClaim, claimShape: claimShapeForChoice(choiceId) });
       if (!claim) {
         choiceId = "stay_silent";
         fallbackReason = "fabrication_impossible";
@@ -1428,9 +1468,7 @@ export class WerewolfGame {
     if (!madman) return null;
     const hasClaim = madman.publicClaims.some((claim) => claim.role === ROLES.SEER);
     const decisionPoint = hasClaim ? "follow_up_publication" : "first_counter_claim";
-    const candidates = hasClaim
-      ? [{ id: "publish_more", description: "最新の夜について偽の占い結果を一件公開する" }, { id: "stay_silent", description: "何も公開しない" }]
-      : [{ id: "counter_claim", description: "今すぐ占い師として対抗COする" }, { id: "stay_silent", description: "何も公開しない" }];
+    const candidates = seerClaimCandidates(decisionPoint, isSelfBlackedClaim(triggeringClaim, madman));
     const request = buildNpcDecisionRequest(madman, this.state, triggeringClaim, candidates, decisionPoint);
     let result = null;
     let fallbackReason = null;
@@ -1448,13 +1486,14 @@ export class WerewolfGame {
       model: result?.model ?? null, reason: typeof result?.reason === "string" ? result.reason : null
     });
     if (choiceId === "stay_silent") return null;
-    return this.registerFabricatedSeerClaim(madman, triggeringClaim, hasClaim);
+    return this.registerFabricatedSeerClaim(madman, triggeringClaim, hasClaim, { claimShape: claimShapeForChoice(choiceId) });
   }
 
   registerFabricatedSeerClaim(claimant, triggeringClaim, isFollowUp, options = {}) {
     const priorTargets = new Set(claimant.publicClaims.flatMap((claim) => claim.results ?? []).map(({ targetId }) => targetId));
     const newest = triggeringClaim?.results.at(-1);
     const aliveOthers = this.getAlivePlayers().filter((player) => player.id !== claimant.id);
+    const fillerExcludedIds = new Set();
     let newestTarget;
     let newestResult;
     if (options.uncontested) {
@@ -1463,9 +1502,28 @@ export class WerewolfGame {
       newestResult = newestTarget ? "werewolf" : null;
     } else if (!newest) {
       return null;
-    } else if (newest.result === "werewolf") {
+    } else if (newest.result === "werewolf" && newest.targetId !== claimant.id) {
       newestTarget = this.getPlayer(newest.targetId);
       newestResult = "not_werewolf";
+    } else if (newest.result === "werewolf") {
+      // D-021: the newest black is on the claimant himself, so the mirrored
+      // white would be a self-divination, which a real seer can never
+      // produce. The claim shape chosen at the decision point replaces it:
+      // accuse blacks the claimant who blacked him; deny publishes white
+      // results only and never mentions the accuser or the claimant.
+      const accuser = triggeringClaim.actorId ? this.getPlayer(triggeringClaim.actorId) : null;
+      const accuseAvailable = Boolean(accuser?.alive) && !(options.werewolf && accuser.role === ROLES.WEREWOLF);
+      if (options.claimShape === "accuse" && accuseAvailable) {
+        newestTarget = accuser;
+        newestResult = "werewolf";
+      } else if (isFollowUp) {
+        newestTarget = aliveOthers
+          .filter((player) => player.id !== accuser?.id && !priorTargets.has(player.id))
+          .sort((a, b) => a.name.localeCompare(b.name))[0];
+        newestResult = newestTarget ? "not_werewolf" : null;
+      } else if (accuser) {
+        fillerExcludedIds.add(accuser.id);
+      }
     } else {
       const eligible = (player) => player.id !== newest.targetId && (!options.werewolf || player.role !== ROLES.WEREWOLF);
       newestTarget = aliveOthers.filter((player) => eligible(player) && !priorTargets.has(player.id))
@@ -1478,7 +1536,7 @@ export class WerewolfGame {
     if (!isFollowUp) {
       const needed = Math.max(0, this.state.day - 1 - results.length);
       const used = new Set(results.map(({ targetId }) => targetId));
-      results.unshift(...aliveOthers.filter((player) => !used.has(player.id)).sort((a, b) => a.name.localeCompare(b.name)).slice(0, needed)
+      results.unshift(...aliveOthers.filter((player) => !used.has(player.id) && !fillerExcludedIds.has(player.id)).sort((a, b) => a.name.localeCompare(b.name)).slice(0, needed)
         .map((player) => ({ targetId: player.id, result: "not_werewolf" })));
     }
     if (results.length === 0) return null;
