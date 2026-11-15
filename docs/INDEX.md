@@ -22,6 +22,7 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Medium proactive claim in decisive situations | merged | 2026-11-15 | PR #93; DECISIONS.md D-023 |
 | Claimed-player result disclosure and disproven-claim reversal | merged | 2026-11-15 | PR #94; DECISIONS.md D-024, D-025 |
 | Vote intention named in target answers | merged | 2026-11-15 | PR #95; DECISIONS.md D-026 |
+| Disproven-claim liar penalty | in review | 2026-11-15 | DECISIONS.md D-027; DEVELOPMENT_STATUS.md |
 
 Maintenance: update a row in the same pull request that starts, changes, or
 merges the slice (see AGENTS.md, "Project Memory and Recording").
