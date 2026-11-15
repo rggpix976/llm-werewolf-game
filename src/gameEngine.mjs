@@ -187,7 +187,7 @@ export class WerewolfGame {
       alivePlayers: players.map((player) => player.id),
       deadPlayers: [],
       publicInfo: [],
-      claimEffects: [],
+      claimContradictions: {},
       voteHistory: [],
       playerVoteTargetId: null,
       voteResolutionPending: false,
@@ -1138,6 +1138,10 @@ export class WerewolfGame {
         await this.resolveWerewolfSeerDecision(claim, { allowFollowUp: false });
         await this.resolveMadmanSeerDecision(claim);
       }
+      if (candidate.role === ROLES.MEDIUM && claim.results.length > 0) {
+        await this.resolveWerewolfMediumDecision(claim, "rescue_counter_claim");
+        await this.resolveMadmanMediumDecision(claim, "rescue_counter_claim");
+      }
       if (candidate.role === ROLES.KNIGHT && claim.results.length > 0) {
         await this.resolveWerewolfKnightDecision(claim, "rescue_counter_claim");
       }
@@ -1340,7 +1344,9 @@ export class WerewolfGame {
         const fakeClaim = await this.resolveWerewolfKnightDecision(null, "gj_morning_first_claim");
         if (fakeClaim) await this.resolveRealKnightCounterDecision(fakeClaim);
       }
-      await this.resolveMediumClaimDecision();
+      const mediumClaim = await this.resolveMediumClaimDecision();
+      await this.resolveWerewolfMediumDecision(mediumClaim);
+      await this.resolveMadmanMediumDecision(mediumClaim);
     }
 
     return {
@@ -1357,6 +1363,10 @@ export class WerewolfGame {
 
   hasPublicKnightClaim() {
     return this.state.players.some((player) => player.publicClaims.some((claim) => claim.role === ROLES.KNIGHT));
+  }
+
+  hasPublicMediumClaim() {
+    return this.state.players.some((player) => player.publicClaims.some((claim) => claim.role === ROLES.MEDIUM));
   }
 
   async resolveWerewolfSeerDecision(triggeringClaim, { allowFollowUp = true } = {}) {
@@ -1470,6 +1480,7 @@ export class WerewolfGame {
     const madman = this.state.players.find((player) => player.role === ROLES.MADMAN && player.alive);
     if (!madman) return null;
     const hasClaim = madman.publicClaims.some((claim) => claim.role === ROLES.SEER);
+    if (!hasClaim && madman.publicClaims.length > 0) return null;
     const decisionPoint = hasClaim ? "follow_up_publication" : "first_counter_claim";
     const candidates = seerClaimCandidates(decisionPoint, isSelfBlackedClaim(triggeringClaim, madman));
     const request = buildNpcDecisionRequest(madman, this.state, triggeringClaim, candidates, decisionPoint);
@@ -1490,6 +1501,87 @@ export class WerewolfGame {
     });
     if (choiceId === "stay_silent") return null;
     return this.registerFabricatedSeerClaim(madman, triggeringClaim, hasClaim, { claimShape: claimShapeForChoice(choiceId) });
+  }
+
+  async resolveWerewolfMediumDecision(triggeringClaim, forcedDecisionPoint = null) {
+    if (this.state.config.scenario !== "village9") return null;
+    const wolves = this.state.players.filter((player) => player.role === ROLES.WEREWOLF);
+    const claimant = wolves.find((player) => player.publicClaims.some((claim) => claim.role === ROLES.MEDIUM));
+    const actor = claimant ?? wolves.find((player) => player.alive && player.publicClaims.length === 0);
+    return this.resolveFakeMediumDecision(actor, claimant, triggeringClaim, "werewolf", forcedDecisionPoint);
+  }
+
+  async resolveMadmanMediumDecision(triggeringClaim, forcedDecisionPoint = null) {
+    const actor = this.state.players.find((player) => player.role === ROLES.MADMAN && player.alive);
+    const claimant = actor?.publicClaims.some((claim) => claim.role === ROLES.MEDIUM) ? actor : null;
+    if (!claimant && actor?.publicClaims.length) return null;
+    return this.resolveFakeMediumDecision(actor, claimant, triggeringClaim, "madman", forcedDecisionPoint);
+  }
+
+  async resolveFakeMediumDecision(actor, claimant, triggeringClaim, kind, forcedDecisionPoint) {
+    if (this.state.config.scenario !== "village9" || !actor?.alive) return null;
+    const executions = this.executedPlayerIds();
+    const published = new Set((claimant?.publicClaims ?? []).flatMap((claim) => claim.results ?? []).map((r) => r.targetId));
+    let decisionPoint = forcedDecisionPoint;
+    if (!decisionPoint) {
+      if (claimant) {
+        if (!executions.some((id) => !published.has(id))) return null;
+        decisionPoint = "follow_up_publication";
+      } else if (triggeringClaim || this.hasPublicMediumClaim()) decisionPoint = "counter_claim";
+      else if (executions.length) decisionPoint = "preemptive_first_claim";
+      else return null;
+    }
+    const action = decisionPoint === "follow_up_publication" ? "publish_more"
+      : decisionPoint === "preemptive_first_claim" ? "claim_medium" : "counter_claim";
+    const candidates = [{ id: action, description: "霊媒師として結果を公開する" }, { id: "stay_silent", description: "何も公開しない" }];
+    const { choiceId, fallbackReason, result } = await this.chooseSafeAction(actor, triggeringClaim, candidates, decisionPoint);
+    const claim = choiceId === action ? this.registerFabricatedMediumClaim(actor) : null;
+    this.addDeveloperLog(`${kind}_medium_decision`, {
+      [`${kind}Id`]: actor.id, decisionPoint, candidates: candidates.map((c) => c.id),
+      choiceId: claim ? choiceId : "stay_silent", fallbackReason: choiceId !== "stay_silent" && !claim ? "fabrication_impossible" : fallbackReason,
+      providerName: result?.providerName ?? getProviderName(this.responseProvider), model: result?.model ?? null,
+      reason: typeof result?.reason === "string" ? result.reason : null
+    });
+    return claim;
+  }
+
+  executedPlayerIds() {
+    return this.state.voteHistory.map((vote) => vote.executedId).filter(Boolean);
+  }
+
+  registerFabricatedMediumClaim(claimant) {
+    const oldResults = claimant.publicClaims.filter((claim) => claim.role === ROLES.MEDIUM).flatMap((claim) => claim.results ?? []);
+    const published = new Set(oldResults.map((result) => result.targetId));
+    const candidates = this.executedPlayerIds().filter((id) => !published.has(id)).map((targetId, order) => {
+      const seerResult = this.state.publicInfo
+        .filter((info) => info.type === "public_claim" && info.claim?.role === ROLES.SEER)
+        .flatMap((info) => info.claim.results ?? []).find((result) => result.targetId === targetId);
+      const result = seerResult ? (seerResult.result === "werewolf" ? "not_werewolf" : "werewolf")
+        : (this.getPlayer(targetId)?.role === ROLES.WEREWOLF ? "not_werewolf" : "werewolf");
+      return { targetId, result, contradictionBlack: Boolean(seerResult && result === "werewolf"), order };
+    });
+    if (!candidates.length) return null;
+    let blackSlots = oldResults.some((result) => result.result === "werewolf") ? 0 : 1;
+    for (const item of [...candidates].sort((a, b) => Number(b.contradictionBlack) - Number(a.contradictionBlack) || a.order - b.order)) {
+      if (item.result === "werewolf") {
+        if (blackSlots) blackSlots -= 1;
+        else item.result = "not_werewolf";
+      }
+    }
+    const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
+    const followUp = oldResults.length > 0;
+    const lines = results.map(({ targetId, result }) => `${this.getPlayer(targetId).name}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
+    const text = `${followUp ? "霊媒結果を追加で公開します。" : "霊媒師COします。"}${lines.join("、")}です。`;
+    const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.MEDIUM, results };
+    this.addPlayerLog(`${claimant.name}: ${text}`);
+    this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });
+    claimant.publicClaims.push(claim);
+    this.addPublicInfo({ type: "public_claim", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}が${publicRoleName(ROLES.MEDIUM)}COをした。`, claim });
+    claimant.privateMemory.push({ day: this.state.day, type: "fabricated_medium_claim", results: structuredClone(results) });
+    this.addDeveloperLog("public_claim_registered", claim);
+    this.addDeveloperLog("fabricated_medium_claim", { claimantId: claimant.id, results });
+    this.applyClaimToSuspicion(claim);
+    return claim;
   }
 
   registerFabricatedSeerClaim(claimant, triggeringClaim, isFollowUp, options = {}) {
@@ -1607,7 +1699,7 @@ export class WerewolfGame {
   // is contested instead: both claimants become more suspicious and the
   // results count for less.
   applyClaimToSuspicion(claim) {
-    const rivalSeerClaimantIds = (claim.role === ROLES.SEER || claim.role === ROLES.KNIGHT)
+    const rivalSeerClaimantIds = (claim.role === ROLES.SEER || claim.role === ROLES.KNIGHT || claim.role === ROLES.MEDIUM)
       ? [...new Set(
         this.state.publicInfo
           .filter((info) => info.type === "public_claim" && info.claim?.role === claim.role && info.actorId !== claim.actorId)
@@ -1618,10 +1710,8 @@ export class WerewolfGame {
     const claimantDelta = contested ? 2 : -3;
     const resultStrength = contested ? 2 : 4;
 
-    const applied = [];
     const applyDelta = (npc, targetId, delta) => {
       npc.suspicionScores[targetId] = (npc.suspicionScores[targetId] ?? 0) + delta;
-      applied.push({ observerId: npc.id, targetId, delta });
     };
 
     for (const npc of this.getAlivePlayers()) {
@@ -1652,84 +1742,38 @@ export class WerewolfGame {
       resultStrength
     });
 
-    // D-025: remember exactly what a seer claim moved, so that a later
-    // medium result disproving the claim can undo precisely those shifts.
-    if (claim.role === ROLES.SEER) {
-      (this.state.claimEffects ??= []).push({
-        actorId: claim.actorId,
-        day: claim.day,
-        results: (claim.results ?? []).map(({ targetId, result }) => ({ targetId, result })),
-        applied,
-        disproven: false
-      });
-    }
-    if (claim.role === ROLES.MEDIUM) {
-      this.reverseDisprovenSeerClaims(claim);
-    }
+    this.applyClaimContradictions(claim);
   }
 
-  // D-025: medium results are always genuine (no role fakes the medium),
-  // so a medium result that contradicts a public seer claim's result for
-  // the same target proves that seer claim fabricated. Undo every
-  // suspicion shift the disproven claim applied when it registered —
-  // the claimant's credibility shift, the contested-claim bumps and the
-  // per-result shifts — exactly once per claim.
-  reverseDisprovenSeerClaims(mediumClaim) {
-    for (const { targetId, result } of mediumClaim.results ?? []) {
-      for (const seerPlayer of this.state.players) {
-        if (seerPlayer.id === mediumClaim.actorId) {
-          continue;
-        }
-        for (const seerClaim of seerPlayer.publicClaims) {
-          if (seerClaim.role !== ROLES.SEER) {
-            continue;
-          }
-          const claimEntry = (seerClaim.results ?? []).find((entry) => entry.targetId === targetId && entry.result !== result);
-          if (!claimEntry) {
-            continue;
-          }
-          const record = (this.state.claimEffects ?? []).find((entry) => !entry.disproven
-            && entry.actorId === seerPlayer.id && entry.day === seerClaim.day
-            && entry.results.some((entryResult) => entryResult.targetId === targetId && entryResult.result !== result));
-          if (!record) {
-            continue;
-          }
-          record.disproven = true;
-          for (const { observerId, targetId: scoredId, delta } of record.applied) {
-            const observer = this.state.players.find((player) => player.id === observerId);
-            if (!observer?.alive) {
-              continue;
-            }
-            observer.suspicionScores[scoredId] = (observer.suspicionScores[scoredId] ?? 0) - delta;
-          }
-          // D-027: reversal alone returned the disproven claimant to
-          // their pre-claim standing, so a proven liar was treated as an
-          // ordinary gray (in the user's 2026-11-15 playtest the proven
-          // fake seer was never executed while quieter citizens were).
-          // A proven lie is itself evidence: every living observer adds
-          // suspicion toward the claimant, on the scale of one black
-          // seer result.
-          const liarPenalty = 4;
-          for (const observer of this.state.players) {
-            if (!observer.alive || observer.id === seerPlayer.id) {
-              continue;
-            }
-            observer.suspicionScores[seerPlayer.id] = (observer.suspicionScores[seerPlayer.id] ?? 0) + liarPenalty;
-          }
-          const target = this.state.players.find((player) => player.id === targetId);
-          this.addPlayerLog(`霊媒結果により、${seerPlayer.name}の占い結果「${target?.name ?? targetId}は${claimEntry.result === "werewolf" ? "人狼" : "人狼ではない"}」は誤りと判明した。`);
-          this.addDeveloperLog("claim_disproven", {
-            claimantId: seerPlayer.id,
-            claimDay: seerClaim.day,
-            mediumId: mediumClaim.actorId,
-            targetId,
-            claimResult: claimEntry.result,
-            mediumResult: result,
-            reversedShifts: record.applied.length,
-            liarPenalty
-          });
+  applyClaimContradictions(claim) {
+    for (const { targetId } of claim.results ?? []) {
+      const entries = [];
+      for (const player of this.state.players) for (const publicClaim of player.publicClaims) {
+        if (publicClaim.role !== ROLES.SEER && publicClaim.role !== ROLES.MEDIUM) continue;
+        const result = (publicClaim.results ?? []).find((item) => item.targetId === targetId)?.result;
+        if (result && !entries.some((entry) => entry.claimantId === publicClaim.actorId)) entries.push({ claimantId: publicClaim.actorId, result, role: publicClaim.role });
+      }
+      if (!entries.some((entry) => entry.role === ROLES.MEDIUM) || new Set(entries.map((entry) => entry.result)).size < 2) continue;
+      const record = (this.state.claimContradictions[targetId] ??= { involvedClaimantIds: [], chargedClaimantIds: [], announced: false });
+      record.involvedClaimantIds = [...new Set([...record.involvedClaimantIds, ...entries.map((entry) => entry.claimantId)])];
+      const charged = [];
+      for (const entry of entries) {
+        if (record.chargedClaimantIds.includes(entry.claimantId)) continue;
+        record.chargedClaimantIds.push(entry.claimantId);
+        const claimant = this.getPlayer(entry.claimantId);
+        if (!claimant?.alive) continue;
+        charged.push(entry.claimantId);
+        for (const observer of this.getAlivePlayers()) if (observer.id !== entry.claimantId) {
+          observer.suspicionScores[entry.claimantId] = (observer.suspicionScores[entry.claimantId] ?? 0) + 4;
         }
       }
+      if (!record.announced) {
+        const first = entries[0]; const other = entries.find((entry) => entry.result !== first.result);
+        const target = this.getPlayer(targetId);
+        this.addPlayerLog(`${target?.name ?? targetId}について、${this.getPlayer(first.claimantId)?.name}の結果「${first.result === "werewolf" ? "人狼" : "人狼ではない"}」と${this.getPlayer(other.claimantId)?.name}の結果「${other.result === "werewolf" ? "人狼" : "人狼ではない"}」が食い違っている。`);
+        record.announced = true;
+      }
+      this.addDeveloperLog("claim_contradiction", { targetId, claimants: entries, chargedClaimantIds: charged });
     }
   }
 

@@ -3,85 +3,42 @@ import assert from "node:assert/strict";
 import { WerewolfGame } from "../src/gameEngine.mjs";
 import { PseudoResponseProvider } from "../src/responseProvider.mjs";
 
-// D-027: when a medium result proves a seer claim fabricated, undoing
-// that claim's suspicion shifts (D-025) is not enough — the proven liar
-// returned to their pre-claim standing and was treated as an ordinary
-// gray. The disproof now also adds a fixed suspicion penalty toward
-// the claimant in every living observer's scores.
-// Fixed village9 roles: npc1/npc2 werewolf, npc3 seer, npc4 medium.
-
-function village9() {
-  return WerewolfGame.create({ seed: 9, scenario: "village9", shuffleRoles: false, responseProvider: new PseudoResponseProvider() });
+function game() { return WerewolfGame.create({ seed: 9, scenario: "village9", shuffleRoles: false, responseProvider: new PseudoResponseProvider() }); }
+function claim(g, id, role, targetId, result) {
+  const player = g.getPlayer(id); const value = { day: g.state.day, actorId: id, actorName: player.name, role, results: [{ targetId, result }] };
+  player.publicClaims.push(value); g.state.publicInfo.push({ type: "public_claim", actorId: id, claim: value }); g.applyClaimToSuspicion(value); return value;
 }
+function score(g, observer, target) { return g.getPlayer(observer).suspicionScores[target] ?? 0; }
 
-function registerClaim(game, claimant, role, results, day) {
-  const claim = { day, actorId: claimant.id, actorName: claimant.name, role, results };
-  claimant.publicClaims.push(claim);
-  game.state.publicInfo.push({ type: "public_claim", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}がCOをした。`, claim });
-  game.applyClaimToSuspicion(claim);
-  return claim;
-}
-
-function score(game, observerId, targetId) {
-  return game.getPlayer(observerId).suspicionScores[targetId] ?? 0;
-}
-
-function disproofs(game) {
-  return game.state.developerLog.filter((entry) => entry.kind === "claim_disproven");
-}
-
-// npc1 (werewolf) fake-claims seer with a black on npc7; npc7 is
-// executed; the medium (npc4) then publishes npc7 = not_werewolf.
-function disproveFakeClaim(game) {
-  registerClaim(game, game.getPlayer("npc1"), "seer", [{ targetId: "npc7", result: "werewolf" }], 2);
-  game.killPlayer("npc7", "execution");
-  registerClaim(game, game.getPlayer("npc4"), "medium", [{ targetId: "npc7", result: "not_werewolf" }], 3);
-}
-
-test("a disproven claimant gains suspicion on top of the reversal", () => {
-  const game = village9();
-  const baseClaimant = score(game, "npc3", "npc1");
-  const baseTarget = score(game, "npc3", "npc7");
-  disproveFakeClaim(game);
-  // The claim's own shifts are undone (target back to baseline) and the
-  // claimant ends up ABOVE baseline by the penalty, not merely restored.
-  assert.equal(score(game, "npc3", "npc7"), baseTarget);
-  assert.equal(score(game, "npc3", "npc1"), baseClaimant + 4);
-  assert.equal(disproofs(game).length, 1);
-  assert.equal(disproofs(game)[0].detail.liarPenalty, 4);
+test("medium-seer contradiction charges both claimants once without reversing the seer result", () => {
+  const g = game(); const baseSeer = score(g, "npc5", "npc3"); const baseMedium = score(g, "npc5", "npc4"); const baseTarget = score(g, "npc5", "npc7");
+  claim(g, "npc3", "seer", "npc7", "werewolf");
+  claim(g, "npc4", "medium", "npc7", "not_werewolf");
+  assert.equal(score(g, "npc5", "npc3"), baseSeer + 1); // -3 credibility +4 dispute
+  assert.equal(score(g, "npc5", "npc7"), baseTarget + 4); // original black remains
+  assert.equal(score(g, "npc5", "npc4"), baseMedium + 1); // baseline 0, -3 +4
+  claim(g, "npc4", "medium", "npc7", "not_werewolf");
+  assert.equal(score(g, "npc5", "npc3"), baseSeer + 1);
+  assert.equal(g.state.developerLog.filter((e) => e.kind === "claim_disproven").length, 0);
+  assert.ok(g.state.developerLog.some((e) => e.kind === "claim_contradiction"));
+  assert.ok(g.state.playerLog.some((e) => e.message.includes("食い違っている")));
+  assert.ok(g.state.playerLog.every((e) => !e.message.includes("誤りと判明")));
 });
 
-test("the penalty is applied exactly once per disproven claim", () => {
-  const game = village9();
-  const baseClaimant = score(game, "npc3", "npc1");
-  disproveFakeClaim(game);
-  // A second medium publication repeating the same result cannot
-  // disprove (and penalise) the same claim record again.
-  registerClaim(game, game.getPlayer("npc4"), "medium", [{ targetId: "npc7", result: "not_werewolf" }], 3);
-  assert.equal(score(game, "npc3", "npc1"), baseClaimant + 4);
-  assert.equal(disproofs(game).length, 1);
+test("medium-medium dispute charges each claimant and agreements do nothing", () => {
+  const g = game(); const base = score(g, "npc5", "npc4");
+  claim(g, "npc4", "medium", "npc7", "werewolf");
+  claim(g, "npc6", "medium", "npc7", "werewolf");
+  assert.equal(score(g, "npc5", "npc4"), base - 1); // contested adds two, but no dispute
+  claim(g, "npc8", "medium", "npc7", "not_werewolf");
+  assert.equal(score(g, "npc5", "npc4"), base + 5);
+  assert.deepEqual(new Set(g.state.claimContradictions.npc7.chargedClaimantIds), new Set(["npc4", "npc6", "npc8"]));
 });
 
-test("dead observers gain no penalty, and the claimant is not self-penalised", () => {
-  const game = village9();
-  const deadObserverBase = score(game, "npc2", "npc1");
-  registerClaim(game, game.getPlayer("npc1"), "seer", [{ targetId: "npc7", result: "werewolf" }], 2);
-  game.killPlayer("npc7", "execution");
-  game.killPlayer("npc2", "execution");
-  const afterClaim = score(game, "npc2", "npc1");
-  registerClaim(game, game.getPlayer("npc4"), "medium", [{ targetId: "npc7", result: "not_werewolf" }], 3);
-  // The dead observer keeps the claim's shift (reversal also skips the
-  // dead), and the claimant's own scores are untouched.
-  assert.equal(score(game, "npc2", "npc1"), afterClaim);
-  assert.notEqual(afterClaim, deadObserverBase);
-  assert.equal(score(game, "npc1", "npc1"), 0);
-});
-
-test("after a disproof the proven liar becomes the observers' vote target", () => {
-  const game = village9();
-  disproveFakeClaim(game);
-  // npc3's top score is now the disproven claimant, so that is where
-  // their vote goes — the playtest-12 gap, closed.
-  assert.equal(game.chooseVote(game.getPlayer("npc3")).targetId, "npc1");
-  assert.equal(game.chooseVote(game.getPlayer("npc4")).targetId, "npc1");
+test("a dead claimant is involved but not charged, and another target charges separately", () => {
+  const g = game(); claim(g, "npc3", "seer", "npc7", "werewolf"); g.killPlayer("npc3", "execution");
+  claim(g, "npc4", "medium", "npc7", "not_werewolf");
+  assert.ok(g.state.claimContradictions.npc7.involvedClaimantIds.includes("npc3"));
+  claim(g, "npc4", "medium", "npc8", "werewolf"); claim(g, "npc6", "seer", "npc8", "not_werewolf");
+  assert.ok(g.state.claimContradictions.npc8.chargedClaimantIds.includes("npc4"));
 });

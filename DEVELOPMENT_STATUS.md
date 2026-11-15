@@ -1,5 +1,9 @@
 # Development Status
 
+## Phase 6 fake-medium and contradiction slice
+
+D-028 is implemented for review. Werewolves and the madman can make privacy-safe, provider-selected medium claims in `village9`; the engine owns fabrication and consistency. Medium-involved result disagreements now charge every living involved claimant symmetrically once per target and never reverse prior claim effects. D-025 and D-027 are superseded.
+
 ## Evidence text fix
 
 Fixed the mid-game "no response" failures from the 2026-11-13 real-AI playtest: the `knight_guard` and `medium_result` knownInfo entries carried no `text`, so when a question mentioning the relevant player selected one as private stance evidence, the server-side request validator rejected the whole NPC response request (`bad_request: context.privateStanceEvidence[0].text must be a string`) and the NPC failed to answer. In the playtest this silenced the knight three times in a row on day 5 (every question mentioned the player he had guarded on night 4). Both entry types now record a `text`, matching the seer_result entry. New `tests/evidenceText.test.mjs` adds 2 cases; full regression passes and `npm run sample` PASS.
