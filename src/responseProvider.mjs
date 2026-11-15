@@ -17,6 +17,15 @@ export class PseudoResponseProvider {
   }
 
   async chooseAction(request) {
+    const knightAttack = request.candidates.find((candidate) => candidate.id.startsWith("attack_knight_"));
+    if (knightAttack) {
+      return {
+        choiceId: knightAttack.id,
+        providerName: this.name,
+        model: "template-v1",
+        notes: ["deterministic_pseudo_choice"]
+      };
+    }
     const preference = ["counter_claim_accuse", "counter_claim", "claim_seer", "publish_more_accuse", "publish_more"];
     const preferred = preference.find((id) => request.candidates.some((candidate) => candidate.id === id));
     return {

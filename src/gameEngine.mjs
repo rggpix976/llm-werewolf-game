@@ -1314,7 +1314,8 @@ export class WerewolfGame {
     const privateKnightResult = this.runKnightAction();
 
     this.setPhase("werewolf_attack");
-    const attackResult = this.runWerewolfAttack(privateKnightResult?.targetId);
+    const decidedAttackTargetId = await this.resolveWerewolfAttackDecision();
+    const attackResult = this.runWerewolfAttack(privateKnightResult?.targetId, decidedAttackTargetId);
 
     this.setPhase("win_check");
     this.checkWin("after_werewolf_attack");
@@ -1794,7 +1795,42 @@ export class WerewolfGame {
     }
   }
 
-  runWerewolfAttack(guardedTargetId = null) {
+  // D-022: on a night when a knight claim is public, the acting werewolf
+  // chooses whether to attack a knight claimant or attack as usual. The
+  // request carries public claims only (never the night's guard target);
+  // any provider failure falls back to the usual targeting rule.
+  async resolveWerewolfAttackDecision() {
+    if (this.state.config.scenario !== "village9") return null;
+    const werewolf = this.state.players.find((player) => player.role === ROLES.WEREWOLF && player.alive);
+    if (!werewolf) return null;
+    const knightClaims = this.state.publicInfo.filter((info) => info.type === "public_claim" && info.claim?.role === ROLES.KNIGHT);
+    const claimantIds = [];
+    for (const info of knightClaims) {
+      if (!claimantIds.includes(info.actorId)) claimantIds.push(info.actorId);
+    }
+    const claimants = claimantIds
+      .map((id) => this.getPlayer(id))
+      .filter((player) => player?.alive && player.id !== werewolf.id);
+    if (!claimants.length) return null;
+    const candidates = [
+      ...claimants.map((player) => ({ id: `attack_knight_${player.id}`, description: `騎士COしている${player.name}を襲撃する` })),
+      { id: "attack_as_usual", description: "騎士COの相手は狙わず、いつも通りの基準で襲撃する" }
+    ];
+    const triggeringClaim = knightClaims.find((info) => info.actorId === claimants[0].id)?.claim ?? null;
+    const { choiceId, fallbackReason, result } = await this.chooseSafeAction(werewolf, triggeringClaim, candidates, "night_attack_target");
+    const chosen = claimants.find((player) => `attack_knight_${player.id}` === choiceId) ?? null;
+    this.addDeveloperLog("werewolf_attack_decision", {
+      werewolfId: werewolf.id, decisionPoint: "night_attack_target",
+      candidates: candidates.map(({ id }) => id),
+      choiceId: chosen ? choiceId : "attack_as_usual",
+      fallbackReason, providerName: result?.providerName ?? getProviderName(this.responseProvider),
+      model: result?.model ?? null, reason: typeof result?.reason === "string" ? result.reason : null,
+      targetId: chosen?.id ?? null
+    });
+    return chosen?.id ?? null;
+  }
+
+  runWerewolfAttack(guardedTargetId = null, decidedTargetId = null) {
     const werewolves = this.state.players.filter((player) => player.role === ROLES.WEREWOLF && player.alive);
     if (!werewolves.length) {
       this.addDeveloperLog("werewolf_attack", {
@@ -1816,19 +1852,20 @@ export class WerewolfGame {
 
     const publicSeerClaim = this.state.publicInfo.find((info) => info.type === "public_claim" && info.claim?.role === ROLES.SEER);
     const claimedSeer = publicSeerClaim ? this.getPlayer(publicSeerClaim.actorId) : null;
-    const target = claimedSeer?.alive
+    const decidedTarget = decidedTargetId ? candidates.find((player) => player.id === decidedTargetId) : null;
+    const target = decidedTarget ?? (claimedSeer?.alive
       ? claimedSeer
       : candidates
         .map((candidate) => ({
           candidate,
           score: werewolf.suspicionScores[candidate.id] ?? 0
         }))
-        .sort((a, b) => a.score - b.score || a.candidate.name.localeCompare(b.candidate.name))[0].candidate;
+        .sort((a, b) => a.score - b.score || a.candidate.name.localeCompare(b.candidate.name))[0].candidate);
 
     if (target.id === guardedTargetId) {
       this.addPlayerLog("夜が明けました。昨夜の犠牲者はいませんでした。");
       this.addPublicInfo({ type: "night_no_death", text: "昨夜の犠牲者はいなかった。" });
-      this.addDeveloperLog("werewolf_attack", { werewolfId: werewolf.id, targetId: target.id, guarded: true });
+      this.addDeveloperLog("werewolf_attack", { werewolfId: werewolf.id, targetId: target.id, guarded: true, ...(decidedTarget ? { reason: "attacked_public_knight_claim" } : {}) });
       return { werewolfId: werewolf.id, prevented: true };
     }
     this.killPlayer(target.id, "werewolf_attack");
@@ -1845,7 +1882,7 @@ export class WerewolfGame {
       targetId: target.id,
       targetName: target.name,
       targetRole: target.role,
-      reason: claimedSeer?.alive ? "attacked_public_seer_claim" : "lowest_suspicion_target_to_keep_suspects_alive"
+      reason: decidedTarget ? "attacked_public_knight_claim" : claimedSeer?.alive ? "attacked_public_seer_claim" : "lowest_suspicion_target_to_keep_suspects_alive"
     });
 
     return {
