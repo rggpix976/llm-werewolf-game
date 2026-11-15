@@ -219,6 +219,12 @@
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
 
+## 2026-11-15 — Medium proactive claim in decisive situations (D-023)
+
+- Added a provider-selected proactive publication for the medium, gated on a decisive situation: an executed player had been blacked by a public seer claim (registered no later than the execution day) and the medium still holds that result unpublished. Previously the medium could only claim when asked or when rescue-claiming, so a game-deciding result — in the user's 2026-11-15 playtest, a werewolf result on the previous day's executee — could stay buried all game. A white result exposes the claiming "seer" as fake; a black result corroborates the claim.
+- The decision (`claim_medium` / `stay_silent`) runs at day start after the seer-claim decisions, publishes all unpublished medium results through the existing claim registration with the ask-path wording, and falls back to silence on any provider failure; the pseudo provider deterministically publishes. Mornings without a decisive result make no decision call. Decision-request goals are now village-aligned for the medium instead of the wolf-aligned shared fallback.
+- New `tests/mediumProactiveClaim.test.mjs` adds 10 cases (decisive white/black publication, non-decisive and post-execution-claim suppression, already-published suppression, silence and error fallbacks, dead medium, request goals/privacy, runNight integration, five-player exclusion). Full regression 905/905 and `npm run sample` PASS. No live OpenAI call was made.
+
 ## 2026-11-15 — Werewolf attack decision against a claimed knight (D-022)
 
 - Added a provider-selected attack decision for the acting werewolf on nights when a knight claim is public (`village9`). Previously the targeting rule (claimed seer first, else lowest suspicion) never considered knight claims, so a claimed knight — who can never guard themselves — was untouchable at night (the user's 2026-11-15 playtest, where the claimed knight was passed over on both nights while guarding successfully twice).
