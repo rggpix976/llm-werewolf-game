@@ -13,6 +13,18 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   const privateKnownEvidence = selectPrivateKnownInfoForStance(npc, mentionedIds);
   const topSuspect = chooseTopSuspect(npc, gameState);
   const intent = classifyIntent(playerInput);
+  // D-024: direct result questions to a player who has already claimed
+  // ("結果を教えて", "GJ先は？") carry no role keyword, so they never
+  // reached the claim path and fresh results stayed unpublished. For an
+  // already-claimed responder, result-seeking phrasing also runs the
+  // claim builder; when nothing fresh remains, the question falls
+  // through to the ordinary branches instead of the claim deflection.
+  const resultQuestionToClaimed = !intent.asksRoleOrClaim && npc.publicClaims.length > 0
+    && containsAny(playerInput, ["結果", "GJ", "gj", "護衛", "守った", "占った"]);
+  const precomputedClaim = (intent.asksRoleOrClaim || resultQuestionToClaimed)
+    ? maybeCreateRoleClaim(npc, gameState)
+    : null;
+  const claimQuestion = intent.asksRoleOrClaim || Boolean(precomputedClaim);
 
   let publicClaim = null;
   let text;
@@ -32,8 +44,8 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
     } else {
       evidenceUsed.push("hiddenInfo:self_role used only to answer direct identity question");
     }
-  } else if (intent.asksRoleOrClaim) {
-    const claimResult = maybeCreateRoleClaim(npc, gameState);
+  } else if (claimQuestion) {
+    const claimResult = precomputedClaim;
     if (claimResult) {
       text = claimResult.text;
       publicClaim = claimResult.publicClaim;

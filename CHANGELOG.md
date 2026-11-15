@@ -219,6 +219,12 @@
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
 
+## 2026-11-15 — Claimed-player result disclosure and disproven-claim reversal (D-024, D-025)
+
+- Asking an already-claimed player directly for a result ("霊能結果を教えて", "GJ先教えて") now publishes fresh results or guard history: disclosure was previously gated on role keywords, so such questions got only deflection and the new information never surfaced (observed in the user's 2026-11-15 playtest). Result-seeking phrasing runs the claim builder for claimed responders only, and falls through to ordinary answers when nothing fresh remains; unclaimed players still never claim from a result question alone.
+- A medium result that disproves a public seer claim now undoes that claim's suspicion effects. Seer-claim registrations record the exact per-observer deltas they applied (claimant shift, contested rival bumps, per-result shifts) in `state.claimEffects`; because medium results are always genuine, a contradiction proves the seer claim fabricated, and all of its recorded shifts are inverted exactly once, with a `claim_disproven` developer event and a player-log notice naming the wrong result. Agreeing medium results change nothing. This resolves the consideration item raised by the user on 2026-11-13.
+- New `tests/claimDisclosureAndDisproof.test.mjs` adds 9 cases (claimed medium/knight direct-question disclosure, unclaimed scope guard, fall-through with nothing fresh, uncontested and contested reversal math, agreement no-op, reverse-only-once, proactive-medium integration). Full regression 914/914 and `npm run sample` PASS. No live OpenAI call was made.
+
 ## 2026-11-15 — Medium proactive claim in decisive situations (D-023)
 
 - Added a provider-selected proactive publication for the medium, gated on a decisive situation: an executed player had been blacked by a public seer claim (registered no later than the execution day) and the medium still holds that result unpublished. Previously the medium could only claim when asked or when rescue-claiming, so a game-deciding result — in the user's 2026-11-15 playtest, a werewolf result on the previous day's executee — could stay buried all game. A white result exposes the claiming "seer" as fake; a black result corroborates the claim.
