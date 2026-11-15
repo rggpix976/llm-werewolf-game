@@ -187,6 +187,7 @@ export class WerewolfGame {
       alivePlayers: players.map((player) => player.id),
       deadPlayers: [],
       publicInfo: [],
+      claimEffects: [],
       voteHistory: [],
       playerVoteTargetId: null,
       voteResolutionPending: false,
@@ -1617,23 +1618,29 @@ export class WerewolfGame {
     const claimantDelta = contested ? 2 : -3;
     const resultStrength = contested ? 2 : 4;
 
+    const applied = [];
+    const applyDelta = (npc, targetId, delta) => {
+      npc.suspicionScores[targetId] = (npc.suspicionScores[targetId] ?? 0) + delta;
+      applied.push({ observerId: npc.id, targetId, delta });
+    };
+
     for (const npc of this.getAlivePlayers()) {
       if (npc.id === claim.actorId) {
         continue;
       }
-      npc.suspicionScores[claim.actorId] = (npc.suspicionScores[claim.actorId] ?? 0) + claimantDelta;
+      applyDelta(npc, claim.actorId, claimantDelta);
       for (const rivalId of rivalSeerClaimantIds) {
         if (rivalId === npc.id) {
           continue;
         }
-        npc.suspicionScores[rivalId] = (npc.suspicionScores[rivalId] ?? 0) + 2;
+        applyDelta(npc, rivalId, 2);
       }
       for (const { targetId, result } of claim.role === ROLES.SEER ? (claim.results ?? []) : []) {
         if (targetId === npc.id) {
           continue;
         }
         const delta = result === "werewolf" ? resultStrength : -resultStrength;
-        npc.suspicionScores[targetId] = (npc.suspicionScores[targetId] ?? 0) + delta;
+        applyDelta(npc, targetId, delta);
       }
     }
 
@@ -1644,6 +1651,71 @@ export class WerewolfGame {
       claimantDelta,
       resultStrength
     });
+
+    // D-025: remember exactly what a seer claim moved, so that a later
+    // medium result disproving the claim can undo precisely those shifts.
+    if (claim.role === ROLES.SEER) {
+      (this.state.claimEffects ??= []).push({
+        actorId: claim.actorId,
+        day: claim.day,
+        results: (claim.results ?? []).map(({ targetId, result }) => ({ targetId, result })),
+        applied,
+        disproven: false
+      });
+    }
+    if (claim.role === ROLES.MEDIUM) {
+      this.reverseDisprovenSeerClaims(claim);
+    }
+  }
+
+  // D-025: medium results are always genuine (no role fakes the medium),
+  // so a medium result that contradicts a public seer claim's result for
+  // the same target proves that seer claim fabricated. Undo every
+  // suspicion shift the disproven claim applied when it registered —
+  // the claimant's credibility shift, the contested-claim bumps and the
+  // per-result shifts — exactly once per claim.
+  reverseDisprovenSeerClaims(mediumClaim) {
+    for (const { targetId, result } of mediumClaim.results ?? []) {
+      for (const seerPlayer of this.state.players) {
+        if (seerPlayer.id === mediumClaim.actorId) {
+          continue;
+        }
+        for (const seerClaim of seerPlayer.publicClaims) {
+          if (seerClaim.role !== ROLES.SEER) {
+            continue;
+          }
+          const claimEntry = (seerClaim.results ?? []).find((entry) => entry.targetId === targetId && entry.result !== result);
+          if (!claimEntry) {
+            continue;
+          }
+          const record = (this.state.claimEffects ?? []).find((entry) => !entry.disproven
+            && entry.actorId === seerPlayer.id && entry.day === seerClaim.day
+            && entry.results.some((entryResult) => entryResult.targetId === targetId && entryResult.result !== result));
+          if (!record) {
+            continue;
+          }
+          record.disproven = true;
+          for (const { observerId, targetId: scoredId, delta } of record.applied) {
+            const observer = this.state.players.find((player) => player.id === observerId);
+            if (!observer?.alive) {
+              continue;
+            }
+            observer.suspicionScores[scoredId] = (observer.suspicionScores[scoredId] ?? 0) - delta;
+          }
+          const target = this.state.players.find((player) => player.id === targetId);
+          this.addPlayerLog(`霊媒結果により、${seerPlayer.name}の占い結果「${target?.name ?? targetId}は${claimEntry.result === "werewolf" ? "人狼" : "人狼ではない"}」は誤りと判明した。`);
+          this.addDeveloperLog("claim_disproven", {
+            claimantId: seerPlayer.id,
+            claimDay: seerClaim.day,
+            mediumId: mediumClaim.actorId,
+            targetId,
+            claimResult: claimEntry.result,
+            mediumResult: result,
+            reversedShifts: record.applied.length
+          });
+        }
+      }
+    }
   }
 
   emitProactiveSeerClaim() {
