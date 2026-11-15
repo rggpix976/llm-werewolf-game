@@ -148,7 +148,9 @@ export function buildNpcDecisionRequest(npc, gameState, triggeringClaim, candida
       role: npc.role,
       goals: npc.role === ROLES.KNIGHT
         ? ["村を守る", "真実の護衛記録を適切に公開する"]
-        : ["村を混乱させる", "人狼をかばう"]
+        : npc.role === ROLES.MEDIUM
+          ? ["村を守る", "真実の霊媒結果を適切に公開する"]
+          : ["村を混乱させる", "人狼をかばう"]
     }
   }));
 }
@@ -206,6 +208,54 @@ export function buildProactiveSeerClaim(npc, gameState) {
     evidenceUsed: [
       "hiddenInfo:self_role intentionally disclosed by proactive CO",
       ...announceable.map((result) => `knownInfo:seer_result:${result.targetId}`)
+    ]
+  };
+}
+
+export function buildProactiveMediumClaim(npc, gameState) {
+  if (npc.role !== ROLES.MEDIUM) {
+    return null;
+  }
+
+  if (npc.conversationPolicy.roleClaim !== "claim_when_directly_asked_after_result") {
+    return null;
+  }
+
+  const claimedTargetIds = new Set(
+    npc.publicClaims.flatMap((claim) => (claim.results ?? []).map((result) => result.targetId))
+  );
+  const freshResults = npc.knownInfo.filter((info) => {
+    return info.type === "medium_result" && !claimedTargetIds.has(info.targetId);
+  });
+
+  if (freshResults.length === 0) {
+    return null;
+  }
+
+  // Medium results are always about executed (dead) players, so unlike the
+  // seer builder there is no alive-target filter: every fresh result is
+  // announceable, with the same wording as the ask-based medium claim.
+  const resultLines = freshResults.map((result) => {
+    const target = gameState.players.find((player) => player.id === result.targetId);
+    const label = result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした";
+    return `${target?.name ?? result.targetId}は${label}`;
+  });
+
+  return {
+    text: `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`,
+    publicClaim: {
+      day: gameState.day,
+      actorId: npc.id,
+      actorName: npc.name,
+      role: ROLES.MEDIUM,
+      results: freshResults.map((result) => ({
+        targetId: result.targetId,
+        result: result.result
+      }))
+    },
+    evidenceUsed: [
+      "hiddenInfo:self_role intentionally disclosed by proactive CO",
+      ...freshResults.map((result) => `knownInfo:medium_result:${result.targetId}`)
     ]
   };
 }

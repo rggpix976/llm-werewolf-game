@@ -26,7 +26,7 @@ export class PseudoResponseProvider {
         notes: ["deterministic_pseudo_choice"]
       };
     }
-    const preference = ["counter_claim_accuse", "counter_claim", "claim_seer", "publish_more_accuse", "publish_more"];
+    const preference = ["counter_claim_accuse", "counter_claim", "claim_seer", "claim_medium", "publish_more_accuse", "publish_more"];
     const preferred = preference.find((id) => request.candidates.some((candidate) => candidate.id === id));
     return {
       choiceId: preferred ?? "stay_silent",

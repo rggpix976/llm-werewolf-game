@@ -1,4 +1,4 @@
-import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveSeerClaim, buildRescueClaim } from "./responseGenerator.mjs";
+import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
@@ -1339,6 +1339,7 @@ export class WerewolfGame {
         const fakeClaim = await this.resolveWerewolfKnightDecision(null, "gj_morning_first_claim");
         if (fakeClaim) await this.resolveRealKnightCounterDecision(fakeClaim);
       }
+      await this.resolveMediumClaimDecision();
     }
 
     return {
@@ -1681,6 +1682,88 @@ export class WerewolfGame {
     this.addDeveloperLog("proactive_seer_claim", {
       seerId: seer.id,
       seerName: seer.name,
+      results: claim.publicClaim.results,
+      evidenceUsed: claim.evidenceUsed
+    });
+    this.applyClaimToSuspicion(claim.publicClaim);
+
+    return claim.publicClaim;
+  }
+
+  // D-023: the medium's proactive publication is gated on a decisive
+  // situation — an executed player who had been blacked by a public seer
+  // claim (registered no later than the execution day) while the medium
+  // still holds that result unpublished. A white result then exposes the
+  // claiming "seer" as fake; a black result corroborates the claim.
+  decisiveMediumTrigger(medium) {
+    const claimedTargetIds = new Set(medium.publicClaims.flatMap((claim) => claim.results ?? []).map(({ targetId }) => targetId));
+    const freshResults = medium.knownInfo.filter((info) => info.type === "medium_result" && !claimedTargetIds.has(info.targetId));
+    for (const result of freshResults) {
+      const seerClaim = this.state.players.flatMap((player) => player.publicClaims)
+        .find((claim) => claim.role === ROLES.SEER && claim.day <= result.day
+          && (claim.results ?? []).some((entry) => entry.targetId === result.targetId && entry.result === "werewolf"));
+      if (seerClaim) return { result, seerClaim };
+    }
+    return null;
+  }
+
+  async resolveMediumClaimDecision() {
+    if (this.state.config.scenario !== "village9") return null;
+    const medium = this.state.players.find((player) => player.role === ROLES.MEDIUM && player.alive);
+    if (!medium) return null;
+    const trigger = this.decisiveMediumTrigger(medium);
+    if (!trigger) return null;
+    const candidates = [
+      { id: "claim_medium", description: "霊媒師としてCOし、未公開の霊媒結果を公開する" },
+      { id: "stay_silent", description: "何も公開しない" }
+    ];
+    const { choiceId, fallbackReason, result } = await this.chooseSafeAction(medium, trigger.seerClaim, candidates, "medium_proactive_claim");
+    this.addDeveloperLog("medium_claim_decision", {
+      mediumId: medium.id, decisionPoint: "medium_proactive_claim",
+      candidates: candidates.map(({ id }) => id), choiceId, fallbackReason,
+      providerName: result?.providerName ?? getProviderName(this.responseProvider),
+      model: result?.model ?? null, reason: typeof result?.reason === "string" ? result.reason : null
+    });
+    if (choiceId !== "claim_medium") return null;
+    return this.emitProactiveMediumClaim();
+  }
+
+  emitProactiveMediumClaim() {
+    const medium = this.state.players.find((player) => player.role === ROLES.MEDIUM && player.alive);
+    if (!medium) {
+      return null;
+    }
+
+    const claim = buildProactiveMediumClaim(medium, this.state);
+    if (!claim) {
+      return null;
+    }
+
+    this.addPlayerLog(`${medium.name}: ${claim.text}`);
+    this.addPublicInfo({
+      type: "npc_response",
+      actorId: medium.id,
+      actorName: medium.name,
+      text: `${medium.name}: ${claim.text}`
+    });
+    medium.privateMemory.push({
+      day: this.state.day,
+      type: "proactive_claim",
+      response: claim.text
+    });
+
+    medium.publicClaims.push(claim.publicClaim);
+    this.addPublicInfo({
+      type: "public_claim",
+      actorId: medium.id,
+      actorName: medium.name,
+      text: `${medium.name}が${publicRoleName(claim.publicClaim.role)}COをした。`,
+      claim: claim.publicClaim
+    });
+    this.addDeveloperLog("public_claim_registered", claim.publicClaim);
+    this.addDeveloperLog("proactive_medium_claim", {
+      mediumId: medium.id,
+      mediumName: medium.name,
       results: claim.publicClaim.results,
       evidenceUsed: claim.evidenceUsed
     });

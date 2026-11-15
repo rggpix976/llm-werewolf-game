@@ -18,7 +18,8 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Knight guard-history and fake knight CO | merged | 2026-11-15 | PR #90; DECISIONS.md D-020 |
 | Recording protocol (this index + AGENTS.md rules) | merged | 2026-11-14 | PR #86; AGENTS.md "Project Memory and Recording" |
 | Fake seer claim shape choice when self-blacked | merged | 2026-11-15 | PR #91; DECISIONS.md D-021 |
-| Werewolf attack decision against a claimed knight | in review | 2026-11-15 | DECISIONS.md D-022; DEVELOPMENT_STATUS.md |
+| Werewolf attack decision against a claimed knight | merged | 2026-11-15 | PR #92; DECISIONS.md D-022 |
+| Medium proactive claim in decisive situations | in review | 2026-11-15 | DECISIONS.md D-023; DEVELOPMENT_STATUS.md |
 
 Maintenance: update a row in the same pull request that starts, changes, or
 merges the slice (see AGENTS.md, "Project Memory and Recording").
