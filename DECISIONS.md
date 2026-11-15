@@ -142,6 +142,8 @@ Claim disclosure was gated on role keywords in the question ("占い師", "霊�
 
 ## D-025: A Medium Result That Disproves a Seer Claim Undoes Its Suspicion Shifts
 
+*Superseded by D-028.*
+
 Claim registration now records the exact suspicion deltas a seer claim applies (the claimant shift, contested-claim rival bumps, and per-result shifts, per observer) in `state.claimEffects`. Medium results are always genuine — no role fakes the medium — so when a medium claim registers a result that contradicts a public seer claim's result for the same target, that seer claim is proven fabricated: every recorded shift is inverted for living observers, exactly once per claim, a `claim_disproven` developer event is logged, and a player-log line states which seer result was shown to be wrong. A medium result that agrees with the claim changes nothing, and other claims' shifts are untouched. This resolves the consideration item the user raised on 2026-11-13.
 
 ## D-026: Answers About One Player Also Name the Vote Intention
@@ -150,4 +152,12 @@ In the user's 2026-11-15 playtest, several NPCs answered a leading question abou
 
 ## D-027: A Disproven Claim Also Raises Suspicion of the Claimant
 
+*Superseded by D-028.*
+
 D-025's reversal alone proved insufficient in the user's 2026-11-15 playtest: the medium publicly proved the werewolf's seer claim fabricated on the morning of Day 3, the reversal duly restored every score to its pre-claim baseline — and the proven liar was then treated as an ordinary gray. Quieter citizens out-scored her in the aggregate tiebreaks on Days 3 and 4 and were executed instead; the liar survived and the werewolves won. A proven lie is itself evidence, so the disproof now also adds a fixed suspicion penalty toward the claimant: when `reverseDisprovenSeerClaims` marks a claim record disproven, every living observer except the claimant gains +4 suspicion of the claimant — the same scale as one black seer result — exactly once per disproven claim, alongside the reversal. The penalty is recorded on the `claim_disproven` developer event as `liarPenalty`. Dead observers gain nothing (the reversal already skips them), and the claimant's own scores are untouched.
+
+## D-028: Fake Medium Claims Use Symmetric Public Contradictions
+
+**Supersedes D-025's reversal and D-027's liar penalty.** In `village9`, the first eligible living werewolf and the living madman may fake-claim medium at the same counter, pre-emptive, follow-up, and rescue decision points used by other controlled fakes; the werewolf decides first, one claimant of each kind is allowed, and an actor can hold only one claimed role. Providers decide only whether to act, with safe-silence fallback. The engine fabricates every executed player's result, contradicting the earliest public seer result when present and otherwise inverting truth, preserves published results, and caps each fake medium at one black with contradiction-driven blacks taking priority.
+
+Because medium claims are no longer certainly genuine, a published disagreement involving a medium is a neutral dispute rather than proof. Each living claimant is charged +4 suspicion by every other living NPC once per disputed target; late joiners are charged when they join, dead claimants are recorded but not charged, agreements do nothing, and earlier claim effects are never reversed. State records involved and charged claimant ids per target, the player log neutrally announces a newly active disagreement once, and `claim_contradiction` records its public participants and newly charged claimants. Medium claims also use the ordinary contested-role +2 rule.

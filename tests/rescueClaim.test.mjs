@@ -2,11 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { WerewolfGame } from "../src/gameEngine.mjs";
 import { ROLES } from "../src/constants.mjs";
+import { PseudoResponseProvider } from "../src/responseProvider.mjs";
 
 // village9 fixed roles: npc1/npc2 werewolf, npc3 seer, npc4 medium,
 // npc5 knight, npc6 madman, npc7/npc8/npc9 citizen.
-function village9() {
-  return WerewolfGame.create({ seed: 9, scenario: "village9", shuffleRoles: false });
+function village9({ silenceFakeMedium = false } = {}) {
+  const responseProvider = new PseudoResponseProvider();
+  if (silenceFakeMedium) {
+    const choose = responseProvider.chooseAction.bind(responseProvider);
+    responseProvider.chooseAction = (request) => request.decisionPoint?.includes("medium") || ["preemptive_first_claim", "rescue_counter_claim"].includes(request.decisionPoint)
+      ? Promise.resolve({ choiceId: "stay_silent", providerName: "test" }) : choose(request);
+  }
+  return WerewolfGame.create({ seed: 9, scenario: "village9", shuffleRoles: false, responseProvider });
 }
 
 // Make every alive voter rank `targetId` first (3) and `runnerUpId` second
@@ -44,7 +51,7 @@ test("seer about to be executed on day 1 rescue-claims with no results yet and s
 });
 
 test("seer rescue claim with a result triggers the madman counter-claim decision before the re-vote", async () => {
-  const game = village9();
+  const game = village9({ silenceFakeMedium: true });
   // Day 1: execute the citizen npc7.
   forceVote(game, "npc7");
   await game.dispatchPlayerAction({ type: "advance_vote" });
@@ -95,7 +102,7 @@ test("seer rescue claim with a result triggers the madman counter-claim decision
 });
 
 test("medium about to be executed rescue-claims with the privately known result", async () => {
-  const game = village9();
+  const game = village9({ silenceFakeMedium: true });
   // Day 1: execute a werewolf so the medium learns a result.
   forceVote(game, "npc1");
   await game.dispatchPlayerAction({ type: "advance_vote" });

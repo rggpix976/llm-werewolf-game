@@ -1,5 +1,9 @@
 # Changelog
 
+## Fake medium claims and contradiction model
+
+- Added controlled werewolf and madman fake-medium claims to `village9`, including counter, pre-emptive, follow-up, and rescue decisions, engine-owned consistent fabrication, and the one-black cap. Replaced medium certainty, claim reversal, and the liar penalty with symmetric per-target +4 contradiction charges and neutral logs. Default five-player and sample behavior remain unchanged.
+
 ## Phase 6: playable nine-player village slice
 
 - Added D-019 werewolf fake-seer claims for `village9`: provider-selected W-A counter-claims after genuine proactive/rescue publications, W-B follow-up results, and W-C uncontested day-start claims. The first living werewolf decides, werewolf decisions precede madman decisions, safe-silence fallbacks preserve play, and the engine fabricates all contents without blacking a werewolf or exposing fake provenance publicly. New focused coverage and minimal rescue-claim expectation updates bring the full regression suite to 862/862; `sample` remains unchanged.
