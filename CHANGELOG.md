@@ -219,6 +219,12 @@
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
 
+## 2026-11-15 — Werewolf attack decision against a claimed knight (D-022)
+
+- Added a provider-selected attack decision for the acting werewolf on nights when a knight claim is public (`village9`). Previously the targeting rule (claimed seer first, else lowest suspicion) never considered knight claims, so a claimed knight — who can never guard themselves — was untouchable at night (the user's 2026-11-15 playtest, where the claimed knight was passed over on both nights while guarding successfully twice).
+- The decision offers one `attack_knight_<playerId>` candidate per living knight claimant (excluding the acting wolf) plus `attack_as_usual`; provider failures fall back to attacking as usual, and the pseudo provider deterministically attacks the first claimant. The request contains public claims and the acting wolf's own role only — never the night's guard target. Because werewolves do not know each other, a claimant who is a fake (a werewolf) can be bitten by the partner; that risk is accepted as natural.
+- New `tests/werewolfAttackKnightDecision.test.mjs` adds 10 cases (pseudo attack, usual choice, error fallback, no-claim and self-claimant suppression, two claimants, seer-vs-knight trade-off, guard interplay, request privacy, five-player exclusion). Full regression 895/895 and `npm run sample` PASS. No live OpenAI call was made.
+
 ## 2026-11-15 — Fake seer claim shape choice (D-021)
 
 - Fixed fabricated seer claims containing a divination result about the claimant himself — an impossible claim, since a genuine seer cannot divine themselves. The mirror fabrication produced it whenever the player the real seer had just blacked counter-claimed (found in the user's 2026-11-15 real-AI playtest, where the counter-claiming werewolf published a white result on himself).
