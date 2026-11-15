@@ -1702,6 +1702,20 @@ export class WerewolfGame {
             }
             observer.suspicionScores[scoredId] = (observer.suspicionScores[scoredId] ?? 0) - delta;
           }
+          // D-027: reversal alone returned the disproven claimant to
+          // their pre-claim standing, so a proven liar was treated as an
+          // ordinary gray (in the user's 2026-11-15 playtest the proven
+          // fake seer was never executed while quieter citizens were).
+          // A proven lie is itself evidence: every living observer adds
+          // suspicion toward the claimant, on the scale of one black
+          // seer result.
+          const liarPenalty = 4;
+          for (const observer of this.state.players) {
+            if (!observer.alive || observer.id === seerPlayer.id) {
+              continue;
+            }
+            observer.suspicionScores[seerPlayer.id] = (observer.suspicionScores[seerPlayer.id] ?? 0) + liarPenalty;
+          }
           const target = this.state.players.find((player) => player.id === targetId);
           this.addPlayerLog(`霊媒結果により、${seerPlayer.name}の占い結果「${target?.name ?? targetId}は${claimEntry.result === "werewolf" ? "人狼" : "人狼ではない"}」は誤りと判明した。`);
           this.addDeveloperLog("claim_disproven", {
@@ -1711,7 +1725,8 @@ export class WerewolfGame {
             targetId,
             claimResult: claimEntry.result,
             mediumResult: result,
-            reversedShifts: record.applied.length
+            reversedShifts: record.applied.length,
+            liarPenalty
           });
         }
       }

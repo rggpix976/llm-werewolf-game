@@ -92,7 +92,8 @@ test("a medium white result undoes an uncontested fake seer claim's shifts", () 
   assert.equal(score(game, "npc3", "npc7"), base7 + 4);
 
   registerClaim(game, game.getPlayer("npc4"), "medium", [{ targetId: "npc7", result: "not_werewolf" }], 2);
-  assert.equal(score(game, "npc3", "npc6"), base6);
+  // D-027: the claimant's own shifts are undone, then the liar penalty lands.
+  assert.equal(score(game, "npc3", "npc6"), base6 + 4);
   assert.equal(score(game, "npc3", "npc7"), base7);
   assert.equal(score(game, "npc3", "npc4"), base4 - 3);
   assert.equal(disproofs(game).length, 1);
@@ -124,7 +125,8 @@ test("a contested fake claim's shifts are undone while the genuine claim's stay"
   assert.equal(score(game, "npc1", "npc8"), base8 - 4);
 
   registerClaim(game, game.getPlayer("npc4"), "medium", [{ targetId: "npc7", result: "not_werewolf" }], 2);
-  assert.equal(score(game, "npc1", "npc6"), base6);
+  // D-027: reversal restores the claimant to baseline, then the penalty adds.
+  assert.equal(score(game, "npc1", "npc6"), base6 + 4);
   assert.equal(score(game, "npc1", "npc3"), base3 - 3);
   assert.equal(score(game, "npc1", "npc7"), base7);
   assert.equal(score(game, "npc1", "npc8"), base8 - 4);
@@ -139,11 +141,12 @@ test("a disproven claim is reversed only once, even with two contradicted result
     { targetId: "npc8", result: "werewolf" }
   ], 1);
   registerClaim(game, game.getPlayer("npc4"), "medium", [{ targetId: "npc7", result: "not_werewolf" }], 2);
-  assert.equal(score(game, "npc3", "npc6"), base6);
+  // D-027: baseline + the one-time liar penalty.
+  assert.equal(score(game, "npc3", "npc6"), base6 + 4);
   assert.equal(score(game, "npc3", "npc8"), base8);
 
   registerClaim(game, game.getPlayer("npc4"), "medium", [{ targetId: "npc8", result: "not_werewolf" }], 3);
-  assert.equal(score(game, "npc3", "npc6"), base6);
+  assert.equal(score(game, "npc3", "npc6"), base6 + 4);
   assert.equal(score(game, "npc3", "npc8"), base8);
   assert.equal(disproofs(game).length, 1);
 });
@@ -158,7 +161,8 @@ test("the proactive medium publication also reverses a disproven claim", async (
   game.state.day = 2;
   await game.resolveMediumClaimDecision();
   assert.equal(game.getPlayer("npc4").publicClaims.length, 1);
-  assert.equal(score(game, "npc3", "npc6"), base6);
+  // D-027: reversal restores the claimant to baseline, then the penalty adds.
+  assert.equal(score(game, "npc3", "npc6"), base6 + 4);
   assert.equal(score(game, "npc3", "npc7"), base7);
   assert.equal(disproofs(game).length, 1);
 });

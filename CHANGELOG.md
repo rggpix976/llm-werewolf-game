@@ -219,6 +219,11 @@
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
 
+## 2026-11-15 — Disproven-claim liar penalty (D-027)
+
+- A seer claim proven fabricated by a medium result now also makes the claimant more suspicious, not merely un-happens. In the user's 2026-11-15 playtest, the medium proved the werewolf's seer claim fake on Day 3, but D-025's reversal restored the liar to her pre-claim standing and she was treated as an ordinary gray: quieter citizens out-scored her in the aggregate tiebreaks on Days 3 and 4 and were executed instead, and the werewolves won. The disproof now adds a +4 suspicion penalty toward the claimant in every living observer's scores (the scale of one black seer result), exactly once per disproven claim, recorded as `liarPenalty` on the `claim_disproven` developer event.
+- New `tests/disprovenClaimPenalty.test.mjs` adds 4 cases (penalty on top of reversal, once-only application, dead observers and the claimant's own scores untouched, the proven liar becoming the observers' vote target). The four D-025 expectations in `tests/claimDisclosureAndDisproof.test.mjs` that asserted a return to exact baseline now assert baseline + 4. Full regression 925/925 and `npm run sample` PASS. No live OpenAI call was made.
+
 ## 2026-11-15 — Werewolf attack reason label fix
 
 - Fixed a log-only bug found while analysing the user's 2026-11-15 playtest: in `runWerewolfAttack`'s kill branch, the developer log's `reason` was computed after the target had been killed, at which point the claimed seer was already dead — so a kill of the claimed seer was always recorded as `lowest_suspicion_target_to_keep_suspects_alive` instead of `attacked_public_seer_claim`. Attack target selection was never affected. The reason is now decided from the pre-kill state, with an explicit check that the target is the claimed seer.
