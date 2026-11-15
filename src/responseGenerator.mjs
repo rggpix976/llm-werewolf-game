@@ -146,7 +146,9 @@ export function buildNpcDecisionRequest(npc, gameState, triggeringClaim, candida
     decisionPoint,
     private: {
       role: npc.role,
-      goals: npc.role === ROLES.WEREWOLF ? ["村を混乱させる", "人狼をかばう"] : ["村を守る", "真実の護衛記録を適切に公開する"]
+      goals: npc.role === ROLES.KNIGHT
+        ? ["村を守る", "真実の護衛記録を適切に公開する"]
+        : ["村を混乱させる", "人狼をかばう"]
     }
   }));
 }
