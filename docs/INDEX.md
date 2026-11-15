@@ -14,9 +14,10 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Rescue claim before execution, with re-vote | merged | 2026-11-11 | PR #79; DEVELOPMENT_STATUS.md |
 | Player vote (one equal vote, simultaneous) | merged | 2026-11-13 | PR #84; DECISIONS.md D-018 |
 | Evidence-text fix for mid-game "no response" failures | merged | 2026-11-13 | PR #85; DEVELOPMENT_STATUS.md |
-| Werewolf fake CO | implemented | 2026-11-14 | D-019; DEVELOPMENT_STATUS.md |
-| Knight guard-history and fake knight CO | in review | 2026-11-14 | D-020; DEVELOPMENT_STATUS.md |
-| Recording protocol (this index + AGENTS.md rules) | in review | 2026-11-14 | This file; AGENTS.md "Project Memory and Recording" |
+| Werewolf fake CO | merged | 2026-11-14 | PR #88; DECISIONS.md D-019 |
+| Knight guard-history and fake knight CO | merged | 2026-11-15 | PR #90; DECISIONS.md D-020 |
+| Recording protocol (this index + AGENTS.md rules) | merged | 2026-11-14 | PR #86; AGENTS.md "Project Memory and Recording" |
+| Fake seer claim shape choice when self-blacked | in review | 2026-11-15 | DECISIONS.md D-021; DEVELOPMENT_STATUS.md |
 
 Maintenance: update a row in the same pull request that starts, changes, or
 merges the slice (see AGENTS.md, "Project Memory and Recording").

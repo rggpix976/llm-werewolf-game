@@ -29,7 +29,11 @@ test("W-A precedes the madman decision and both counter-claims are registered", 
   assert.ok(kinds.indexOf("werewolf_seer_decision") < kinds.indexOf("madman_seer_decision"));
   assert.equal(game.getPlayer("npc1").publicClaims[0].role, "seer");
   assert.equal(game.getPlayer("npc6").publicClaims[0].role, "seer");
-  assert.deepEqual(game.getPlayer("npc1").publicClaims[0].results, [{ targetId: "npc1", result: "not_werewolf" }]);
+  // D-021: the seer's black was on the wolf himself, so the pseudo provider
+  // picks the accuse shape and the fabricated claim blacks the seer instead
+  // of white-wrapping the claimant (a self-divination is impossible).
+  assert.deepEqual(game.getPlayer("npc1").publicClaims[0].results, [{ targetId: "npc3", result: "werewolf" }]);
+  assert.equal(decisions(game)[0].detail.choiceId, "counter_claim_accuse");
 });
 
 test("werewolf black fabrication skips the other werewolf for the next eligible player", async () => {

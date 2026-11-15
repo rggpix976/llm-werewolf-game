@@ -219,6 +219,12 @@
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
 
+## 2026-11-15 — Fake seer claim shape choice (D-021)
+
+- Fixed fabricated seer claims containing a divination result about the claimant himself — an impossible claim, since a genuine seer cannot divine themselves. The mirror fabrication produced it whenever the player the real seer had just blacked counter-claimed (found in the user's 2026-11-15 real-AI playtest, where the counter-claiming werewolf published a white result on himself).
+- In that self-blacked situation only, the madman and werewolf seer decisions now offer two claim shapes plus silence: accuse (the fabricated newest result blacks the claimant who blacked him) or deny (white results only, mentioning neither the claimant nor the accuser). The pseudo provider deterministically prefers accuse; every other situation keeps the previous candidates and fabrication, and a werewolf accuse never blacks a werewolf.
+- New `tests/fakeClaimShapeChoice.test.mjs` adds 10 cases; two existing expectations (werewolf W-A counter-claim, proactive-claim suspicion shifts) updated for the accuse default. Full regression 885/885 and `npm run sample` PASS. No live OpenAI call was made.
+
 ## 2026-11-14 — Knight claim history
 
 - Genuine knight ask and rescue claims now publish the knight's complete guard history.

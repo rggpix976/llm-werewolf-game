@@ -184,11 +184,12 @@ test("a proactive seer claim shifts other NPCs' suspicion toward the published r
   await game.dispatchPlayerAction({ type: "run_night" });
 
   assert.equal(claimsBy(game, "npc3").length, 1);
-  // The pseudo werewolf and madman both counter-claim. Claimant pressure and
-  // their contradictory white results cancel for npc1; both contests pressure
-  // the real claimant after the initial uncontested reduction.
+  // The pseudo werewolf and madman both counter-claim. The genuine black is
+  // on the werewolf himself, so under D-021 the pseudo werewolf picks the
+  // accuse shape and blacks the real seer instead of white-wrapping himself;
+  // only the madman's white result on npc1 cancels part of the pressure.
   assert.equal(claimsBy(game, "npc6").length, 1);
   assert.equal(claimsBy(game, "npc1").length, 1);
-  assert.equal(observer.suspicionScores.npc1, beforeWolf + 4);
-  assert.equal(observer.suspicionScores.npc3, beforeSeer - 3 + 2 + 2);
+  assert.equal(observer.suspicionScores.npc1, beforeWolf + 4 + 2 + 2 - 2);
+  assert.equal(observer.suspicionScores.npc3, beforeSeer - 3 + 2 + 2 + 2);
 });
