@@ -218,3 +218,10 @@
 - Added pseudo-LLM NPC response generation.
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
+
+## 2026-11-14 — Knight claim history
+
+- Genuine knight ask and rescue claims now publish the knight's complete guard history.
+- Added `village9` werewolf fake-knight decisions after successful guards and after knight rescue claims, deterministic fabricated histories, and the real knight's counter decision.
+- Added contested-knight suspicion handling, safe decision fallbacks, privacy protections, and focused tests.
+- Corrected shared decision-request goals so the madman retains wolf-aligned goals and only the genuine knight receives village/guard-history goals; expanded regression coverage for K-A, decision caps and exclusivity, all fallback modes, K-C suppression, multi-night fabrication, and five-player exclusion.
