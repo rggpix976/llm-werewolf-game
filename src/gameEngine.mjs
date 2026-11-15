@@ -2023,6 +2023,14 @@ export class WerewolfGame {
       this.addDeveloperLog("werewolf_attack", { werewolfId: werewolf.id, targetId: target.id, guarded: true, ...(decidedTarget ? { reason: "attacked_public_knight_claim" } : {}) });
       return { werewolfId: werewolf.id, prevented: true };
     }
+    // The reason must be decided before the kill: afterwards the claimed
+    // seer is dead, and a seer kill can no longer be told apart from a
+    // lowest-suspicion kill in the developer log.
+    const reason = decidedTarget
+      ? "attacked_public_knight_claim"
+      : claimedSeer?.alive && target.id === claimedSeer.id
+        ? "attacked_public_seer_claim"
+        : "lowest_suspicion_target_to_keep_suspects_alive";
     this.killPlayer(target.id, "werewolf_attack");
     this.addPlayerLog(`夜が明けました。${target.name}が無残な姿で発見されました。`);
     this.addPublicInfo({
@@ -2037,7 +2045,7 @@ export class WerewolfGame {
       targetId: target.id,
       targetName: target.name,
       targetRole: target.role,
-      reason: decidedTarget ? "attacked_public_knight_claim" : claimedSeer?.alive ? "attacked_public_seer_claim" : "lowest_suspicion_target_to_keep_suspects_alive"
+      reason
     });
 
     return {
