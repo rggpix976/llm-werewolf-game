@@ -219,6 +219,12 @@
 - Added vote, execution, night, seer, werewolf attack, and win-check flow.
 - Added sample play and audit script.
 
+## 2026-11-15 — Vote intention named in target answers (D-026)
+
+- Answers about a specific player now also name the responder's actual vote intention when it is someone else. In the user's 2026-11-15 playtest, NPCs called the seer suspicious in answer to a leading question and then voted for the seer-blacked player — the votes were exactly the suspicion math, but the discussion never surfaced who each NPC meant to execute, because a mentioned-target answer evaluated only the named player. The response builder's mentioned-target branch now appends the existing top-suspect sentence (ranked identically to vote selection) whenever the discussed player is not the top suspect.
+- The OpenAI provider instructions add a vote-intention rule: when the discussed player differs from `context.topSuspect`, the composed utterance must make the vote target clear in the NPC's own personality and tone (e.g. "X is suspicious too, but today I want to execute Y") and must not contradict the vote. Vote selection itself is unchanged.
+- New `tests/voteIntentionInAnswers.test.mjs` adds 5 cases (non-top answer names the top suspect and matches `chooseVote`, no doubling for the top suspect itself, mild-suspicion variant, broadcast answers, provider instruction presence). Full regression 919/919 and `npm run sample` PASS. No live OpenAI call was made.
+
 ## 2026-11-15 — Claimed-player result disclosure and disproven-claim reversal (D-024, D-025)
 
 - Asking an already-claimed player directly for a result ("霊能結果を教えて", "GJ先教えて") now publishes fresh results or guard history: disclosure was previously gated on role keywords, so such questions got only deflection and the new information never surfaced (observed in the user's 2026-11-15 playtest). Result-seeking phrasing runs the claim builder for claimed responders only, and falls through to ordinary answers when nothing fresh remains; unclaimed players still never claim from a result question alone.

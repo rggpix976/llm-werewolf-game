@@ -20,7 +20,8 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Fake seer claim shape choice when self-blacked | merged | 2026-11-15 | PR #91; DECISIONS.md D-021 |
 | Werewolf attack decision against a claimed knight | merged | 2026-11-15 | PR #92; DECISIONS.md D-022 |
 | Medium proactive claim in decisive situations | merged | 2026-11-15 | PR #93; DECISIONS.md D-023 |
-| Claimed-player result disclosure and disproven-claim reversal | in review | 2026-11-15 | DECISIONS.md D-024, D-025; DEVELOPMENT_STATUS.md |
+| Claimed-player result disclosure and disproven-claim reversal | merged | 2026-11-15 | PR #94; DECISIONS.md D-024, D-025 |
+| Vote intention named in target answers | in review | 2026-11-15 | DECISIONS.md D-026; DEVELOPMENT_STATUS.md |
 
 Maintenance: update a row in the same pull request that starts, changes, or
 merges the slice (see AGENTS.md, "Project Memory and Recording").

@@ -66,6 +66,13 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   } else if (mentionedIds.length > 0) {
     const target = gameState.players.find((player) => player.id === mentionedIds[0]);
     text = answerAboutTarget(npc, target, privateKnownEvidence);
+    // D-026: an answer about one player read as the NPC's whole position
+    // when their actual vote intention (the top suspect, ranked exactly
+    // as the vote itself is chosen) was someone else. Name the top
+    // suspect as well, so statements and votes cannot drift apart.
+    if (topSuspect && target.id !== topSuspect.id) {
+      text = addSuspectSentence(text, npc, topSuspect);
+    }
     evidenceUsed.push(`suspicionScores:${target.id}`);
     if (privateKnownEvidence.length > 0) {
       evidenceUsed.push(...privateKnownEvidence.map((info) => evidenceLabel("knownInfo_private_for_stance", info)));
