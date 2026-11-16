@@ -253,7 +253,7 @@ test("WerewolfGame instance mode is fixed and never mixes Structured Route with 
 });
 
 test("rollback runbook has the exact operator structure, required recovery boundaries, and no secret fixture", () => {
-  const runbook = readFileSync(RUNBOOK_URL, "utf8");
+  const runbook = readFileSync(RUNBOOK_URL, "utf8").replace(/\r\n/g, "\n");
   const headings = [...runbook.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
   assert.deepEqual(headings, [
     "1. 目的",

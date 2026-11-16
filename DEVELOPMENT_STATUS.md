@@ -1,8 +1,14 @@
 # Development Status
 
+## Personality strategy lean (2026-11-16)
+
+D-030 is implemented for review. In `village9`, votes and response requests share the personality-adjusted top suspect: roller/gray preferences can switch candidate sides within four suspicion points, and strategy proposals receive agreement or disagreement naming that target. Claim publication and maintenance retain priority. Five-player behavior, suspicion updates, CO decisions, fabricated results, and night actions are unchanged. The new suite covers mapping, boundaries, candidate eligibility, tie ordering, vote/reply consistency, proposal vocabulary, broadcast, and claim precedence. The rollback-runbook test now normalizes CRLF before checking fenced code, allowing the same assertions on Windows checkouts.
+
+Validation: `npm test` passes 954/954 (0 failures, cancelled, skipped, or todo); `npm run sample` passes all six audit checks; `git diff --check` is clean. No external API calls were made.
+
 ## Phase 6 ask-path claim maintenance slice
 
-D-029 is implemented for review. On the ask path, claimed players now maintain their claims: genuine claimants publish fresh results as before or restate the published ones, and fake claimants extend their fabricated seer, knight, and medium claims under the same fabrication rules as the day-start and rescue decision points, so the pre-claim deflection no longer exposes a fake claimant who is asked directly. Found in the 2026-11-16 self-play playtest, where a fake knight answered two direct guard-history questions with the unclaimed template and was executed on that tell.
+D-029 is merged (PR #100). On the ask path, claimed players now maintain their claims: genuine claimants publish fresh results as before or restate the published ones, and fake claimants extend their fabricated seer, knight, and medium claims under the same fabrication rules as the day-start and rescue decision points, so the pre-claim deflection no longer exposes a fake claimant who is asked directly. Found in the 2026-11-16 self-play playtest, where a fake knight answered two direct guard-history questions with the unclaimed template and was executed on that tell.
 
 ## Phase 6 fake-medium and contradiction slice
 

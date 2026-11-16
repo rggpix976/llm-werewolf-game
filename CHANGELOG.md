@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-16 — Personality strategy lean (D-030)
+
+- Centralized personality preferences and the vote/response top-suspect selector. In `village9`, gray and roller preferences switch eligible candidate sides only within four points, preserving suspicion scores and name-order ties.
+- Added strategy-proposal agreement/disagreement with the adjusted vote target, shared by direct and broadcast questions; claim publication and maintenance take precedence, and five-player behavior is preserved.
+- Validation: `npm test` 954/954 PASS, `npm run sample` all six audit checks PASS, and `git diff --check` clean. No live API call was made.
+- Added 13 focused tests and normalized CRLF in the existing rollback-runbook document test for Windows portability. Updated the slice index, including D-029 merged in PR #100.
+
 ## Ask-path claim maintenance
 
 - Fixed claimed players falling back to the pre-claim deflection when asked directly for results (D-029): the ask-path claim builder only knew the responder's real role, so a fake claimant could never publish fresh results when asked and was exposed by the "I won't claim yet" wording despite already holding a public claim. Fake claimants now extend their fabricated seer, knight, and medium claims on the ask path under the same engine-owned fabrication rules as the decision points, and any claimed player with nothing fresh restates the published results without re-registering a claim. New `tests/askPathClaimMaintenance.test.mjs` adds 9 cases, bringing the full suite to 941/941; default five-player and sample behavior remain unchanged.

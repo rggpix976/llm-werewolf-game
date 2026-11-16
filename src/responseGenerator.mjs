@@ -1,3 +1,4 @@
+import { chooseTopSuspect, strategyProposalFor, strategyReply } from "./personalityStrategy.mjs";
 import { ROLES, publicRoleName } from "./constants.mjs";
 import { containsAny, extractMentionedPlayerIds, formatList } from "./textUtils.mjs";
 
@@ -13,6 +14,7 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   const privateKnownEvidence = selectPrivateKnownInfoForStance(npc, mentionedIds);
   const topSuspect = chooseTopSuspect(npc, gameState);
   const intent = classifyIntent(playerInput);
+  const proposal = gameState.config.scenario === "village9" ? strategyProposalFor(playerInput) : null;
   // D-024: direct result questions to a player who has already claimed
   // ("結果を教えて", "GJ先は？") carry no role keyword, so they never
   // reached the claim path and fresh results stayed unpublished. For an
@@ -51,7 +53,9 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   ];
   let disclosedHiddenInfo = false;
 
-  if (intent.asksWerewolfIdentity) {
+  if (proposal && topSuspect && !precomputedClaim && !restatedClaim) {
+    text = strategyReply(npc, gameState, proposal, topSuspect);
+  } else if (intent.asksWerewolfIdentity) {
     // The denial wording is identical for every role on purpose: a
     // werewolf-only phrasing would leak the role to anyone who asks.
     const stance = "私は人狼ではありません。ただ、口だけでは証明にならないので発言と投票で見てください。";
@@ -430,19 +434,6 @@ function selectPrivateKnownInfoForStance(npc, mentionedIds) {
     }
     return mentionedIds.includes(info.targetId);
   });
-}
-
-function chooseTopSuspect(npc, gameState) {
-  const candidates = gameState.alivePlayers
-    .filter((id) => id !== npc.id)
-    .map((id) => ({
-      id,
-      score: npc.suspicionScores[id] ?? 0,
-      player: gameState.players.find((candidate) => candidate.id === id)
-    }))
-    .sort((a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name));
-
-  return candidates[0] ?? null;
 }
 
 function addSuspectSentence(base, npc, topSuspect) {
