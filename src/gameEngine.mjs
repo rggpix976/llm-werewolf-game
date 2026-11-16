@@ -1,3 +1,4 @@
+import { chooseTopSuspect } from "./personalityStrategy.mjs";
 import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim } from "./responseGenerator.mjs";
 import {
   getProviderName,
@@ -1234,19 +1235,12 @@ export class WerewolfGame {
   }
 
   chooseVote(voter) {
-    const candidates = this.getAlivePlayers().filter((candidate) => candidate.id !== voter.id);
-    const ranked = candidates
-      .map((candidate) => ({
-        candidate,
-        score: voter.suspicionScores[candidate.id] ?? 0
-      }))
-      .sort((a, b) => b.score - a.score || a.candidate.name.localeCompare(b.candidate.name));
-
-    const chosen = ranked[0].candidate;
+    const top = chooseTopSuspect(voter, this.state);
+    const chosen = top.player;
     const privateReason = findPrivateVoteReason(voter, chosen);
     const reasonDeveloper = privateReason
-      ? `${privateReason}; suspicionScore=${ranked[0].score}`
-      : `highest suspicionScore=${ranked[0].score}`;
+      ? `${privateReason}; suspicionScore=${top.score}`
+      : `highest suspicionScore=${top.score}`;
 
     return {
       voterId: voter.id,
