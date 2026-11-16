@@ -21,10 +21,27 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   // through to the ordinary branches instead of the claim deflection.
   const resultQuestionToClaimed = !intent.asksRoleOrClaim && npc.publicClaims.length > 0
     && containsAny(playerInput, ["結果", "GJ", "gj", "護衛", "守った", "占った"]);
-  const precomputedClaim = (intent.asksRoleOrClaim || resultQuestionToClaimed)
+  let precomputedClaim = (intent.asksRoleOrClaim || resultQuestionToClaimed)
     ? maybeCreateRoleClaim(npc, gameState)
     : null;
-  const claimQuestion = intent.asksRoleOrClaim || Boolean(precomputedClaim);
+  // D-029: claim maintenance on the ask path. maybeCreateRoleClaim only
+  // builds from the responder's real role, so a fake claimant (whose
+  // fabrication is wired only into the day-start and rescue decision
+  // points) fell through to the pre-claim deflection even with fresh
+  // nights or executions unpublished — a hard tell that separated fake
+  // claimants from genuine ones, who publish or restate. When the real
+  // role builder produces nothing for a claimed responder, extend a fake
+  // claim with the same engine-owned fabrication rules the decision
+  // points use; when nothing fresh remains for anyone, restate the
+  // already-published results without registering a new claim.
+  let restatedClaim = null;
+  if (!precomputedClaim && (intent.asksRoleOrClaim || resultQuestionToClaimed) && npc.publicClaims.length > 0) {
+    precomputedClaim = maybeBuildFakeClaimExtension(npc, gameState);
+    if (!precomputedClaim) {
+      restatedClaim = buildClaimRestatement(npc, gameState);
+    }
+  }
+  const claimQuestion = intent.asksRoleOrClaim || Boolean(precomputedClaim) || Boolean(restatedClaim);
 
   let publicClaim = null;
   let text;
@@ -51,6 +68,12 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
       publicClaim = claimResult.publicClaim;
       evidenceUsed.push(...claimResult.evidenceUsed);
       disclosedHiddenInfo = true;
+    } else if (restatedClaim) {
+      // D-029: the responder already holds a public claim and has nothing
+      // fresh to publish. Restate the published results; nothing new is
+      // registered, so no suspicion effect is applied a second time.
+      text = restatedClaim.text;
+      evidenceUsed.push(...restatedClaim.evidenceUsed);
     } else if (npc.role === ROLES.WEREWOLF) {
       // Same deflection wording as every other role on purpose: a
       // werewolf-only phrasing would leak the role to anyone who asks.
@@ -549,6 +572,215 @@ function maybeCreateRoleClaim(npc, gameState) {
       ...freshResults.map((result) => `knownInfo:${resultType}:${result.targetId}`)
     ]
   };
+}
+
+// D-029: a fake claimant maintains their claim on the ask path. The
+// builders below are pure functions over the game state and mirror the
+// engine-owned fabrication rules used at the decision points
+// (registerFabricatedSeerClaim / registerFabricatedKnightClaim /
+// registerFabricatedMediumClaim in gameEngine.mjs): published results
+// never change, a fabricated seer claim never names its own claimant,
+// werewolves never black a werewolf, and a fake medium holds at most
+// one black result across all of its publications.
+function maybeBuildFakeClaimExtension(npc, gameState) {
+  const fakeClaim = npc.publicClaims.find((claim) => claim.role !== npc.role);
+  if (!fakeClaim) {
+    return null;
+  }
+  if (fakeClaim.role === ROLES.KNIGHT) {
+    return buildFakeKnightExtension(npc, gameState);
+  }
+  if (fakeClaim.role === ROLES.SEER) {
+    return buildFakeSeerExtension(npc, gameState);
+  }
+  if (fakeClaim.role === ROLES.MEDIUM) {
+    return buildFakeMediumExtension(npc, gameState);
+  }
+  return null;
+}
+
+function buildFakeKnightExtension(npc, gameState) {
+  const publishedByNight = new Map();
+  for (const claim of npc.publicClaims) {
+    if (claim.role !== ROLES.KNIGHT) continue;
+    for (const result of claim.results ?? []) {
+      publishedByNight.set(result.night, result);
+    }
+  }
+  const attacks = gameState.developerLog.filter((entry) => entry.kind === "werewolf_attack" && entry.detail?.targetId && !entry.detail?.skipped);
+  const results = [];
+  let previousTargetId = null;
+  let freshCount = 0;
+  for (const attack of attacks) {
+    const night = attack.day;
+    const published = publishedByNight.get(night);
+    if (published) {
+      results.push({ night, targetId: published.targetId, result: "guarded" });
+      previousTargetId = published.targetId;
+      continue;
+    }
+    let target = null;
+    if (attack.detail.guarded) {
+      target = gameState.players.find((player) => player.id === attack.detail.targetId) ?? null;
+    } else {
+      const eligible = gameState.players.filter((player) => {
+        if (player.id === npc.id || player.id === attack.detail.targetId || player.id === previousTargetId) return false;
+        const death = player.privateMemory.find((item) => item.type === "death");
+        return !death || death.day > night || (death.day === night && death.cause === "werewolf_attack");
+      });
+      target = eligible.sort((a, b) => (npc.suspicionScores[a.id] ?? 0) - (npc.suspicionScores[b.id] ?? 0) || a.name.localeCompare(b.name))[0] ?? null;
+    }
+    if (!target || target.id === previousTargetId) {
+      return null;
+    }
+    results.push({ night, targetId: target.id, result: "guarded" });
+    previousTargetId = target.id;
+    freshCount += 1;
+  }
+  if (freshCount === 0 || results.length !== Math.max(0, gameState.day - 1)) {
+    return null;
+  }
+  const namedResults = results.map((result) => ({
+    ...result,
+    targetName: gameState.players.find((player) => player.id === result.targetId)?.name
+  }));
+  return {
+    text: knightClaimText(namedResults),
+    publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.KNIGHT, results: namedResults },
+    evidenceUsed: ["conversationPolicy: fabricated knight claim maintained on the ask path", ...namedResults.map(({ night }) => `fabricated:knight_guard:${night}`)]
+  };
+}
+
+function buildFakeSeerExtension(npc, gameState) {
+  const priorTargets = new Set(npc.publicClaims.flatMap((claim) => claim.results ?? []).map((result) => result.targetId));
+  const othersResults = [];
+  for (const info of gameState.publicInfo) {
+    if (info.type !== "public_claim" || info.claim?.role !== ROLES.SEER || info.claim.actorId === npc.id) continue;
+    for (const result of info.claim.results ?? []) {
+      othersResults.push({ ...result, actorId: info.claim.actorId });
+    }
+  }
+  // Engage the newest published result the fake has not answered yet,
+  // mirroring the follow-up publication at the decision points.
+  let trigger = null;
+  for (let index = othersResults.length - 1; index >= 0; index -= 1) {
+    if (!priorTargets.has(othersResults[index].targetId)) {
+      trigger = othersResults[index];
+      break;
+    }
+  }
+  if (!trigger) {
+    return null;
+  }
+  const aliveOthers = gameState.players.filter((player) => player.alive && player.id !== npc.id);
+  let newestTarget = null;
+  let newestResult = null;
+  if (trigger.result === "werewolf" && trigger.targetId !== npc.id) {
+    newestTarget = gameState.players.find((player) => player.id === trigger.targetId) ?? null;
+    newestResult = "not_werewolf";
+  } else if (trigger.result === "werewolf") {
+    // D-021 deny shape: the ask path offers no shape choice, so a black
+    // on the claimant himself is answered with a white result only,
+    // naming neither the accuser nor the claimant.
+    newestTarget = aliveOthers
+      .filter((player) => player.id !== trigger.actorId && !priorTargets.has(player.id))
+      .sort((a, b) => a.name.localeCompare(b.name))[0] ?? null;
+    newestResult = newestTarget ? "not_werewolf" : null;
+  } else {
+    const eligible = (player) => player.id !== trigger.targetId && (npc.role !== ROLES.WEREWOLF || player.role !== ROLES.WEREWOLF);
+    newestTarget = aliveOthers.filter((player) => eligible(player) && !priorTargets.has(player.id))
+      .sort((a, b) => (npc.suspicionScores[b.id] ?? 0) - (npc.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0]
+      ?? aliveOthers.filter(eligible)
+        .sort((a, b) => (npc.suspicionScores[b.id] ?? 0) - (npc.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0]
+      ?? null;
+    newestResult = "werewolf";
+  }
+  if (!newestTarget?.alive || !newestResult) {
+    return null;
+  }
+  const results = [{ targetId: newestTarget.id, result: newestResult }];
+  const resultLines = results.map(({ targetId, result }) => `${gameState.players.find((player) => player.id === targetId)?.name ?? targetId}は${result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
+  return {
+    text: `占い結果を追加で公開します。${resultLines.join("、")}です。`,
+    publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.SEER, results },
+    evidenceUsed: ["conversationPolicy: fabricated seer claim maintained on the ask path", ...results.map(({ targetId }) => `fabricated:seer_result:${targetId}`)]
+  };
+}
+
+function buildFakeMediumExtension(npc, gameState) {
+  const oldResults = npc.publicClaims.filter((claim) => claim.role === ROLES.MEDIUM).flatMap((claim) => claim.results ?? []);
+  const published = new Set(oldResults.map((result) => result.targetId));
+  const candidates = gameState.voteHistory.map((vote) => vote.executedId).filter(Boolean)
+    .filter((id) => !published.has(id))
+    .map((targetId, order) => {
+      const seerResult = gameState.publicInfo
+        .filter((info) => info.type === "public_claim" && info.claim?.role === ROLES.SEER)
+        .flatMap((info) => info.claim.results ?? []).find((result) => result.targetId === targetId);
+      const result = seerResult ? (seerResult.result === "werewolf" ? "not_werewolf" : "werewolf")
+        : (gameState.players.find((player) => player.id === targetId)?.role === ROLES.WEREWOLF ? "not_werewolf" : "werewolf");
+      return { targetId, result, contradictionBlack: Boolean(seerResult && result === "werewolf"), order };
+    });
+  if (!candidates.length) {
+    return null;
+  }
+  let blackSlots = oldResults.some((result) => result.result === "werewolf") ? 0 : 1;
+  for (const item of [...candidates].sort((a, b) => Number(b.contradictionBlack) - Number(a.contradictionBlack) || a.order - b.order)) {
+    if (item.result === "werewolf") {
+      if (blackSlots) blackSlots -= 1;
+      else item.result = "not_werewolf";
+    }
+  }
+  const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
+  const lines = results.map(({ targetId, result }) => `${gameState.players.find((player) => player.id === targetId)?.name ?? targetId}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
+  return {
+    text: `霊媒結果を追加で公開します。${lines.join("、")}です。`,
+    publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.MEDIUM, results },
+    evidenceUsed: ["conversationPolicy: fabricated medium claim maintained on the ask path", ...results.map(({ targetId }) => `fabricated:medium_result:${targetId}`)]
+  };
+}
+
+// D-029: restate what a claimed responder has already published. Used
+// when there is nothing fresh to add, so a claimed player never falls
+// back to the pre-claim deflection wording.
+function buildClaimRestatement(npc, gameState) {
+  const claims = npc.publicClaims;
+  if (!claims.length) {
+    return null;
+  }
+  const role = claims.at(-1).role;
+  const nameOf = (id) => gameState.players.find((player) => player.id === id)?.name ?? id;
+  if (role === ROLES.KNIGHT) {
+    const byNight = new Map();
+    for (const claim of claims) {
+      if (claim.role !== ROLES.KNIGHT) continue;
+      for (const result of claim.results ?? []) {
+        if (!byNight.has(result.night)) byNight.set(result.night, result);
+      }
+    }
+    const results = [...byNight.values()].sort((a, b) => a.night - b.night)
+      .map((result) => ({ night: result.night, targetId: result.targetId, targetName: result.targetName ?? nameOf(result.targetId), result: "guarded" }));
+    return { text: knightClaimText(results), evidenceUsed: ["publicClaim: restated published knight results"] };
+  }
+  if (role === ROLES.SEER || role === ROLES.MEDIUM) {
+    const byTarget = new Map();
+    for (const claim of claims) {
+      if (claim.role !== role) continue;
+      for (const result of claim.results ?? []) {
+        if (!byTarget.has(result.targetId)) byTarget.set(result.targetId, result);
+      }
+    }
+    const results = [...byTarget.values()];
+    if (!results.length) {
+      return { text: `${publicRoleName(role)}COします。まだ結果はありません。`, evidenceUsed: ["publicClaim: restated published claim without results"] };
+    }
+    if (role === ROLES.SEER) {
+      const lines = results.map((result) => `${nameOf(result.targetId)}は${result.result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
+      return { text: `占い師COします。${lines.join("、")}です。公開する以上、この結果を軸に考えてください。`, evidenceUsed: ["publicClaim: restated published seer results"] };
+    }
+    const lines = results.map((result) => `${nameOf(result.targetId)}は${result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした"}`);
+    return { text: `${publicRoleName(role)}COします。${lines.join("、")}。`, evidenceUsed: ["publicClaim: restated published medium results"] };
+  }
+  return null;
 }
 
 function knightGuardResults(npc) {

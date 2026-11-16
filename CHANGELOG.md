@@ -1,5 +1,9 @@
 # Changelog
 
+## Ask-path claim maintenance
+
+- Fixed claimed players falling back to the pre-claim deflection when asked directly for results (D-029): the ask-path claim builder only knew the responder's real role, so a fake claimant could never publish fresh results when asked and was exposed by the "I won't claim yet" wording despite already holding a public claim. Fake claimants now extend their fabricated seer, knight, and medium claims on the ask path under the same engine-owned fabrication rules as the decision points, and any claimed player with nothing fresh restates the published results without re-registering a claim. New `tests/askPathClaimMaintenance.test.mjs` adds 9 cases, bringing the full suite to 941/941; default five-player and sample behavior remain unchanged.
+
 ## Fake medium claims and contradiction model
 
 - Added controlled werewolf and madman fake-medium claims to `village9`, including counter, pre-emptive, follow-up, and rescue decisions, engine-owned consistent fabrication, and the one-black cap. Replaced medium certainty, claim reversal, and the liar penalty with symmetric per-target +4 contradiction charges and neutral logs. Dedicated regression coverage brings the full suite to 932/932; default five-player and sample behavior remain unchanged.

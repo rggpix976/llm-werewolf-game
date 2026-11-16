@@ -23,7 +23,8 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Claimed-player result disclosure and disproven-claim reversal | merged | 2026-11-15 | PR #94; DECISIONS.md D-024, D-025 |
 | Vote intention named in target answers | merged | 2026-11-15 | PR #95; DECISIONS.md D-026 |
 | Disproven-claim liar penalty | merged | 2026-11-15 | PR #97; DECISIONS.md D-027 |
-| Fake medium claims and claim contradictions | in review | 2026-11-15 | DECISIONS.md D-028; DEVELOPMENT_STATUS.md |
+| Fake medium claims and claim contradictions | merged | 2026-11-16 | PR #99; DECISIONS.md D-028 |
+| Ask-path claim maintenance | in review | 2026-11-16 | DECISIONS.md D-029; DEVELOPMENT_STATUS.md |
 
 Maintenance: update a row in the same pull request that starts, changes, or
 merges the slice (see AGENTS.md, "Project Memory and Recording").

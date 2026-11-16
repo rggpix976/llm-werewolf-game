@@ -1,8 +1,12 @@
 # Development Status
 
+## Phase 6 ask-path claim maintenance slice
+
+D-029 is implemented for review. On the ask path, claimed players now maintain their claims: genuine claimants publish fresh results as before or restate the published ones, and fake claimants extend their fabricated seer, knight, and medium claims under the same fabrication rules as the day-start and rescue decision points, so the pre-claim deflection no longer exposes a fake claimant who is asked directly. Found in the 2026-11-16 self-play playtest, where a fake knight answered two direct guard-history questions with the unclaimed template and was executed on that tell.
+
 ## Phase 6 fake-medium and contradiction slice
 
-D-028 is implemented for review. Werewolves and the madman can make privacy-safe, provider-selected medium claims in `village9`; the engine owns fabrication and consistency. Medium-involved result disagreements now charge every living involved claimant symmetrically once per target and never reverse prior claim effects. D-025 and D-027 are superseded.
+D-028 is merged (PR #99). Werewolves and the madman can make privacy-safe, provider-selected medium claims in `village9`; the engine owns fabrication and consistency. Medium-involved result disagreements now charge every living involved claimant symmetrically once per target and never reverse prior claim effects. D-025 and D-027 are superseded.
 
 ## Evidence text fix
 
