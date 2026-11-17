@@ -1,6 +1,6 @@
 // The source of strategy preferences is deliberately confined to this accessor.
 export function strategyLeanFor(npc) {
-  return ({ cautious: "roller", logical: "roller", direct: "gray", calm: "neutral", soft: "neutral" })[npc.speechStyle] ?? "neutral";
+  return npc.strategyLean ?? "neutral";
 }
 
 export function strategySideFor(player, gameState) {

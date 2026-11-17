@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-17 — Individual NPC strategy lean (D-030 Phase B)
+
+- Replaced speech-style-derived preferences with individual strategyLean settings in DEFAULT_PLAYERS, preserving runtime template propagation. Missing settings resolve to neutral through the existing sole accessor; vote and reply consumers are unchanged.
+- Recorded the final user-approved assignment in D-030 (including Beni=roller and Fumi=neutral) and marked Phase A merged in PR #101, with Phase B in review.
+- Updated behavioral fixtures and added runtime roster, style/role independence, and missing-setting coverage. Validation: npm test 956/956 PASS (0 failures, cancelled, skipped, or todo), npm run sample all six audit checks PASS, and git diff --check clean. No live API call was made.
+
 ## 2026-11-16 — Personality strategy lean (D-030)
 
 - Centralized personality preferences and the vote/response top-suspect selector. In `village9`, gray and roller preferences switch eligible candidate sides only within four points, preserving suspicion scores and name-order ties.

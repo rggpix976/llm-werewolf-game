@@ -38,51 +38,56 @@ const DEFAULT_PLAYERS = [
     name: "Aoi",
     aliases: ["A", "青井", "アオイ"],
     personality: "冷静で観察好き",
-    speechStyle: "calm"
+    speechStyle: "calm",
+    strategyLean: "neutral"
   },
   {
     id: "npc2",
     name: "Beni",
     aliases: ["B", "紅", "ベニ"],
     personality: "素直でやや不安がり",
-    speechStyle: "soft"
+    speechStyle: "soft",
+    strategyLean: "roller"
   },
   {
     id: "npc3",
     name: "Chika",
     aliases: ["C", "千佳", "チカ"],
     personality: "押しが強く話題転換がうまい",
-    speechStyle: "direct"
+    speechStyle: "direct",
+    strategyLean: "gray"
   },
   {
     id: "npc4",
     name: "Daichi",
     aliases: ["D", "大地", "ダイチ"],
     personality: "慎重で投票理由にこだわる",
-    speechStyle: "cautious"
+    speechStyle: "cautious",
+    strategyLean: "roller"
   },
   {
     id: "npc5",
     name: "Ema",
     aliases: ["E", "絵真", "エマ"],
     personality: "論理重視で発言を整理する",
-    speechStyle: "logical"
+    speechStyle: "logical",
+    strategyLean: "roller"
   },
   {
     id: "npc6", name: "Fumi", aliases: ["F", "文", "フミ"],
-    personality: "世話焼きで面倒見がいい", speechStyle: "soft"
+    personality: "世話焼きで面倒見がいい", speechStyle: "soft", strategyLean: "neutral"
   },
   {
     id: "npc7", name: "Gaku", aliases: ["G", "岳", "ガク"],
-    personality: "無口だが観察が鋭い", speechStyle: "calm"
+    personality: "無口だが観察が鋭い", speechStyle: "calm", strategyLean: "gray"
   },
   {
     id: "npc8", name: "Hana", aliases: ["H", "花", "ハナ"],
-    personality: "明るく話題を回すのがうまい", speechStyle: "direct"
+    personality: "明るく話題を回すのがうまい", speechStyle: "direct", strategyLean: "gray"
   },
   {
     id: "npc9", name: "Itsuki", aliases: ["I", "樹", "イツキ"],
-    personality: "皮肉屋だが頭の回転が速い", speechStyle: "logical"
+    personality: "皮肉屋だが頭の回転が速い", speechStyle: "logical", strategyLean: "gray"
   }
 ];
 
