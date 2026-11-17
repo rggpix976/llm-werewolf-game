@@ -172,6 +172,26 @@ Claim maintenance now runs on the ask path under the same gate as D-024 (a role 
 
 In `village9`, one shared top-suspect selector serves both vote selection and response construction. It preserves the existing suspicion scores and name-order ties, but may switch between a living public role claimant and a gray candidate within four points. Gray candidates have no public role claim and no public seer or medium werewolf result against them. Public results remain relevant even after their claimant dies; self and dead targets are excluded. A blacked, unclaimed raw leader is neither side and never triggers a switch.
 
-The sole preference accessor, `strategyLeanFor(npc)`, currently maps cautious/logical to roller, direct to gray, and calm/soft to neutral, independently of role. This is a staged implementation: the accessor can later read individual NPC settings without changing vote or reply consumers. Scores, claim decisions and fabrication, night actions, and five-player behavior remain unchanged.
+The sole preference accessor, `strategyLeanFor(npc)`, in Phase A (merged in PR #101) mapped cautious/logical to roller, direct to gray, and calm/soft to neutral, independently of role. This is a staged implementation: the accessor can later read individual NPC settings without changing vote or reply consumers. Scores, claim decisions and fabrication, night actions, and five-player behavior remain unchanged.
 
 Recognized strategy questions receive an explicit agreement or disagreement and the adjusted vote target. Matching lean implies agreement; otherwise the adjusted target's side decides. Gray detection uses グレー or CO者/占い師/霊媒師/騎士 together with ほっとく/放置; roller detection uses ローラー, 両方吊る/両方を吊る, or CO者から吊る. Mixed directions and contextless 詰める/放置 fall through to ordinary replies. D-024/D-029 claim publication and maintenance take precedence. This keeps D-026's stated vote intention and actual selection aligned without changing D-014 action authority or D-028 suspicion effects.
+
+### Phase B: Individual NPC settings (2026-11-17, in review)
+
+Phase B supersedes only the Phase A speech-style mapping above. Each DEFAULT_PLAYERS entry now owns a strategyLean setting, copied into runtime player state by the existing template spread. The sole resolver, strategyLeanFor(npc), reads that setting and defaults to neutral when it is absent, including custom NPCs. This decouples strategy preference from speaking style without changing any vote or reply consumer.
+
+The final assignment is the user decision of 2026-11-17; specifically, Beni is roller and Fumi is neutral.
+
+| NPC | Name | Strategy lean |
+| --- | --- | --- |
+| npc1 | Aoi | neutral |
+| npc2 | Beni | roller |
+| npc3 | Chika | gray |
+| npc4 | Daichi | roller |
+| npc5 | Ema | roller |
+| npc6 | Fumi | neutral |
+| npc7 | Gaku | gray |
+| npc8 | Hana | gray |
+| npc9 | Itsuki | gray |
+
+The roster has three roller, four gray, and two neutral NPCs. The four-point boundary, candidate eligibility, village9-only behavior, strategy replies, D-026 consistency, suspicion scores, CO decisions and fabrication, night actions, and five-player behavior remain unchanged.
