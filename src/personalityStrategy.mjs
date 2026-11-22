@@ -1,3 +1,5 @@
+import { contestedClaimGroups } from "./boardAssessment.mjs";
+
 // The source of strategy preferences is deliberately confined to this accessor.
 export const SWAY_MARGIN = 4;
 
@@ -18,13 +20,24 @@ export function chooseTopSuspect(npc, gameState) {
     .filter((player) => player.alive && player.id !== npc.id)
     .map((player) => ({ id: player.id, player, score: npc.suspicionScores[player.id] ?? 0 }))
     .sort((a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name));
-  const top = ranked[0] ?? null;
-  if (!top || gameState.config.scenario !== "village9") return top;
-  const lean = strategyLeanFor(npc);
-  const side = strategySideFor(top.player, gameState);
-  if (lean === "neutral" || !side || side === lean) return top;
-  const preferred = ranked.find(({ player }) => strategySideFor(player, gameState) === lean);
-  return preferred && top.score - preferred.score <= SWAY_MARGIN ? preferred : top;
+  let top = ranked[0] ?? null;
+  if (!top) return top;
+  if (gameState.config.scenario === "village9") {
+    const lean = strategyLeanFor(npc);
+    const side = strategySideFor(top.player, gameState);
+    if (lean !== "neutral" && side && side !== lean) {
+      const preferred = ranked.find(({ player }) => strategySideFor(player, gameState) === lean);
+      if (preferred && top.score - preferred.score <= SWAY_MARGIN) top = preferred;
+    }
+  }
+  for (const group of contestedClaimGroups(gameState)) {
+    if (group.claimantIds.includes(npc.id) || !group.claimantIds.includes(top.id)) continue;
+    const assessment = gameState.boardAssessments?.[`${npc.id}:${group.role}`];
+    if (assessment?.day !== gameState.day || !group.claimantIds.includes(assessment.firstChoiceId)) continue;
+    const chosen = ranked.find(({ id }) => id === assessment.firstChoiceId);
+    if (chosen && chosen.id !== top.id && top.score - chosen.score <= SWAY_MARGIN) return chosen;
+  }
+  return top;
 }
 
 export function strategyProposalFor(input) {

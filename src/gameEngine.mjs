@@ -1,6 +1,7 @@
 import { chooseTopSuspect, SWAY_MARGIN } from "./personalityStrategy.mjs";
 import { assertionFor, persuasionShiftFor } from "./persuasion.mjs";
-import { buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
+import { buildBoardAssessmentDecisionRequest, buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
+import { contestedClaimGroups } from "./boardAssessment.mjs";
 import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim } from "./responseGenerator.mjs";
 import {
   getProviderName,
@@ -467,6 +468,7 @@ export class WerewolfGame {
     validateCommittedConversationGraph(this._conversationGraph(working.state)); this.phase4FaultInjector("mapping_graph_validation");
     working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
     await working.applyPlayerPersuasion(String(action.input ?? action.question).trim(), [working.getPlayer(target.id)]);
+    await working.resolveBoardAssessments([working.getPlayer(target.id)]);
     this._assertPlayerCommitCas(interpreted, delta, target.id, preconditionVersion, playerCommitRegistryFingerprint);
     this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; validateNpcAuthoritativeStateFoundation(working.state); commitState(this.state, working.state);
     if (this.npcStructuredReactionEnabled) {
@@ -906,6 +908,7 @@ export class WerewolfGame {
       this.addPublicInfo({ type: "player_question", actorId: "player", targetId: npc.id, text: `プレイヤーが${npc.name}に質問: ${questionText}` });
       this.applyQuestionPressure(questionText);
       await this.applyPlayerPersuasion(questionText, [npc]);
+      await this.resolveBoardAssessments([npc]);
     }
 
     this.setPhase("npc_response");
@@ -1028,6 +1031,7 @@ export class WerewolfGame {
     this.addPublicInfo({ type: "player_question", actorId: "player", targetId: "all", text: `プレイヤーが全員に質問: ${questionText}` });
     this.applyQuestionPressure(questionText);
     await this.applyPlayerPersuasion(questionText, targets);
+    await this.resolveBoardAssessments(targets);
     this.addDeveloperLog("broadcast_question", {
       playerInput: questionText,
       targetIds: targets.map((player) => player.id)
@@ -1057,6 +1061,34 @@ export class WerewolfGame {
       const result = await this.resolvePersuasion(listener, { ...assertion, text, sourceKind: "player", sourceId: "player", sourceName: "あなた" });
       if (result) exchange.results[listener.id] = result;
     }
+  }
+
+  async resolveBoardAssessments(observers) {
+    for (const group of contestedClaimGroups(this.state)) {
+      for (const observer of observers) await this.resolveBoardAssessment(observer, group);
+    }
+  }
+
+  async resolveBoardAssessment(observer, group) {
+    if (!observer.alive || group.claimantIds.includes(observer.id)) return;
+    const key = `${observer.id}:${group.role}`;
+    const assessments = this.state.boardAssessments ??= {};
+    if (assessments[key]?.day === this.state.day) return;
+    const request = buildBoardAssessmentDecisionRequest(observer, this.state, group);
+    let result = null;
+    let fallbackReason = null;
+    if (typeof this.responseProvider?.chooseAction !== "function") fallbackReason = "method_missing";
+    else {
+      try { result = await this.responseProvider.chooseAction(request); }
+      catch { fallbackReason = "provider_error"; }
+    }
+    if (!fallbackReason && !request.candidates.some(({ id }) => id === result?.choiceId)) fallbackReason = "invalid_choice";
+    const choiceId = fallbackReason ? "no_preference" : result.choiceId;
+    assessments[key] = { day: this.state.day, firstChoiceId: choiceId === "no_preference" ? null : choiceId.slice("execute_first_".length) };
+    this.addDeveloperLog("board_assessment_decision", {
+      observerId: observer.id, role: group.role, decisionPoint: "board_assessment", choiceId, fallbackReason,
+      providerName: result?.providerName ?? getProviderName(this.responseProvider)
+    });
   }
 
   async resolvePersuasion(listener, evidence) {
@@ -1196,6 +1228,7 @@ export class WerewolfGame {
     }
 
     this.setPhase("vote");
+    await this.resolveBoardAssessments(this.getAlivePlayers());
     let votes = this.collectVotes();
     let result = this.resolveVote(votes);
 
@@ -1243,6 +1276,7 @@ export class WerewolfGame {
           claimedRole: candidate.role
         };
       }
+      await this.resolveBoardAssessments(this.getAlivePlayers());
       votes = this.collectVotes();
       result = this.resolveVote(votes);
     }
