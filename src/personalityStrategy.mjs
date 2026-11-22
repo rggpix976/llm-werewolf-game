@@ -1,4 +1,6 @@
 // The source of strategy preferences is deliberately confined to this accessor.
+export const SWAY_MARGIN = 4;
+
 export function strategyLeanFor(npc) {
   return npc.strategyLean ?? "neutral";
 }
@@ -22,7 +24,7 @@ export function chooseTopSuspect(npc, gameState) {
   const side = strategySideFor(top.player, gameState);
   if (lean === "neutral" || !side || side === lean) return top;
   const preferred = ranked.find(({ player }) => strategySideFor(player, gameState) === lean);
-  return preferred && top.score - preferred.score <= 4 ? preferred : top;
+  return preferred && top.score - preferred.score <= SWAY_MARGIN ? preferred : top;
 }
 
 export function strategyProposalFor(input) {

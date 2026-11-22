@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-22 — Persuasion (D-032)
+
+- Added provider-selected acceptance of player white/black assertions in direct and broadcast questions, with engine-owned -2/+2 suspicion effects, daily decision caps, and matching acknowledgment replies.
+- Broadcast vote declarations now offer a separate +1 persuasion wave within the shared four-point margin. Declarations come from engine metadata, never composed provider text; acknowledgments do not cascade.
+- Added frozen private-safe requests, reject fallbacks, developer events, and 24 focused regression tests. Pseudo preferences and question pressure remain unchanged. D-031 is recorded as merged in PR #103.
+- Validation: npm test 985/985 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live API calls or commits.
+
 ## 2026-11-22 — Fabricated claim night cap (D-031)
 
 - Fabricated seer results are now capped at the number of nights that have passed (day - 1) across all of a claimant's publications: the D-029 ask-path extension and the engine's follow-up fabrication both refuse to mint a result once the budget is spent, falling back to the published-results restatement or to no publication. Found in the 2026-11-22 playtest, where a madman published three seer results on day 2.

@@ -1,4 +1,6 @@
-import { chooseTopSuspect } from "./personalityStrategy.mjs";
+import { chooseTopSuspect, SWAY_MARGIN } from "./personalityStrategy.mjs";
+import { assertionFor, persuasionShiftFor } from "./persuasion.mjs";
+import { buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
 import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim } from "./responseGenerator.mjs";
 import {
   getProviderName,
@@ -464,6 +466,8 @@ export class WerewolfGame {
     working.state.playerLog.push(structuredClone(delta.legacyDelta.playerLogEntry)); this.phase4FaultInjector("legacy_log_staged"); working.state.publicInfo.push(structuredClone(delta.legacyDelta.publicInfoEntry));
     validateCommittedConversationGraph(this._conversationGraph(working.state)); this.phase4FaultInjector("mapping_graph_validation");
     working.setPhase("player_question"); working.applyQuestionPressure(String(action.input ?? action.question).trim());
+    await working.applyPlayerPersuasion(String(action.input ?? action.question).trim(), [working.getPlayer(target.id)]);
+    this._assertPlayerCommitCas(interpreted, delta, target.id, preconditionVersion, playerCommitRegistryFingerprint);
     this.phase4FaultInjector("final_state_replacement"); working.state.stateVersion = preconditionVersion + 1; validateNpcAuthoritativeStateFoundation(working.state); commitState(this.state, working.state);
     if (this.npcStructuredReactionEnabled) {
       const lifecycleOwner = captureNpcStructuredLifecycleOwner(this.state, {
@@ -901,6 +905,7 @@ export class WerewolfGame {
       this.addPlayerLog(`あなた -> ${npc.name}: ${questionText}`);
       this.addPublicInfo({ type: "player_question", actorId: "player", targetId: npc.id, text: `プレイヤーが${npc.name}に質問: ${questionText}` });
       this.applyQuestionPressure(questionText);
+      await this.applyPlayerPersuasion(questionText, [npc]);
     }
 
     this.setPhase("npc_response");
@@ -959,6 +964,7 @@ export class WerewolfGame {
       evidenceUsed: prepared.evidenceUsed,
       promptPreview: prepared.promptPreview,
       publicClaim: prepared.publicClaim,
+      declaredVoteTargetId: prepared.declaredVoteTargetId,
       disclosedHiddenInfo: prepared.disclosedHiddenInfo,
       provider: providerResult
     };
@@ -1021,6 +1027,7 @@ export class WerewolfGame {
     this.addPlayerLog(`あなた -> 全員: ${questionText}`);
     this.addPublicInfo({ type: "player_question", actorId: "player", targetId: "all", text: `プレイヤーが全員に質問: ${questionText}` });
     this.applyQuestionPressure(questionText);
+    await this.applyPlayerPersuasion(questionText, targets);
     this.addDeveloperLog("broadcast_question", {
       playerInput: questionText,
       targetIds: targets.map((player) => player.id)
@@ -1031,12 +1038,81 @@ export class WerewolfGame {
       const result = await this.handlePlayerQuestion(npc.id, questionText, { skipPlayerSide: true });
       responses.push({ npcId: npc.id, npcName: npc.name, ...result });
     }
+    await this.applyDeclarationWaves(responses);
 
     return {
       responded: responses.some((response) => response.responded),
       broadcast: true,
       responses
     };
+  }
+
+  async applyPlayerPersuasion(text, listeners) {
+    const assertion = assertionFor(text, this.state.players);
+    if (!assertion) return;
+    const exchange = { day: this.state.day, ...assertion, sourceKind: "player", results: {} };
+    this.state.lastPersuasion = exchange;
+    for (const listener of listeners) {
+      if (!listener.alive || listener.id === assertion.targetId) continue;
+      const result = await this.resolvePersuasion(listener, { ...assertion, text, sourceKind: "player", sourceId: "player", sourceName: "あなた" });
+      if (result) exchange.results[listener.id] = result;
+    }
+  }
+
+  async resolvePersuasion(listener, evidence) {
+    const { targetId, direction, sourceKind, sourceId } = evidence;
+    // Cap decisions, including rejections and failures, across every ask today.
+    const key = JSON.stringify([this.state.day, listener.id, targetId, sourceKind, direction]);
+    const decisions = this.state.persuasionDecisions ??= {};
+    if (decisions[key]) return null;
+    const target = this.getPlayer(targetId);
+    const wasTopBefore = chooseTopSuspect(listener, this.state)?.id === targetId;
+    const request = buildPersuasionDecisionRequest(listener, this.state, { ...evidence, targetName: target.name });
+    let result = null;
+    let fallbackReason = null;
+    if (typeof this.responseProvider?.chooseAction !== "function") fallbackReason = "method_missing";
+    else {
+      try { result = await this.responseProvider.chooseAction(request); }
+      catch { fallbackReason = "provider_error"; }
+    }
+    if (!fallbackReason && !request.candidates.some(({ id }) => id === result?.choiceId)) fallbackReason = "invalid_choice";
+    const choiceId = fallbackReason ? "reject_persuasion" : result.choiceId;
+    const accepted = choiceId === "accept_persuasion";
+    decisions[key] = { accepted };
+    const detail = {
+      speakerId: sourceId, listenerId: listener.id, targetId, direction, sourceKind,
+      decisionPoint: "persuasion", choiceId, fallbackReason,
+      providerName: result?.providerName ?? getProviderName(this.responseProvider)
+    };
+    this.addDeveloperLog("persuasion_decision", detail);
+    if (accepted) {
+      const shift = persuasionShiftFor(direction, sourceKind);
+      listener.suspicionScores[targetId] = (listener.suspicionScores[targetId] ?? 0) + shift;
+      this.addDeveloperLog("persuasion_applied", { ...detail, shift });
+    }
+    return { accepted, wasTopBefore };
+  }
+
+  async applyDeclarationWaves(responses) {
+    const declarations = new Map();
+    for (const response of responses) {
+      if (response.responded && response.declaredVoteTargetId && !declarations.has(response.declaredVoteTargetId)) {
+        declarations.set(response.declaredVoteTargetId, response.npcId);
+      }
+    }
+    for (const [targetId, sourceId] of declarations) {
+      const source = this.getPlayer(sourceId);
+      for (const listener of this.getAlivePlayers()) {
+        if (listener.id === sourceId || listener.id === targetId) continue;
+        const top = chooseTopSuspect(listener, this.state);
+        const topScore = Math.max(...this.getAlivePlayers().filter((p) => p.id !== listener.id).map((p) => listener.suspicionScores[p.id] ?? 0));
+        if (!top || top.id === targetId || topScore - (listener.suspicionScores[targetId] ?? 0) > SWAY_MARGIN) continue;
+        await this.resolvePersuasion(listener, {
+          targetId, direction: "black", sourceKind: "npc", sourceId, sourceName: source.name,
+          text: `${source.name}の投票意向: ${this.getPlayer(targetId).name}`
+        });
+      }
+    }
   }
 
   applyQuestionPressure(questionText) {

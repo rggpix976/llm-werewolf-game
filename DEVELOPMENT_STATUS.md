@@ -1,8 +1,14 @@
 # Development Status
 
+## Persuasion (2026-11-22)
+
+D-032 is implemented and in review. Direct and broadcast assertions now offer each eligible listener a safe D-014 acceptance decision, with engine-controlled suspicion shifts and daily caps stored in state. Matching replies acknowledge the listener's adjusted position; claims and strategy proposals keep precedence. Broadcast replies expose engine-known vote declarations for a non-cascading, four-point-margin persuasion wave after all replies. Public snapshots exclude persuasion records and the pseudo provider rejects by default.
+
+The 24 new tests cover acceptance/rejection, tied and deep top suspects, lean-aware selection, all acknowledgment forms, vocabulary and ambiguous input, day caps, direct/self/dead exclusions, provider failures, frozen request privacy, declaration provenance/deduplication/margin, non-cascading waves, claim/strategy precedence, and both scenarios. Validation: npm test 985/985 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live API calls or commits. D-031 was merged in PR #103.
+
 ## Fabricated claim night cap (2026-11-22)
 
-D-031 is implemented and in review in this change. A fabricated seer claim's published results now never exceed the nights that have passed (day - 1): the ask-path extension from D-029 and the engine's follow-up fabrication both check the claimant's cumulative published seer results first, and a spent budget falls back to restating the published results (ask path) or publishing nothing (follow-up decision). Medium and knight fabrications already satisfy the same bound by construction and are pinned by regression tests. Found in the user's 2026-11-22 playtest, where a madman published three seer results on day 2. Validation: npm test passes 961/961; npm run sample passes all six audit checks; git diff --check is clean. No external API calls were made.
+D-031 was merged in PR #103. A fabricated seer claim's published results now never exceed the nights that have passed (day - 1): the ask-path extension from D-029 and the engine's follow-up fabrication both check the claimant's cumulative published seer results first, and a spent budget falls back to restating the published results (ask path) or publishing nothing (follow-up decision). Medium and knight fabrications already satisfy the same bound by construction and are pinned by regression tests. Found in the user's 2026-11-22 playtest, where a madman published three seer results on day 2. Validation: npm test passes 961/961; npm run sample passes all six audit checks; git diff --check is clean. No external API calls were made.
 
 ## Individual NPC strategy lean (2026-11-17)
 
