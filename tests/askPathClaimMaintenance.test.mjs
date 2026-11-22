@@ -98,10 +98,14 @@ test("a genuine knight asked with a role keyword and nothing fresh restates inst
 
 test("a fake seer extends its claim when asked after the genuine seer publishes a new result", async () => {
   const game = village9();
-  registerClaim(game, game.getPlayer("npc3"), "seer", [{ targetId: "npc7", result: "not_werewolf" }]);
+  // Timeline (D-031): both seers claimed on day 2 with one result
+  // each; the genuine seer's second result arrives on day 3, so the
+  // fake's night budget (day - 1 = 2) still has room to engage it.
+  registerClaim(game, game.getPlayer("npc3"), "seer", [{ targetId: "npc7", result: "not_werewolf" }], 2);
   const madman = game.getPlayer("npc6");
-  registerClaim(game, madman, "seer", [{ targetId: "npc8", result: "not_werewolf" }]);
-  registerClaim(game, game.getPlayer("npc3"), "seer", [{ targetId: "npc9", result: "werewolf" }], 2);
+  registerClaim(game, madman, "seer", [{ targetId: "npc8", result: "not_werewolf" }], 2);
+  registerClaim(game, game.getPlayer("npc3"), "seer", [{ targetId: "npc9", result: "werewolf" }], 3);
+  game.state.day = 3;
 
   const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc6", input: "占い師さん、最新の占い結果を教えて" });
   assert.doesNotMatch(response.result.text, DEFLECTION);

@@ -52,6 +52,9 @@ test("W-B offers the living claimant a one-result follow-up before the madman", 
   const wolf = game.getPlayer("npc1");
   const seer = game.getPlayer("npc3");
   seer.knownInfo.push({ day: 2, type: "seer_result", visibility: "private", shareable: false, targetId: "npc8", result: "not_werewolf" });
+  // The follow-up decision runs at the next day start (day 3), when
+  // the D-031 night budget has grown to two results.
+  game.state.day = 3;
   const claim = game.emitProactiveSeerClaim();
   await game.resolveWerewolfSeerDecision(claim);
   await game.resolveMadmanSeerDecision(claim);

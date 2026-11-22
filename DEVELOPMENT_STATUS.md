@@ -1,8 +1,12 @@
 # Development Status
 
+## Fabricated claim night cap (2026-11-22)
+
+D-031 is implemented and in review in this change. A fabricated seer claim's published results now never exceed the nights that have passed (day - 1): the ask-path extension from D-029 and the engine's follow-up fabrication both check the claimant's cumulative published seer results first, and a spent budget falls back to restating the published results (ask path) or publishing nothing (follow-up decision). Medium and knight fabrications already satisfy the same bound by construction and are pinned by regression tests. Found in the user's 2026-11-22 playtest, where a madman published three seer results on day 2. Validation: npm test passes 961/961; npm run sample passes all six audit checks; git diff --check is clean. No external API calls were made.
+
 ## Individual NPC strategy lean (2026-11-17)
 
-D-030 Phase A is merged in PR #101; Phase B is implemented and in review in this change. DEFAULT_PLAYERS now owns each NPC's strategyLean, and the existing player creation copies it into runtime state. strategyLeanFor reads only that setting, defaulting to neutral when absent. The final nine-NPC assignment is recorded in DECISIONS.md D-030, including the user's Beni=roller and Fumi=neutral decision. Vote and reply consumers are unchanged.
+D-030 Phase A is merged in PR #101; Phase B was merged in PR #102. DEFAULT_PLAYERS now owns each NPC's strategyLean, and the existing player creation copies it into runtime state. strategyLeanFor reads only that setting, defaulting to neutral when absent. The final nine-NPC assignment is recorded in DECISIONS.md D-030, including the user's Beni=roller and Fumi=neutral decision. Vote and reply consumers are unchanged.
 
 Tests cover all nine runtime assignments, independence from speech style and role, missing-setting fallback, and the existing behavioral cases using explicit lean fixtures. Validation: npm test passes 956/956 (0 failures, cancelled, skipped, or todo); npm run sample passes all six audit checks; git diff --check is clean. No external API calls were made.
 

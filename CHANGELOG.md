@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-22 — Fabricated claim night cap (D-031)
+
+- Fabricated seer results are now capped at the number of nights that have passed (day - 1) across all of a claimant's publications: the D-029 ask-path extension and the engine's follow-up fabrication both refuse to mint a result once the budget is spent, falling back to the published-results restatement or to no publication. Found in the 2026-11-22 playtest, where a madman published three seer results on day 2.
+- Three existing follow-up/extension tests had their timelines made explicit (the follow-up decision driven at the next day start), matching the real day-start flow; asserted behavior is unchanged.
+- New `tests/fabricatedClaimNightCap.test.mjs` adds 5 cases pinning the night-cap invariant for fabricated seer, medium, and knight results. Validation: npm test 961/961 PASS, npm run sample all six audit checks PASS, and git diff --check clean. No live API call was made.
+
 ## 2026-11-17 — Individual NPC strategy lean (D-030 Phase B)
 
 - Replaced speech-style-derived preferences with individual strategyLean settings in DEFAULT_PLAYERS, preserving runtime template propagation. Missing settings resolve to neutral through the existing sole accessor; vote and reply consumers are unchanged.

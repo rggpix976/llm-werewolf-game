@@ -1584,6 +1584,17 @@ export class WerewolfGame {
   }
 
   registerFabricatedSeerClaim(claimant, triggeringClaim, isFollowUp, options = {}) {
+    // D-031: follow-up publications share the same night budget as
+    // every other fabricated result — the claimant's published seer
+    // results never exceed the nights that have passed (day - 1).
+    if (isFollowUp) {
+      const publishedSeerResults = claimant.publicClaims
+        .filter((claim) => claim.role === ROLES.SEER)
+        .reduce((count, claim) => count + (claim.results?.length ?? 0), 0);
+      if (publishedSeerResults >= this.state.day - 1) {
+        return null;
+      }
+    }
     const priorTargets = new Set(claimant.publicClaims.flatMap((claim) => claim.results ?? []).map(({ targetId }) => targetId));
     const newest = triggeringClaim?.results.at(-1);
     const aliveOthers = this.getAlivePlayers().filter((player) => player.id !== claimant.id);

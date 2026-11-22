@@ -643,6 +643,16 @@ function buildFakeKnightExtension(npc, gameState) {
 }
 
 function buildFakeSeerExtension(npc, gameState) {
+  // D-031: a fabricated seer can never hold more results than the
+  // nights that have passed (day - 1), exactly like a genuine seer.
+  // Once that budget is spent, the ask path falls back to restating
+  // the published results instead of minting an impossible new one.
+  const publishedSeerResults = npc.publicClaims
+    .filter((claim) => claim.role === ROLES.SEER)
+    .reduce((count, claim) => count + (claim.results?.length ?? 0), 0);
+  if (publishedSeerResults >= gameState.day - 1) {
+    return null;
+  }
   const priorTargets = new Set(npc.publicClaims.flatMap((claim) => claim.results ?? []).map((result) => result.targetId));
   const othersResults = [];
   for (const info of gameState.publicInfo) {
