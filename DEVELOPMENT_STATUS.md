@@ -1,8 +1,14 @@
 # Development Status
 
+## Board assessment for contested claim groups (2026-11-22)
+
+D-033 is implemented and in review. Living observers of conflicting seer/medium claim groups now decide an execution order from an engine-computed public board digest. Assessments persist in game state with a per-observer/role/day cap, run before direct/broadcast replies and vote casts (including rescue re-casts), and safely fall back to no preference. Shared vote/reply selection switches only within the four-point margin after strategy lean; matching black-result choices receive the approved reply and vote declaration. Public snapshots exclude assessments, and pseudo preferences and suspicion scores remain unchanged. D-032 was merged in PR #104.
+
+Twenty new tests cover public-only digests and death status, distinct blacks, playtest-22 margins, reply/strategy/persuasion precedence, both scenarios, three claimants, exclusion and daily caps, frozen request privacy, failures, pseudo invariance, structured interpreter working-copy persistence, strategy-adjustment order, and both rescue re-vote paths. The existing village9 progression test now awaits asynchronous runVote instead of asserting before it settles. Validation: npm.cmd test 1005/1005 PASS; npm.cmd run sample all six audit checks PASS; git diff --check clean. npm.cmd is used because PowerShell blocks npm.ps1. No live API calls or commits.
+
 ## Persuasion (2026-11-22)
 
-D-032 is implemented and in review. Direct and broadcast assertions now offer each eligible listener a safe D-014 acceptance decision, with engine-controlled suspicion shifts and daily caps stored in state. Matching replies acknowledge the listener's adjusted position; claims and strategy proposals keep precedence. Broadcast replies expose engine-known vote declarations for a non-cascading, four-point-margin persuasion wave after all replies. Public snapshots exclude persuasion records and the pseudo provider rejects by default.
+D-032 was merged in PR #104. Direct and broadcast assertions now offer each eligible listener a safe D-014 acceptance decision, with engine-controlled suspicion shifts and daily caps stored in state. Matching replies acknowledge the listener's adjusted position; claims and strategy proposals keep precedence. Broadcast replies expose engine-known vote declarations for a non-cascading, four-point-margin persuasion wave after all replies. Public snapshots exclude persuasion records and the pseudo provider rejects by default.
 
 The 24 new tests cover acceptance/rejection, tied and deep top suspects, lean-aware selection, all acknowledgment forms, vocabulary and ambiguous input, day caps, direct/self/dead exclusions, provider failures, frozen request privacy, declaration provenance/deduplication/margin, non-cascading waves, claim/strategy precedence, and both scenarios. Validation: npm test 985/985 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live API calls or commits. D-031 was merged in PR #103.
 

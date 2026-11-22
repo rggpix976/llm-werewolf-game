@@ -75,7 +75,7 @@ test("madman reads not-werewolf and counts as human for both win conditions", ()
 test("village9 progresses through night, vote, execution, and win check", async () => {
   const game = village9();
   await assert.doesNotReject(() => game.runNight());
-  assert.doesNotThrow(() => game.runVote());
+  await assert.doesNotReject(() => game.runVote());
   assert.ok(game.state.voteHistory.at(-1).executedId);
   assert.ok(game.state.developerLog.some((entry) => entry.kind === "win_check"));
 });

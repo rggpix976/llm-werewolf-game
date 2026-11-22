@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-22 — Board assessment (D-033)
+
+- Added public-only contested seer/medium group detection and board digests, with provider-selected execution-order assessments for every eligible observer, daily state-backed caps, developer events, and safe no-preference fallbacks.
+- Direct/broadcast asks and initial/rescue vote casts resolve assessments before use. Shared vote/reply selection can switch within four points after strategy lean; qualifying black-result choices produce the approved execution-order reply and vote declaration. Public snapshots and pseudo preferences are unchanged.
+- Added 20 focused tests and corrected the existing village9 progression test to await asynchronous runVote. Recorded D-032 as merged in PR #104 and D-033 as in review.
+- Validation: npm.cmd test 1005/1005 PASS; npm.cmd run sample all six audit checks PASS; git diff --check clean. PowerShell blocks npm.ps1, so npm.cmd runs the same scripts. No live API calls or commits.
+
 ## 2026-11-22 — Persuasion (D-032)
 
 - Added provider-selected acceptance of player white/black assertions in direct and broadcast questions, with engine-owned -2/+2 suspicion effects, daily decision caps, and matching acknowledgment replies.

@@ -1,5 +1,6 @@
 import { chooseTopSuspect, strategyProposalFor, strategyReply } from "./personalityStrategy.mjs";
 import { assertionFor } from "./persuasion.mjs";
+import { boardDigestFor, contestedClaimGroups } from "./boardAssessment.mjs";
 import { ROLES, publicRoleName } from "./constants.mjs";
 import { containsAny, extractMentionedPlayerIds, formatList } from "./textUtils.mjs";
 
@@ -47,6 +48,12 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   const claimQuestion = intent.asksRoleOrClaim || Boolean(precomputedClaim) || Boolean(restatedClaim);
 
   const acknowledgment = persuasionAcknowledgment(npc, gameState, playerInput, topSuspect);
+  const boardChoice = contestedClaimGroups(gameState).find((group) => {
+    const assessment = gameState.boardAssessments?.[`${npc.id}:${group.role}`];
+    return !group.claimantIds.includes(npc.id) && assessment?.day === gameState.day
+      && assessment.firstChoiceId === topSuspect?.id
+      && boardDigestFor(gameState, group).claimants.some((c) => c.claimantId === topSuspect?.id && c.bankedBlacks > 0);
+  });
   let declaredVoteTargetId = null;
   let publicClaim = null;
   let text;
@@ -59,7 +66,7 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   if (proposal && topSuspect && !precomputedClaim && !restatedClaim) {
     text = strategyReply(npc, gameState, proposal, topSuspect);
     declaredVoteTargetId = topSuspect.id;
-  } else if (intent.asksWerewolfIdentity) {
+  } else if (intent.asksWerewolfIdentity && !precomputedClaim && !restatedClaim && !acknowledgment && !boardChoice) {
     // The denial wording is identical for every role on purpose: a
     // werewolf-only phrasing would leak the role to anyone who asks.
     const stance = "私は人狼ではありません。ただ、口だけでは証明にならないので発言と投票で見てください。";
@@ -96,6 +103,10 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
     }
   } else if (acknowledgment) {
     text = acknowledgment;
+  } else if (boardChoice) {
+    const chosen = topSuspect.player.name;
+    text = `${chosen}は結果を出し終えている。真でも村は保てるので、先に${chosen}に投票したいです。`;
+    declaredVoteTargetId = topSuspect.id;
   } else if (intent.asksVoteReason) {
     text = answerVoteQuestion(npc, gameState);
     evidenceUsed.push("voteHistory:self");
@@ -206,6 +217,18 @@ export function buildPersuasionDecisionRequest(npc, state, evidence) {
       { id: "reject_persuasion", description: "主張を受け入れず、疑いを維持する" }
     ],
     private: { role: npc.role, goals: [npc.role === ROLES.WEREWOLF || npc.role === ROLES.MADMAN ? "人狼陣営を勝利に導く" : "村を守り人狼を見つける"] }
+  }));
+}
+
+export function buildBoardAssessmentDecisionRequest(npc, state, group) {
+  const persuasion = buildPersuasionDecisionRequest(npc, state, boardDigestFor(state, group));
+  return deepFreeze(structuredClone({
+    ...persuasion,
+    decisionPoint: "board_assessment",
+    candidates: [
+      ...group.claimantIds.map((id) => ({ id: `execute_first_${id}`, description: `${state.players.find((p) => p.id === id).name}を先に処刑する` })),
+      { id: "no_preference", description: "処刑順の希望なし" }
+    ]
   }));
 }
 
