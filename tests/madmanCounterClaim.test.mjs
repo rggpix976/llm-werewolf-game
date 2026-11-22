@@ -67,6 +67,9 @@ test("a later proactive result offers publication and adds exactly one result", 
   // runNight itself uses this same pair after the next night resolves.
   const seer = game.getPlayer("npc3");
   seer.knownInfo.push({ day: 2, type: "seer_result", visibility: "private", shareable: false, targetId: "npc7", result: "not_werewolf" });
+  // The follow-up decision runs at the next day start (day 3), when
+  // the D-031 night budget has grown to two results.
+  game.state.day = 3;
   const triggering = game.emitProactiveSeerClaim();
   await game.resolveMadmanSeerDecision(triggering);
   assert.equal(madman.publicClaims.length, 2);

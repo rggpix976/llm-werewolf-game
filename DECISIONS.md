@@ -182,6 +182,14 @@ Phase B supersedes only the Phase A speech-style mapping above. Each DEFAULT_PLA
 
 The final assignment is the user decision of 2026-11-17; specifically, Beni is roller and Fumi is neutral.
 
+## D-031: Fabricated Results Never Exceed the Nights That Have Passed
+
+A fabricated seer claim's published results, counted across all of the claimant's public seer claims, never exceed the number of nights that have passed (`day - 1`) — the same total a genuine seer can hold. The cap is enforced at both publication sites that could previously exceed it: the ask-path fake seer extension from D-029 (which minted one new result per qualifying question, with no budget check) and the follow-up branch of the engine's fabricated seer registration (which added one result per decision without checking the cumulative total). The initial fabricated claim already sized its white fillers to the same budget and is unchanged.
+
+When the budget is spent, the ask path falls back to the D-029 restatement of the already-published results (the user decision of 2026-11-22: restate, matching a genuine claimant asked twice on the same day), and a follow-up decision simply publishes nothing. The ordinary cadence is preserved: one new fabricated result per night remains possible, so the pressure a fake claim exerts is unchanged; only same-day extras and stacked publication paths are refused.
+
+Fabricated medium results are bounded by completed executions and fabricated knight results by attacked nights, so both already satisfy the same invariant by construction; regression tests pin the invariant for all three roles. Found in the user's 2026-11-22 playtest, where a madman published three seer results on day 2 — an impossible count for any seer — and then verbally defended the impossibility when asked.
+
 | NPC | Name | Strategy lean |
 | --- | --- | --- |
 | npc1 | Aoi | neutral |
