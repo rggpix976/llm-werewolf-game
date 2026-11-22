@@ -1,4 +1,5 @@
 import { chooseTopSuspect, strategyProposalFor, strategyReply } from "./personalityStrategy.mjs";
+import { assertionFor } from "./persuasion.mjs";
 import { ROLES, publicRoleName } from "./constants.mjs";
 import { containsAny, extractMentionedPlayerIds, formatList } from "./textUtils.mjs";
 
@@ -45,6 +46,8 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
   }
   const claimQuestion = intent.asksRoleOrClaim || Boolean(precomputedClaim) || Boolean(restatedClaim);
 
+  const acknowledgment = persuasionAcknowledgment(npc, gameState, playerInput, topSuspect);
+  let declaredVoteTargetId = null;
   let publicClaim = null;
   let text;
   let evidenceUsed = [
@@ -55,11 +58,13 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
 
   if (proposal && topSuspect && !precomputedClaim && !restatedClaim) {
     text = strategyReply(npc, gameState, proposal, topSuspect);
+    declaredVoteTargetId = topSuspect.id;
   } else if (intent.asksWerewolfIdentity) {
     // The denial wording is identical for every role on purpose: a
     // werewolf-only phrasing would leak the role to anyone who asks.
     const stance = "私は人狼ではありません。ただ、口だけでは証明にならないので発言と投票で見てください。";
     text = addSuspectSentence(stance, npc, topSuspect);
+    declaredVoteTargetId = topSuspect?.score > 0 ? topSuspect.id : null;
     if (npc.role === ROLES.WEREWOLF) {
       evidenceUsed.push("conversationPolicy: werewolf denies identity and redirects");
     } else {
@@ -83,10 +88,14 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
       // werewolf-only phrasing would leak the role to anyone who asks.
       text = addSuspectSentence("今は役職COを急ぎません。公開されている発言と投票から考えます。", npc, topSuspect);
       evidenceUsed.push("conversationPolicy: werewolf avoids role claim");
+      declaredVoteTargetId = topSuspect?.score > 0 ? topSuspect.id : null;
     } else {
       text = addSuspectSentence("今は役職COを急ぎません。公開されている発言と投票から考えます。", npc, topSuspect);
       evidenceUsed.push("conversationPolicy: avoid unnecessary role reveal");
+      declaredVoteTargetId = topSuspect?.score > 0 ? topSuspect.id : null;
     }
+  } else if (acknowledgment) {
+    text = acknowledgment;
   } else if (intent.asksVoteReason) {
     text = answerVoteQuestion(npc, gameState);
     evidenceUsed.push("voteHistory:self");
@@ -100,12 +109,14 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
     if (topSuspect && target.id !== topSuspect.id) {
       text = addSuspectSentence(text, npc, topSuspect);
     }
+    if (topSuspect && (target.id === topSuspect.id || topSuspect.score > 0)) declaredVoteTargetId = topSuspect.id;
     evidenceUsed.push(`suspicionScores:${target.id}`);
     if (privateKnownEvidence.length > 0) {
       evidenceUsed.push(...privateKnownEvidence.map((info) => evidenceLabel("knownInfo_private_for_stance", info)));
     }
   } else {
     text = addSuspectSentence("今出ている材料だけだと、まだ断定はできません。", npc, topSuspect);
+    declaredVoteTargetId = topSuspect?.score > 0 ? topSuspect.id : null;
   }
 
   const promptPreview = buildPromptPreview({
@@ -158,11 +169,44 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
 
   return {
     request,
+    declaredVoteTargetId,
     evidenceUsed: [...evidenceUsed],
     promptPreview,
     publicClaim,
     disclosedHiddenInfo
   };
+}
+
+function persuasionAcknowledgment(npc, state, input, top) {
+  const assertion = assertionFor(input, state.players);
+  const last = state.lastPersuasion;
+  if (!assertion || !top || last?.sourceKind !== "player" || last.day !== state.day
+    || last.targetId !== assertion.targetId || last.direction !== assertion.direction) return null;
+  const result = last.results[npc.id];
+  if (!result?.wasTopBefore) return null;
+  const target = state.players.find((player) => player.id === assertion.targetId).name;
+  const stillTop = top.id === assertion.targetId;
+  if (result.accepted && assertion.direction === "white") {
+    return stillTop
+      ? `${target}が白いという話は分かりましたが、それでも私は${target}が気になります。今日は${target}に投票したいです。`
+      : `${target}が白いというのは確かにそう思います。今日は${top.player.name}に投票したいです。`;
+  }
+  if (result.accepted && assertion.direction === "black" && stillTop) return `${target}は確かに怪しいです。今日は${target}に投票したいです。`;
+  if (!result.accepted && assertion.direction === "white" && stillTop) return `それでも私は${target}が気になります。今日は${target}に投票したいです。`;
+  return null;
+}
+
+export function buildPersuasionDecisionRequest(npc, state, evidence) {
+  return deepFreeze(structuredClone({
+    npc: { id: npc.id, name: npc.name, personality: npc.personality, speechStyle: npc.speechStyle, conversationPolicy: npc.conversationPolicy },
+    decisionPoint: "persuasion",
+    context: { day: state.day, phase: state.phase, publicEvidence: [evidence] },
+    candidates: [
+      { id: "accept_persuasion", description: "主張を受け入れ、対象への疑いを調整する" },
+      { id: "reject_persuasion", description: "主張を受け入れず、疑いを維持する" }
+    ],
+    private: { role: npc.role, goals: [npc.role === ROLES.WEREWOLF || npc.role === ROLES.MADMAN ? "人狼陣営を勝利に導く" : "村を守り人狼を見つける"] }
+  }));
 }
 
 export function generatePseudoResponseText(request) {
