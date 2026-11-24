@@ -29,7 +29,7 @@ test("genuine knight rescue and ask claims publish complete guard history", asyn
   assert.match(rescue.state.playerLog.at(-1).message, /1日目の夜はGoroを護衛/);
 
   const asked = game();
-  guard(asked.getPlayer("npc5"), 1, "npc8", "Hana");
+  guard(asked.getPlayer("npc5"), 1, "npc8", "向田紗栄子");
   await asked.dispatchPlayerAction({ type: "ask_npc", target: "npc5", input: "騎士COしてください" });
   assert.equal(asked.getPlayer("npc5").publicClaims[0].role, "knight");
   assert.equal(asked.getPlayer("npc5").publicClaims[0].results[0].targetId, "npc8");
@@ -37,9 +37,9 @@ test("genuine knight rescue and ask claims publish complete guard history", asyn
 
 test("unclaimed knight does not disclose a private guard target in an ordinary answer", async () => {
   const subject = game();
-  guard(subject.getPlayer("npc5"), 1, "npc8", "Hana");
+  guard(subject.getPlayer("npc5"), 1, "npc8", "向田紗栄子");
   const response = await subject.dispatchPlayerAction({ type: "ask_npc", target: "npc5", input: "昨夜は誰を守りましたか" });
-  assert.doesNotMatch(response.result.text, /Hana|npc8|護衛記録/);
+  assert.doesNotMatch(response.result.text, /向田紗栄子|npc8|護衛記録/);
   assert.equal(subject.getPlayer("npc5").publicClaims.length, 0);
 });
 
@@ -94,7 +94,7 @@ test("K-A registers a werewolf knight counterclaim before the rescue revote comp
     }
   };
   const subject = game(provider);
-  guard(subject.getPlayer("npc5"), 1, "npc8", "Hana");
+  guard(subject.getPlayer("npc5"), 1, "npc8", "向田紗栄子");
   subject.state.day = 2;
   subject.addDeveloperLog("werewolf_attack", { targetId: "npc7", guarded: false });
   forceVote(subject, "npc5");

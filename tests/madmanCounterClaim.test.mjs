@@ -24,7 +24,7 @@ test("pseudo choice registers a private-engine fabricated counter claim", async 
   const claim = madman.publicClaims[0];
   assert.deepEqual(claim.results, [{ targetId: "npc1", result: "not_werewolf" }]);
   assert.equal(game.state.publicInfo.some((info) => info.type === "public_claim" && info.actorId === madman.id && info.claim.role === "seer"), true);
-  assert.match(game.state.playerLog.find((entry) => entry.message.startsWith("Fumi: 占い師CO"))?.message ?? "", /Aoiは人狼ではない判定/);
+  assert.match(game.state.playerLog.find((entry) => entry.message.startsWith("難波悠: 占い師CO"))?.message ?? "", /桐生一馬は人狼ではない判定/);
   assert.equal(madman.privateMemory.at(-1).type, "fabricated_seer_claim");
   assert.equal(JSON.stringify(game.getPublicSnapshot()).includes("fabricated"), false);
 });
@@ -60,6 +60,8 @@ for (const [label, provider, reason] of [
 
 test("a later proactive result offers publication and adds exactly one result", async () => {
   const game = gameWith();
+  // Keep the future fabrication target alive, independent of name-order ties.
+  game.getPlayer("npc1").suspicionScores.npc4 = -100;
   await game.runNight();
   const madman = game.getPlayer("npc6");
   assert.equal(madman.publicClaims.length, 1);

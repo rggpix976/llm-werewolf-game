@@ -50,7 +50,7 @@ function baseInput(proposals = [{ proposalType: "suspicion", targetId: "npc-beni
       },
       originatingInputRecord: {
         schemaVersion: 1, inputRecordId: "input-1", requestId: "player-request-1", correlationId: "player-correlation-1",
-        turnId: "turn-1", capturedStateVersion: 1, actorId: "player", rawText: "Aoiはどう思う？", locale: "ja-JP", createdOrder: 0
+        turnId: "turn-1", capturedStateVersion: 1, actorId: "player", rawText: "桐生一馬はどう思う？", locale: "ja-JP", createdOrder: 0
       },
       triggeringEvents: [],
       currentRoster: [

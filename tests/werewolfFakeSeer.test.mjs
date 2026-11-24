@@ -48,6 +48,8 @@ test("werewolf black fabrication skips the other werewolf for the next eligible 
 test("W-B offers the living claimant a one-result follow-up before the madman", async () => {
   const game = village9();
   prepareProactive(game);
+  // Keep the next result target alive, independent of name-order ties.
+  game.getPlayer("npc1").suspicionScores.npc4 = -100;
   await game.runNight();
   const wolf = game.getPlayer("npc1");
   const seer = game.getPlayer("npc3");

@@ -30,10 +30,10 @@ test("export with developer diagnostics contains the log, votes, roles and event
   assert.match(text, /== Player Log ==/);
   assert.match(text, /が処刑されました/);
   assert.match(text, /== Votes ==/);
-  assert.match(text, /Day 1 \/ Executed: Gaku/);
+  assert.match(text, /Day 1 \/ Executed: 足立宏一/);
   assert.match(text, /== Developer Snapshot ==/);
-  assert.match(text, /Chika \(npc3\): role=seer/);
-  assert.match(text, /Aoi \(npc1\): role=werewolf/);
+  assert.match(text, /冴島大河 \(npc3\): role=seer/);
+  assert.match(text, /桐生一馬 \(npc1\): role=werewolf/);
   assert.match(text, /== Developer Event Log ==/);
   assert.match(text, /execution/);
 });

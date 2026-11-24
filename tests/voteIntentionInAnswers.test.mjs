@@ -15,38 +15,38 @@ function game() {
 
 test("an answer about a non-top suspect also names the top suspect", async () => {
   const subject = game();
-  const aoi = subject.getPlayer("npc1");
-  aoi.suspicionScores = { npc5: 3, npc2: 6 };
-  const response = await subject.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "Emaをどう思う？" });
-  assert.match(response.result.text, /Emaは怪しいと思っています/);
-  assert.match(response.result.text, /今いちばん気になるのはBeniです/);
-  // The named top suspect is exactly who Aoi would vote for.
-  assert.equal(subject.chooseVote(aoi).targetId, "npc2");
+  const 桐生一馬 = subject.getPlayer("npc1");
+  桐生一馬.suspicionScores = { npc5: 3, npc2: 6 };
+  const response = await subject.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "春日一番をどう思う？" });
+  assert.match(response.result.text, /春日一番は怪しいと思っています/);
+  assert.match(response.result.text, /今いちばん気になるのは真島吾朗です/);
+  // The named top suspect is exactly who 桐生一馬 would vote for.
+  assert.equal(subject.chooseVote(桐生一馬).targetId, "npc2");
 });
 
 test("an answer about the top suspect itself is not doubled", async () => {
   const subject = game();
   subject.getPlayer("npc1").suspicionScores = { npc5: 3, npc2: 6 };
-  const response = await subject.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "Beniをどう思う？" });
-  assert.match(response.result.text, /Beniは怪しいと思っています/);
-  assert.doesNotMatch(response.result.text, /気になるのはBeniです/);
+  const response = await subject.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "真島吾朗をどう思う？" });
+  assert.match(response.result.text, /真島吾朗は怪しいと思っています/);
+  assert.doesNotMatch(response.result.text, /気になるのは真島吾朗です/);
 });
 
 test("a mild suspicion answer still names a stronger top suspect", async () => {
   const subject = game();
   subject.getPlayer("npc1").suspicionScores = { npc5: 1, npc2: 4 };
-  const response = await subject.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "Emaをどう思う？" });
-  assert.match(response.result.text, /Emaは少し気になります/);
-  assert.match(response.result.text, /今いちばん気になるのはBeniです/);
+  const response = await subject.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "春日一番をどう思う？" });
+  assert.match(response.result.text, /春日一番は少し気になります/);
+  assert.match(response.result.text, /今いちばん気になるのは真島吾朗です/);
 });
 
 test("broadcast answers name the top suspect too", async () => {
   const subject = game();
   subject.getPlayer("npc1").suspicionScores = { npc5: 3, npc2: 6 };
-  await subject.dispatchPlayerAction({ type: "ask_all", input: "Emaは真でも吊りやろ" });
-  const aoiLine = subject.state.playerLog.map((entry) => entry.message).find((message) => message.startsWith("Aoi: "));
-  assert.match(aoiLine, /Emaは怪しい/);
-  assert.match(aoiLine, /Beni/);
+  await subject.dispatchPlayerAction({ type: "ask_all", input: "春日一番は真でも吊りやろ" });
+  const aoiLine = subject.state.playerLog.map((entry) => entry.message).find((message) => message.startsWith("桐生一馬: "));
+  assert.match(aoiLine, /春日一番は怪しい/);
+  assert.match(aoiLine, /真島吾朗/);
 });
 
 test("the OpenAI provider instructions carry the vote-intention rule", () => {

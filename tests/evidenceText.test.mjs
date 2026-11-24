@@ -44,7 +44,7 @@ test("a question to the knight mentioning his guarded target produces a valid re
   assert.equal(guardEntry.targetId, "npc9");
   assert.equal(typeof guardEntry.text, "string");
 
-  const { request } = buildNpcResponseRequest(knight, game.state, "Itsukiをどう思う？");
+  const { request } = buildNpcResponseRequest(knight, game.state, "趙天佑をどう思う？");
   assert.equal(request.context.privateStanceEvidence.length, 1);
   assert.doesNotThrow(() => validateNpcResponseRequest(request));
 });
@@ -56,7 +56,7 @@ test("a question to the medium mentioning an executed player produces a valid re
   assert.equal(resultEntry.targetId, "npc7");
   assert.equal(typeof resultEntry.text, "string");
 
-  const { request } = buildNpcResponseRequest(medium, game.state, "Gakuはどうだった？");
+  const { request } = buildNpcResponseRequest(medium, game.state, "足立宏一はどうだった？");
   assert.equal(request.context.privateStanceEvidence.length, 1);
   assert.doesNotThrow(() => validateNpcResponseRequest(request));
 });

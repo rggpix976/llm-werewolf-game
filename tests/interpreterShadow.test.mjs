@@ -7,7 +7,7 @@ import { runProviderWithRetry } from "../src/providerRetry.mjs";
 import { buildShadowInterpreterRequest, InterpreterShadowClient, shouldObserveInterpreterShadow } from "../public/interpreterShadowClient.mjs";
 import { HttpResponseProvider, SessionManager } from "../public/httpResponseProvider.mjs";
 
-const snapshot = Object.freeze({ day: 1, phase: "day_discussion", winner: null, players: Object.freeze([{ id: "npc-1", name: "Aoi", alive: true }]) });
+const snapshot = Object.freeze({ day: 1, phase: "day_discussion", winner: null, players: Object.freeze([{ id: "npc-1", name: "桐生一馬", alive: true }]) });
 const binding = Object.freeze({ schemaVersion: 1, sessionId: "shadow-session-1", inputRecordId: "shadow-input-1", shadowTurnId: "shadow-turn-1", shadowSnapshotVersion: 0 });
 function requestFixture(overrides = {}) { return { ...buildShadowInterpreterRequest({ snapshot, rawText: "hello", binding, requestId: "interpreter-1", correlationId: "correlation-1" }), ...overrides }; }
 async function start(options = {}) { const server = createWebServer({ config: { provider: "pseudo", interpreterShadowMode: true, openai: null }, ...options }); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)); return { url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) }; }

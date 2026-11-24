@@ -24,7 +24,7 @@ function stubProvider(choiceId, captured) {
 }
 
 function blackOn(targetId, actorId = "npc3") {
-  return { day: 2, actorId, actorName: "Chika", role: "seer", results: [{ targetId, result: "werewolf" }] };
+  return { day: 2, actorId, actorName: "冴島大河", role: "seer", results: [{ targetId, result: "werewolf" }] };
 }
 
 function decisions(game, kind) {
@@ -64,7 +64,7 @@ test("madman deny publishes whites only, excluding himself and the accuser", asy
   assert.equal(claim.results.length, 2);
   assert.ok(claim.results.every(({ result }) => result === "not_werewolf"));
   assert.equal(claim.results.some(({ targetId }) => targetId === "npc6" || targetId === "npc3"), false);
-  assert.deepEqual(claim.results.map(({ targetId }) => targetId), ["npc1", "npc2"]);
+  assert.deepEqual(claim.results.map(({ targetId }) => targetId), ["npc1", "npc8"]);
 });
 
 test("werewolf accuse after the seer blacked him blacks the seer", async () => {
@@ -79,12 +79,12 @@ test("werewolf deny publishes a white result away from the accuser", async () =>
   const game = village9(stubProvider("counter_claim_deny"));
   game.state.day = 2;
   const claim = await game.resolveWerewolfSeerDecision(blackOn("npc1"));
-  assert.deepEqual(claim.results, [{ targetId: "npc2", result: "not_werewolf" }]);
+  assert.deepEqual(claim.results, [{ targetId: "npc8", result: "not_werewolf" }]);
 });
 
 test("follow-up accuse adds a black result on the accuser", async () => {
   const game = village9(stubProvider("publish_more_accuse"));
-  game.getPlayer("npc6").publicClaims.push({ day: 2, actorId: "npc6", actorName: "Fumi", role: "seer", results: [{ targetId: "npc9", result: "not_werewolf" }] });
+  game.getPlayer("npc6").publicClaims.push({ day: 2, actorId: "npc6", actorName: "難波悠", role: "seer", results: [{ targetId: "npc9", result: "not_werewolf" }] });
   game.state.day = 3;
   const claim = await game.resolveMadmanSeerDecision(blackOn("npc6"));
   assert.deepEqual(claim.results, [{ targetId: "npc3", result: "werewolf" }]);
@@ -92,7 +92,7 @@ test("follow-up accuse adds a black result on the accuser", async () => {
 
 test("follow-up deny adds one white away from the accuser and prior targets", async () => {
   const game = village9(stubProvider("publish_more_deny"));
-  game.getPlayer("npc6").publicClaims.push({ day: 2, actorId: "npc6", actorName: "Fumi", role: "seer", results: [{ targetId: "npc9", result: "not_werewolf" }] });
+  game.getPlayer("npc6").publicClaims.push({ day: 2, actorId: "npc6", actorName: "難波悠", role: "seer", results: [{ targetId: "npc9", result: "not_werewolf" }] });
   game.state.day = 3;
   const claim = await game.resolveMadmanSeerDecision(blackOn("npc6"));
   assert.deepEqual(claim.results, [{ targetId: "npc1", result: "not_werewolf" }]);
@@ -101,7 +101,7 @@ test("follow-up deny adds one white away from the accuser and prior targets", as
 test("werewolf follow-up on a self black offers the accuse/deny pair", async () => {
   const captured = [];
   const game = village9(stubProvider("stay_silent", captured));
-  game.getPlayer("npc1").publicClaims.push({ day: 2, actorId: "npc1", actorName: "Aoi", role: "seer", results: [{ targetId: "npc9", result: "not_werewolf" }] });
+  game.getPlayer("npc1").publicClaims.push({ day: 2, actorId: "npc1", actorName: "桐生一馬", role: "seer", results: [{ targetId: "npc9", result: "not_werewolf" }] });
   game.state.day = 3;
   await game.resolveWerewolfSeerDecision(blackOn("npc1"));
   assert.deepEqual(captured[0].candidates.map(({ id }) => id), ["publish_more_accuse", "publish_more_deny", "stay_silent"]);

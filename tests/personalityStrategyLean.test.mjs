@@ -22,15 +22,15 @@ function request(game, npc, input) {
 test("all nine runtime NPCs retain their individual strategy leans", () => {
   const game = WerewolfGame.create({ seed: 9, scenario: "village9", shuffleRoles: false });
   assert.deepEqual(game.state.players.map((npc) => [npc.id, npc.name, npc.strategyLean, strategyLeanFor(npc)]), [
-    ["npc1", "Aoi", "neutral", "neutral"],
-    ["npc2", "Beni", "roller", "roller"],
-    ["npc3", "Chika", "gray", "gray"],
-    ["npc4", "Daichi", "roller", "roller"],
-    ["npc5", "Ema", "roller", "roller"],
-    ["npc6", "Fumi", "neutral", "neutral"],
-    ["npc7", "Gaku", "gray", "gray"],
-    ["npc8", "Hana", "gray", "gray"],
-    ["npc9", "Itsuki", "gray", "gray"]
+    ["npc1", "桐生一馬", "neutral", "neutral"],
+    ["npc2", "真島吾朗", "gray", "gray"],
+    ["npc3", "冴島大河", "roller", "roller"],
+    ["npc4", "堂島大吾", "neutral", "neutral"],
+    ["npc5", "春日一番", "neutral", "neutral"],
+    ["npc6", "難波悠", "gray", "gray"],
+    ["npc7", "足立宏一", "gray", "gray"],
+    ["npc8", "向田紗栄子", "gray", "gray"],
+    ["npc9", "趙天佑", "neutral", "neutral"]
   ]);
 });
 
@@ -97,12 +97,14 @@ test("ties retain name ordering for both raw and preferred candidates", () => {
   npc.suspicionScores.npc4 = 8;
   assert.equal(chooseTopSuspect(npc, game.state).id, "npc3");
   npc.strategyLean = "neutral";
+  assert.equal(chooseTopSuspect(npc, game.state).id, "npc3");
+  npc.strategyLean = "roller";
   assert.equal(chooseTopSuspect(npc, game.state).id, "npc2");
 });
 
 test("ordinary and strategy answers share the adjusted vote target", async () => {
   const { game, npc } = setup();
-  for (const input of ["Beniをどう思う？", "グレーを詰めたい"]) {
+  for (const input of ["真島吾朗をどう思う？", "グレーを詰めたい"]) {
     const response = await game.dispatchPlayerAction({ type: "ask_npc", target: npc.id, input });
     const vote = game.chooseVote(npc);
     assert.equal(vote.targetId, "npc3");

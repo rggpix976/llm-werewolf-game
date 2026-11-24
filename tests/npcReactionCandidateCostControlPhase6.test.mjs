@@ -27,8 +27,8 @@ function projection() {
       day: 1,
       phase: "player_question",
       participants: [
-        { participantId: "npc-aoi", displayName: "Aoi", publicStatus: "alive" },
-        { participantId: "npc-beni", displayName: "Beni", publicStatus: "alive" },
+        { participantId: "npc-aoi", displayName: "桐生一馬", publicStatus: "alive" },
+        { participantId: "npc-beni", displayName: "真島吾朗", publicStatus: "alive" },
         { participantId: "player", displayName: "Player", publicStatus: "alive" }
       ],
       events: [{
@@ -53,7 +53,7 @@ function projection() {
         turnId: "turn-1",
         capturedStateVersion: 1,
         actorId: "player",
-        rawText: "Aoi, what is your result?",
+        rawText: "桐生一馬, what is your result?",
         locale: "en"
       }
     },

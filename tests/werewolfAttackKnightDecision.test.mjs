@@ -21,9 +21,9 @@ function addClaim(game, player, role, results = []) {
 }
 
 function setupNight(game) {
-  game.getPlayer("npc3").suspicionScores = { npc7: 100 }; // seer divines Gaku (white)
-  game.getPlayer("npc1").suspicionScores = { npc9: -5 }; // wolf's usual target is Itsuki
-  game.getPlayer("npc5").suspicionScores = { npc1: -5 }; // knight guards Aoi when no seer is claimed
+  game.getPlayer("npc3").suspicionScores = { npc7: 100 }; // seer divines 足立宏一 (white)
+  game.getPlayer("npc1").suspicionScores = { npc9: -5 }; // wolf's usual target is 趙天佑
+  game.getPlayer("npc5").suspicionScores = { npc1: -5 }; // knight guards 桐生一馬 when no seer is claimed
 }
 
 function attackStub(choiceForAttack, captured) {

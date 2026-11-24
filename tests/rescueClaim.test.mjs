@@ -40,7 +40,7 @@ test("seer about to be executed on day 1 rescue-claims with no results yet and s
   assert.equal(claims[0].claim.role, ROLES.SEER);
   assert.deepEqual(claims[0].claim.results, []);
   assert.equal(
-    game.state.playerLog.some((entry) => entry.message.includes("投票が固まる直前、Chikaが名乗り出た。")),
+    game.state.playerLog.some((entry) => entry.message.includes("投票が固まる直前、冴島大河が名乗り出た。")),
     true
   );
   assert.equal(game.getPlayer("npc3").alive, true);
@@ -124,7 +124,7 @@ test("medium about to be executed rescue-claims with the privately known result"
   assert.equal(claims[0].claim.role, ROLES.MEDIUM);
   assert.deepEqual(claims[0].claim.results, [{ targetId: "npc1", result: "werewolf" }]);
   assert.equal(
-    game.state.playerLog.some((entry) => entry.message.includes("Daichi: 霊媒師COします。Aoiは人狼でした。")),
+    game.state.playerLog.some((entry) => entry.message.includes("堂島大吾: 霊媒師COします。桐生一馬は人狼でした。")),
     true
   );
   assert.equal(game.getPlayer("npc4").alive, true);

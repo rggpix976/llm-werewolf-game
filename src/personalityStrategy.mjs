@@ -1,4 +1,5 @@
 import { contestedClaimGroups } from "./boardAssessment.mjs";
+import { compareNames } from "./textUtils.mjs";
 
 // The source of strategy preferences is deliberately confined to this accessor.
 export const SWAY_MARGIN = 4;
@@ -19,7 +20,7 @@ export function chooseTopSuspect(npc, gameState) {
   const ranked = gameState.players
     .filter((player) => player.alive && player.id !== npc.id)
     .map((player) => ({ id: player.id, player, score: npc.suspicionScores[player.id] ?? 0 }))
-    .sort((a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name));
+    .sort((a, b) => b.score - a.score || compareNames(a.player.name, b.player.name));
   let top = ranked[0] ?? null;
   if (!top) return top;
   if (gameState.config.scenario === "village9") {

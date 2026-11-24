@@ -63,13 +63,13 @@ function projection(overrides = {}) {
       day: 1,
       phase: "player_question",
       participants: [
-        { participantId: "npc-aoi", displayName: "Aoi", publicStatus: "alive" },
-        { participantId: "npc-beni", displayName: "Beni", publicStatus: "alive" },
+        { participantId: "npc-aoi", displayName: "桐生一馬", publicStatus: "alive" },
+        { participantId: "npc-beni", displayName: "真島吾朗", publicStatus: "alive" },
         { participantId: "player", displayName: "Player", publicStatus: "alive" }
       ],
       events: [{ schemaVersion: 1, projectionType: "public_question_event", eventId: "event-question-1", actorId: "player", turnId: "turn-1", occurredPhase: "day_discussion", targetId: "npc-aoi", topic: "result" }],
       claims: [], votes: [], executions: [], attackDeaths: [],
-      triggeringInput: { schemaVersion: 1, inputRecordId: "input-1", requestId: "player-request-1", correlationId: "player-correlation-1", turnId: "turn-1", capturedStateVersion: 1, actorId: "player", rawText: "Aoi, what is your role and result?", locale: "en" }
+      triggeringInput: { schemaVersion: 1, inputRecordId: "input-1", requestId: "player-request-1", correlationId: "player-correlation-1", turnId: "turn-1", capturedStateVersion: 1, actorId: "player", rawText: "桐生一馬, what is your role and result?", locale: "en" }
     },
     actorPrivate: {
       actorId: "npc-aoi", ownRole: "seer", ownTeam: "village",
@@ -461,7 +461,7 @@ test("authorization enforces policy, actor-owned result facts, and target eligib
   const unknownPolicy = inputFor(); unknownPolicy.request.knownInformation.constraints.roleDisclosurePolicy = "future_policy"; refingerprint(unknownPolicy);
   assert.throws(() => validateNpcReactionCandidate(unknownPolicy), (error) => error.code === "invalid_expected_request");
   const mismatch = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "result_claim", targetId: "npc-beni", result: "not_werewolf" }] });
-  mismatch.request.knownInformation.public.participants.splice(2, 0, { participantId: "npc-chika", displayName: "Chika", publicStatus: "alive" });
+  mismatch.request.knownInformation.public.participants.splice(2, 0, { participantId: "npc-chika", displayName: "冴島大河", publicStatus: "alive" });
   mismatch.request.knownInformation.actorPrivate.investigationResults.push({ day: 1, targetId: "npc-chika", result: "not_werewolf", disclosurePolicy: "engine_policy_required" });
   mismatch.request.knownInformation.constraints.allowedTargetIds.push("npc-chika");
   mismatch.request.knownInformation.constraints.allowedLivingTargetIds.push("npc-chika");
@@ -531,7 +531,7 @@ test("whole-candidate duplicates and contradictions fail atomically", () => {
   const duplicate = { schemaVersion: 1, proposals: [{ proposalType: "suspicion", targetId: "npc-beni" }, { proposalType: "suspicion", targetId: "npc-beni" }] };
   assertRejected(validateNpcReactionCandidate(inputFor(duplicate)), "authorization", "duplicate_proposal", "proposal");
   const contradictory = inputFor({ schemaVersion: 1, proposals: [{ proposalType: "vote_declaration", targetId: "npc-beni" }, { proposalType: "vote_declaration", targetId: "npc-chika" }] });
-  contradictory.request.knownInformation.public.participants.splice(2, 0, { participantId: "npc-chika", displayName: "Chika", publicStatus: "alive" });
+  contradictory.request.knownInformation.public.participants.splice(2, 0, { participantId: "npc-chika", displayName: "冴島大河", publicStatus: "alive" });
   contradictory.request.knownInformation.constraints.allowedTargetIds.push("npc-chika");
   contradictory.request.knownInformation.constraints.allowedLivingTargetIds.push("npc-chika");
   contradictory.liveApplicability.participants.splice(2, 0, { participantId: "npc-chika", participantClass: "npc", publicStatus: "alive" });

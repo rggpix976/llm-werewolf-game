@@ -25,15 +25,15 @@ for (const [id, consumerEnabled] of [["BLR-001", false], ["BLR-002", true]]) {
       await submitLegacyQuestion(browser, "npc1", question);
 
       const messages = directMessages(browser);
-      const legacyNpcNode = findDirectMessageNode(browser, (value) => value === `Aoi: ${answer}`);
+      const legacyNpcNode = findDirectMessageNode(browser, (value) => value === `桐生一馬: ${answer}`);
       assert.equal(transport.legacyCalls, 1);
       assert.equal(transport.candidateCalls, 0);
       assert.equal(messages.filter((value) => value.includes(question)).length, 1);
-      assert.equal(messages.filter((value) => value === `Aoi: ${answer}`).length, 1);
+      assert.equal(messages.filter((value) => value === `桐生一馬: ${answer}`).length, 1);
       const relevant = relevantMessages(messages, [question, answer]);
       assert.equal(relevant.length, 2);
       assert.ok(relevant[0].includes(question));
-      assert.equal(relevant[1], `Aoi: ${answer}`);
+      assert.equal(relevant[1], `桐生一馬: ${answer}`);
       assert.ok(legacyNpcNode);
       assert.equal(Object.hasOwn(legacyNpcNode.dataset, "publicationId"), false);
       assert.equal(Object.hasOwn(legacyNpcNode.dataset, "npcPublicationId"), false);
@@ -56,7 +56,7 @@ test("BLR-003 two flag-off questions survive repeated reconciliation in source o
         answers: [answerA, answerB]
       }, async ({ browser, transport }) => {
         await submitLegacyQuestion(browser, "npc1", questionA);
-        assert.equal(directMessages(browser).filter((value) => value === `Aoi: ${answerA}`).length, 1);
+        assert.equal(directMessages(browser).filter((value) => value === `桐生一馬: ${answerA}`).length, 1);
 
         await submitLegacyQuestion(browser, "npc2", questionB);
         const messages = directMessages(browser);
@@ -82,9 +82,9 @@ test("BLR-004 an additional public render keeps the legacy pair exactly once", a
     assert.equal(transport.legacyCalls, 1);
     assert.equal(transport.candidateCalls, 0);
     assert.equal(messages.filter((value) => value.includes(question)).length, 1);
-    assert.equal(messages.filter((value) => value === `Aoi: ${answer}`).length, 1);
-    const playerIndex = messages.findIndex((value) => value === `あなた -> Aoi: ${question}`);
-    const npcIndex = messages.findIndex((value) => value === `Aoi: ${answer}`);
+    assert.equal(messages.filter((value) => value === `桐生一馬: ${answer}`).length, 1);
+    const playerIndex = messages.findIndex((value) => value === `あなた -> 桐生一馬: ${question}`);
+    const npcIndex = messages.findIndex((value) => value === `桐生一馬: ${answer}`);
     assert.ok(playerIndex >= 0);
     assert.ok(npcIndex >= 0);
     assert.ok(playerIndex < npcIndex);
@@ -101,7 +101,7 @@ test("BLR-005 New Game removes the old legacy pair and a fresh pair renders once
     answers: [oldAnswer, freshAnswer]
   }, async ({ browser, transport }) => {
     await submitLegacyQuestion(browser, "npc1", oldQuestion);
-    assert.equal(directMessages(browser).filter((value) => value === `Aoi: ${oldAnswer}`).length, 1);
+    assert.equal(directMessages(browser).filter((value) => value === `桐生一馬: ${oldAnswer}`).length, 1);
 
     browser.elements.newGameButton.listeners.get("click")();
     await settleMicrotasks();
@@ -114,7 +114,7 @@ test("BLR-005 New Game removes the old legacy pair and a fresh pair renders once
     assert.equal(transport.legacyCalls, 2);
     assert.equal(transport.candidateCalls, 0);
     assert.equal(messages.filter((value) => value.includes(freshQuestion)).length, 1);
-    assert.equal(messages.filter((value) => value === `Aoi: ${freshAnswer}`).length, 1);
+    assert.equal(messages.filter((value) => value === `桐生一馬: ${freshAnswer}`).length, 1);
     assert.equal(messages.some((value) => value.includes(oldQuestion) || value.includes(oldAnswer)), false);
   });
 });
@@ -127,7 +127,7 @@ test("BLR-006 a fresh disabled Browser shows the legacy answer and unavailable s
 
     assert.equal(transport.legacyCalls, 1);
     assert.equal(transport.candidateCalls, 0);
-    assert.equal(directMessages(browser).filter((value) => value === `Aoi: ${answer}`).length, 1);
+    assert.equal(directMessages(browser).filter((value) => value === `桐生一馬: ${answer}`).length, 1);
     assert.match(nodeText(browser.elements.developerPanel), /NPC structured observations unavailable/);
     assert.equal(browser.elements.askButton.textContent, "Ask");
     assert.doesNotMatch(nodeText(browser.elements.logList), /Error:/);
@@ -203,7 +203,7 @@ test("BLR-010 legacy text and identity stay UI-only, safe, and authority-neutral
     privateMarker: PRIVATE_DIAGNOSTIC_MARKER
   }, async ({ browser, transport }) => {
     await submitLegacyQuestion(browser, "npc1", "BLR-010 question");
-    const expected = `Aoi: ${answer}`;
+    const expected = `桐生一馬: ${answer}`;
     const legacyNpcNode = findDirectMessageNode(browser, (value) => value === expected);
     assert.ok(legacyNpcNode);
     assert.equal(messageText(legacyNpcNode), expected);

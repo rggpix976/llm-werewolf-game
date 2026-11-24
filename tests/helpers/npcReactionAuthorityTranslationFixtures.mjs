@@ -326,8 +326,8 @@ function gameStateFixture(currentState) {
     day: 1,
     phase: currentState.phase,
     players: [
-      storedPlayer("npc-aoi", "Aoi"),
-      storedPlayer("npc-beni", "Beni")
+      storedPlayer("npc-aoi", "桐生一馬"),
+      storedPlayer("npc-beni", "真島吾朗")
     ],
     alivePlayers: ["npc-aoi", "npc-beni"],
     deadPlayers: [],

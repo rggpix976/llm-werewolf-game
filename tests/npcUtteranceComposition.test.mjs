@@ -5,11 +5,11 @@ import { OpenAIResponseProvider } from "../src/openaiProvider.mjs";
 import { buildNpcResponseRequest } from "../src/responseGenerator.mjs";
 
 const dummyRequest = {
-  npc: { id: "npc1", name: "Aoi", personality: "冷静", speechStyle: "calm", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
-  playerInput: "Beniについてどう思う？",
-  context: { day: 1, phase: "day_discussion", publicEvidence: [{ type: "utterance", text: "Beniの発言" }], shareableKnownEvidence: [], privateStanceEvidence: [], publicClaims: [], intent: { asksWerewolfIdentity: false, asksRoleOrClaim: false, asksVoteReason: false }, topSuspect: { id: "npc2", name: "Beni", score: 1 } },
+  npc: { id: "npc1", name: "桐生一馬", personality: "冷静", speechStyle: "calm", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
+  playerInput: "真島吾朗についてどう思う？",
+  context: { day: 1, phase: "day_discussion", publicEvidence: [{ type: "utterance", text: "真島吾朗の発言" }], shareableKnownEvidence: [], privateStanceEvidence: [], publicClaims: [], intent: { asksWerewolfIdentity: false, asksRoleOrClaim: false, asksVoteReason: false }, topSuspect: { id: "npc2", name: "真島吾朗", score: 1 } },
   policyDecision: { publicClaimAllowed: false, publicClaim: null, disclosedHiddenInfo: false },
-  responsePlan: { baseText: "Beniは少し気になります。", speechStyle: "calm" },
+  responsePlan: { baseText: "真島吾朗は少し気になります。", speechStyle: "calm" },
   evidenceUsed: []
 };
 
@@ -22,7 +22,7 @@ const successResponse = {
       type: "message",
       status: "completed",
       role: "assistant",
-      content: [{ type: "output_text", text: "Beniの様子が少し気になっています。" }]
+      content: [{ type: "output_text", text: "真島吾朗の様子が少し気になっています。" }]
     }
   ],
   usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }
@@ -41,7 +41,7 @@ test("openai instructions: the model composes from stance and materials instead 
   };
   const provider = new OpenAIResponseProvider({ apiKey: "test-key", fetch: mockFetch });
   const result = await provider.generateResponse(dummyRequest);
-  assert.equal(result.text, "Beniの様子が少し気になっています。");
+  assert.equal(result.text, "真島吾朗の様子が少し気になっています。");
 
   const body = JSON.parse(fetchOptions.body);
   // The old rephrase-only mandate is gone.
@@ -54,7 +54,7 @@ test("openai instructions: the model composes from stance and materials instead 
 
   // The model still receives the stance and the allowed materials.
   const sent = JSON.parse(body.input[0].content[0].text);
-  assert.equal(sent.responsePlan.baseText, "Beniは少し気になります。");
+  assert.equal(sent.responsePlan.baseText, "真島吾朗は少し気になります。");
   assert.equal(sent.context.publicEvidence.length, 1);
   assert.equal(sent.context.topSuspect.id, "npc2");
 });
@@ -84,7 +84,7 @@ test("public evidence: mentioned entries are kept and filled with recent context
   entries[10] = { type: "utterance", text: "発言11", actorId: "player", targetId: "npc2" };
   const game = gameWithPublicInfo(entries);
   const npc = game.getPlayer("npc1");
-  const { request } = buildNpcResponseRequest(npc, game.state, "Beniについてどう思いますか");
+  const { request } = buildNpcResponseRequest(npc, game.state, "真島吾朗についてどう思いますか");
   assert.deepEqual(
     request.context.publicEvidence.map((info) => info.text),
     ["発言3", "発言11", "発言15", "発言16"]

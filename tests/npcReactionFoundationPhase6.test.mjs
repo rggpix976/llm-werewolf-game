@@ -116,7 +116,7 @@ test("identity factories ignore caller-suggested authoritative IDs and reject in
 test("known-information projection is deterministic, strict, isolated, and allowlisted", async () => {
   const pending = await startPendingQuestion({ npcStructuredReactionEnabled: false, decorate(game) {
     const actor = game.getPlayer("npc1");
-    actor.knownInfo.push({ day: 1, type: "seer_result", visibility: "private", shareable: false, targetId: "npc3", targetName: "Chika", result: "werewolf", text: "ACTOR_PRIVATE_RESULT_TEXT" });
+    actor.knownInfo.push({ day: 1, type: "seer_result", visibility: "private", shareable: false, targetId: "npc3", targetName: "冴島大河", result: "werewolf", text: "ACTOR_PRIVATE_RESULT_TEXT" });
     actor.privateMemory.push({ type: "secret", text: "ACTOR_PRIVATE_MEMORY_SECRET" });
     actor.hiddenInfo.push({ type: "secret", value: "ACTOR_HIDDEN_SECRET" });
     const other = game.getPlayer("npc2");
@@ -292,7 +292,7 @@ test("public projection fails closed on malformed, duplicate, name-only, and unk
 
   assert.throws(() => buildNpcKnownInformationProjection("npc1", trigger.requestId, mutateWithVote({ targetId: "deleted-player" })), hasCode("unknown_public_participant"));
   assert.throws(() => buildNpcKnownInformationProjection("npc1", trigger.requestId, mutateWithVote({ targetId: "bad id" })), hasCode("invalid_eventTargetId"));
-  assert.throws(() => buildNpcKnownInformationProjection("npc1", trigger.requestId, mutateWithVote({ targetId: undefined, targetName: "Aoi" })), hasCode("invalid_voteTargetId"));
+  assert.throws(() => buildNpcKnownInformationProjection("npc1", trigger.requestId, mutateWithVote({ targetId: undefined, targetName: "桐生一馬" })), hasCode("invalid_voteTargetId"));
   assert.throws(() => buildNpcKnownInformationProjection("npc1", trigger.requestId, mutateWithVote({ eventId: undefined })), hasCode("invalid_eventId"));
 
   const duplicate = structuredClone(original);

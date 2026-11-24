@@ -45,13 +45,13 @@ test("Phase 3 captures immutable engine binding before compatibility mutation an
 });
 
 test("alternative semantics never select by confidence and reject the whole candidate set", () => {
-  const instance = game(), binding = createPhase3Binding({ state: instance.state, rawText: "Aoi?x", targetNpcId: "npc1", createId: ids() });
+  const instance = game(), binding = createPhase3Binding({ state: instance.state, rawText: "桐生一馬?x", targetNpcId: "npc1", createId: ids() });
   const envelope = (alternatives) => ({ schemaVersion: 1, requestId: binding.requestId, correlationId: binding.correlationId, serverCorrelationId: "server-1", result: { schemaVersion: 1, requestId: binding.requestId, correlationId: binding.correlationId, modelOutput: { schemaVersion: 1, alternatives }, diagnostics: { providerName: "test", model: "test", attemptCount: 1, elapsedMs: 0 } } });
   const act = { type: "question", targetId: "npc1", topic: "opinion", sourceSpan: { start: 0, end: 4 } }, alternative = (id, confidence, speechActs = [act]) => ({ alternativeId: id, confidence, speechActs });
   assert.equal(validatePhase3Response(envelope([alternative("a", 0.1), alternative("b", 0.9)]), binding, instance.state).reasonCode, "multiple_alternatives");
   const rejected = validatePhase3Response(envelope([alternative("a", 1, [act, { type: "question", targetId: "missing", topic: "opinion", sourceSpan: { start: 4, end: 5 } }])]), binding, instance.state); assert.equal(rejected.category, "rejected"); assert.equal(rejected.candidateCount, 2);
   const claimAccepted = validatePhase3Response(envelope([alternative("r", 1, [{ type: "result_claim", targetId: "npc1", result: "werewolf", sourceSpan: { start: 0, end: 5 } }])]), binding, instance.state); assert.equal(claimAccepted.reasonCode, "candidate_valid");
-  const uninterpretable = { type: "uninterpretable", reason: "gibberish", sourceSpan: { start: 0, end: 5 } }; assert.equal(validatePhase3Response(envelope([alternative("u", 1, [uninterpretable])]), binding, instance.state).reasonCode, "uninterpretable");
+  const uninterpretable = { type: "uninterpretable", reason: "gibberish", sourceSpan: { start: 0, end: [..."桐生一馬?x"].length } }; assert.equal(validatePhase3Response(envelope([alternative("u", 1, [uninterpretable])]), binding, instance.state).reasonCode, "uninterpretable");
 });
 
 test("strict source spans use Unicode code points and reject overlap, duplicates, and UTF-16 offsets", () => {
@@ -99,7 +99,7 @@ test("publication preparation failure cannot expose partial player or top-level 
 
 test("successful multi-write commands publish one and only one state-version increment", async () => {
   const instance = game();
-  for (const action of [{ type: "ask_npc", target: "npc1", input: "Daichi?" }, { type: "advance_vote" }, { type: "run_night" }]) { const before = instance.state.stateVersion; await instance.dispatchPlayerAction(action); assert.equal(instance.state.stateVersion, before + 1); }
+  for (const action of [{ type: "ask_npc", target: "npc1", input: "堂島大吾?" }, { type: "advance_vote" }, { type: "run_night" }]) { const before = instance.state.stateVersion; await instance.dispatchPlayerAction(action); assert.equal(instance.state.stateVersion, before + 1); }
   assert.deepEqual([instance.state.turnOrder, instance.state.stateVersion], [3, 3]);
 });
 

@@ -20,7 +20,7 @@ const officialSuccessResponse = {
       content: [
         {
           type: "output_text",
-          text: "Chikaさんは怪しいと思います。"
+          text: "冴島大河さんは怪しいと思います。"
         }
       ]
     }
