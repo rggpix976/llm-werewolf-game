@@ -3,7 +3,7 @@ import test from "node:test";
 import { OpenAIResponseProvider, ERROR_TYPES } from "../src/openaiProvider.mjs";
 
 const dummyRequest = {
-  npc: { id: "npc1", name: "Aoi", personality: "P", speechStyle: "S", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
+  npc: { id: "npc1", name: "桐生一馬", personality: "P", speechStyle: "S", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
   playerInput: "Hello",
   context: { day: 1, phase: "day", publicEvidence: [], shareableKnownEvidence: [], privateStanceEvidence: ["Seer Result: npc3 is werewolf"], publicClaims: [], intent: { asksWerewolfIdentity: false, asksRoleOrClaim: false, asksVoteReason: false }, topSuspect: null },
   policyDecision: { publicClaimAllowed: false, publicClaim: null, disclosedHiddenInfo: false },
@@ -49,7 +49,7 @@ test("OpenAIResponseProvider - never send privateStanceEvidence even if publicCl
     ...dummyRequest,
     policyDecision: {
         publicClaimAllowed: true,
-        publicClaim: { day: 1, actorId: "npc1", actorName: "Aoi", role: "seer", results: [] },
+        publicClaim: { day: 1, actorId: "npc1", actorName: "桐生一馬", role: "seer", results: [] },
         disclosedHiddenInfo: true
     }
   };

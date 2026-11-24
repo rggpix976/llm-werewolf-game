@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-24 — Yakuza cast and voice/address materials (D-034 Slice 1)
+
+- Replaced the generic cast with twelve characters and added explicit ordered selection or pinned plus seeded random fill at game creation, retaining five/nine-player sizes and sample per-id tables.
+- Added voiceProfile, callName and per-pair addressForms to utterance requests and OpenAI materials only. Public snapshot shape and decision materials are unchanged.
+- Reassigned leans: npc1/4/5/9 neutral, npc2/6/7/8 gray, npc3/10/11/12 roller. Claim, persuasion, board-assessment and strategy algorithms are unchanged.
+- Browser UI remains untouched; the web default is the roster's first nine / first five until Slice 2 adds selection UI. Sample questions and existing tests now use the cast names; tie fixtures and text spans preserve their original behavioral checks.
+- Review fix: name tiebreaks now use a pinned "ja-JP" collation (`compareNames` in textUtils). A bare `localeCompare` follows the runtime default locale, which orders kanji differently on Linux (en-US) and made fabrication targets platform-dependent; outcomes are now identical everywhere, with a regression test pinning the roster's name order.
+- Added fifteen tests (1020 total). Recorded D-033 merged in PR #105 and D-034 Slice 1 in review.
+- Validation: npm test 1020/1020 PASS on Linux and Windows; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
+
 ## 2026-11-22 — Board assessment (D-033)
 
 - Added public-only contested seer/medium group detection and board digests, with provider-selected execution-order assessments for every eligible observer, daily state-backed caps, developer events, and safe no-preference fallbacks.

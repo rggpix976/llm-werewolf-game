@@ -13,15 +13,15 @@ await step("質問1: 人狼本人に正体を聞く", () => {
   return dispatch({
     type: "ask_npc",
     target: "npc3",
-    input: "あなたは人狼ですか？ Daichiを疑っている理由も教えて。"
+    input: "あなたは人狼ですか？ 堂島大吾を疑っている理由も教えて。"
   });
 });
 
-await step("質問2: 占い師にChikaへの印象を聞く", () => {
+await step("質問2: 占い師に冴島大河への印象を聞く", () => {
   return dispatch({
     type: "ask_npc",
     target: "npc1",
-    input: "Chikaの発言は怪しくない？"
+    input: "冴島大河の発言は怪しくない？"
   });
 });
 
@@ -46,7 +46,7 @@ await step("質問3: 占い師にCOを促す", () => {
   return dispatch({
     type: "ask_npc",
     target: "npc1",
-    input: "Chikaについて、占いCOも含めてどう思う？"
+    input: "冴島大河について、占いCOも含めてどう思う？"
   });
 });
 

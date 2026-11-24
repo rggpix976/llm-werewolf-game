@@ -49,3 +49,11 @@ export function formatList(items) {
   }
   return items.join("、");
 }
+
+export function compareNames(a, b) {
+  // Name tiebreaks use a pinned "ja-JP" collation. A bare localeCompare
+  // follows the runtime's default locale (ja-JP on a Japanese Windows,
+  // en-US on this Linux), which orders kanji differently and made game
+  // outcomes platform-dependent once the cast had Japanese names.
+  return String(a).localeCompare(String(b), "ja-JP");
+}

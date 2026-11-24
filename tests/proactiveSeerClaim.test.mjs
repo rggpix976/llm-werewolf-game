@@ -4,17 +4,17 @@ import { WerewolfGame } from "../src/gameEngine.mjs";
 import { buildProactiveSeerClaim } from "../src/responseGenerator.mjs";
 
 const PLAYERS = [
-  { id: "npc1", name: "Aoi", alive: true },
-  { id: "npc2", name: "Beni", alive: true },
-  { id: "npc3", name: "Chika", alive: false },
-  { id: "npc4", name: "Daichi", alive: true },
-  { id: "npc5", name: "Ema", alive: true }
+  { id: "npc1", name: "桐生一馬", alive: true },
+  { id: "npc2", name: "真島吾朗", alive: true },
+  { id: "npc3", name: "冴島大河", alive: false },
+  { id: "npc4", name: "堂島大吾", alive: true },
+  { id: "npc5", name: "春日一番", alive: true }
 ];
 
 function seerNpc(overrides = {}) {
   return {
     id: "npc2",
-    name: "Beni",
+    name: "真島吾朗",
     role: "seer",
     alive: true,
     knownInfo: [],
@@ -51,7 +51,7 @@ test("proactive claim: no results, dead-only results, and fully claimed results 
 
   const claimed = seerNpc({
     knownInfo: [seerResult("npc5", "not_werewolf")],
-    publicClaims: [{ day: 1, actorId: "npc2", actorName: "Beni", role: "seer", results: [{ targetId: "npc5", result: "not_werewolf" }] }]
+    publicClaims: [{ day: 1, actorId: "npc2", actorName: "真島吾朗", role: "seer", results: [{ targetId: "npc5", result: "not_werewolf" }] }]
   });
   assert.equal(buildProactiveSeerClaim(claimed, state()), null);
 });
@@ -63,8 +63,8 @@ test("proactive claim: first claim announces only unclaimed results about living
   const claim = buildProactiveSeerClaim(npc, state());
   assert.ok(claim);
   assert.ok(claim.text.startsWith("占い師COします。"));
-  assert.ok(claim.text.includes("Emaは人狼ではない判定"));
-  assert.ok(!claim.text.includes("Chika"));
+  assert.ok(claim.text.includes("春日一番は人狼ではない判定"));
+  assert.ok(!claim.text.includes("冴島大河"));
   assert.deepEqual(claim.publicClaim.results, [{ targetId: "npc5", result: "not_werewolf" }]);
   assert.equal(claim.publicClaim.day, 2);
   assert.equal(claim.publicClaim.actorId, "npc2");
@@ -73,18 +73,18 @@ test("proactive claim: first claim announces only unclaimed results about living
 test("proactive claim: follow-up announcement does not repeat the CO wording", () => {
   const npc = seerNpc({
     knownInfo: [seerResult("npc5", "not_werewolf"), seerResult("npc4", "werewolf")],
-    publicClaims: [{ day: 1, actorId: "npc2", actorName: "Beni", role: "seer", results: [{ targetId: "npc5", result: "not_werewolf" }] }]
+    publicClaims: [{ day: 1, actorId: "npc2", actorName: "真島吾朗", role: "seer", results: [{ targetId: "npc5", result: "not_werewolf" }] }]
   });
   const claim = buildProactiveSeerClaim(npc, state({ day: 3 }));
   assert.ok(claim);
   assert.ok(!claim.text.includes("占い師COします"));
   assert.ok(claim.text.includes("追加で公開します"));
-  assert.ok(claim.text.includes("Daichiは人狼判定"));
+  assert.ok(claim.text.includes("堂島大吾は人狼判定"));
   assert.deepEqual(claim.publicClaim.results, [{ targetId: "npc4", result: "werewolf" }]);
 });
 
 // Engine integration. With shuffleRoles: false the roles are fixed:
-// npc1 Aoi = werewolf, npc2 Beni = seer, npc3..npc5 = citizens.
+// npc1 桐生一馬 = werewolf, npc2 真島吾朗 = seer, npc3..npc5 = citizens.
 function arrangedGame() {
   const game = WerewolfGame.create({ seed: 1, shuffleRoles: false });
   const seer = game.getPlayer("npc2");
@@ -108,8 +108,8 @@ test("engine: the seer claims proactively at the start of day 2", async () => {
 
   const lines = claimLines(game);
   assert.equal(lines.length, 1);
-  assert.ok(lines[0].startsWith("Beni: 占い師COします。"));
-  assert.ok(lines[0].includes("Emaは人狼ではない判定"));
+  assert.ok(lines[0].startsWith("真島吾朗: 占い師COします。"));
+  assert.ok(lines[0].includes("春日一番は人狼ではない判定"));
 
   const seer = game.getPlayer("npc2");
   assert.equal(seer.publicClaims.length, 1);
@@ -137,7 +137,7 @@ test("engine: a follow-up result is announced once, then silence", async () => {
   const lines = claimLines(game);
   assert.equal(lines.length, 2);
   assert.ok(lines[1].includes("追加で公開します"));
-  assert.ok(lines[1].includes("Daichiは人狼判定"));
+  assert.ok(lines[1].includes("堂島大吾は人狼判定"));
 
   assert.equal(game.emitProactiveSeerClaim(), null);
   assert.equal(seer.publicClaims.length, 2);

@@ -12,7 +12,7 @@ import { PseudoResponseProvider } from "../src/responseProvider.mjs";
 // by executions / attacked nights by construction; these tests pin
 // the same invariant for all three roles.
 // Fixed village9 roles: npc1/npc2 werewolf, npc3 seer, npc4 medium,
-// npc5 knight, npc6 madman, npc7 Gaku, npc8 Hana, npc9 Itsuki (citizens).
+// npc5 knight, npc6 madman, npc7 足立宏一, npc8 向田紗栄子, npc9 趙天佑 (citizens).
 
 function village9() {
   return WerewolfGame.create({ seed: 9, scenario: "village9", shuffleRoles: false, responseProvider: new PseudoResponseProvider() });
@@ -79,12 +79,12 @@ test("decision path: a follow-up publication on the same day is refused, and all
   const game = village9();
   game.state.day = 2;
   const madman = game.getPlayer("npc6");
-  const firstTrigger = { day: 2, actorId: "npc3", actorName: "Chika", role: "seer", results: [{ targetId: "npc7", result: "werewolf" }] };
+  const firstTrigger = { day: 2, actorId: "npc3", actorName: "冴島大河", role: "seer", results: [{ targetId: "npc7", result: "werewolf" }] };
   const first = game.registerFabricatedSeerClaim(madman, firstTrigger, false);
   assert.ok(first);
   assert.equal(publishedResults(madman, "seer").length, 1);
 
-  const sameDayTrigger = { day: 2, actorId: "npc3", actorName: "Chika", role: "seer", results: [{ targetId: "npc9", result: "werewolf" }] };
+  const sameDayTrigger = { day: 2, actorId: "npc3", actorName: "冴島大河", role: "seer", results: [{ targetId: "npc9", result: "werewolf" }] };
   assert.equal(game.registerFabricatedSeerClaim(madman, sameDayTrigger, true), null);
   assert.equal(madman.publicClaims.length, 1);
   assert.equal(publishedResults(madman, "seer").length, 1);

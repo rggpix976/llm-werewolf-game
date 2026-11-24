@@ -29,7 +29,7 @@ test("ask_all asks every alive NPC once and logs the question once", async () =>
 });
 
 test("ask_all applies question pressure once, not once per NPC", async () => {
-  const question = "Chikaは人狼だと思う？";
+  const question = "冴島大河は人狼だと思う？";
   const single = village9();
   await single.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: question });
 

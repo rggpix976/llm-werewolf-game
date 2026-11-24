@@ -24,7 +24,7 @@ export function createNpcAuthorityPortFixture(options = {}) {
   const playerResult = fixture.gameState.conversation.commitResults.find((result) => result.commitType === "player_conversation");
   const publication = fixture.gameState.conversation.publications.find((record) => record.recordType === "player_utterance_published");
   const input = fixture.gameState.conversation.inputRecords.find((record) => record.inputRecordId === playerResult.inputRecordId);
-  const legacyEntry = { day: 1, phase: "player_question", message: "Player -> Aoi: Question?" };
+  const legacyEntry = { day: 1, phase: "player_question", message: "Player -> 桐生一馬: Question?" };
   fixture.gameState.playerLog.push(legacyEntry);
   fixture.gameState.conversation.playerLegacyDisplayCompatibilityRecords.push({
     schemaVersion: 1,

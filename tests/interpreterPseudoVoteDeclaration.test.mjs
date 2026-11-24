@@ -25,63 +25,63 @@ function envelope(binding, result) {
 }
 
 test("pseudo interpreter: explicit vote declaration resolves the named roster member", async () => {
-  const { act } = await interpret(game(), "Aoiに投票する");
+  const { act } = await interpret(game(), "桐生一馬に投票する");
   assert.equal(act.type, "vote_declaration");
   assert.equal(act.targetId, "npc1");
-  assert.deepEqual(act.sourceSpan, { start: 0, end: 8 });
+  assert.deepEqual(act.sourceSpan, { start: 0, end: [..."桐生一馬に投票する"].length });
 });
 
 test("pseudo interpreter: polite and he-variants of the vote declaration also resolve", async () => {
-  const polite = await interpret(game(), "私はAoiに投票します");
+  const polite = await interpret(game(), "私は桐生一馬に投票します");
   assert.equal(polite.act.type, "vote_declaration");
   assert.equal(polite.act.targetId, "npc1");
-  assert.deepEqual(polite.act.sourceSpan, { start: 2, end: 11 });
+  assert.deepEqual(polite.act.sourceSpan, { start: 2, end: [..."私は桐生一馬に投票します"].length });
 
-  const heVariant = await interpret(game(), "Beniへ投票する");
+  const heVariant = await interpret(game(), "真島吾朗へ投票する");
   assert.equal(heVariant.act.type, "vote_declaration");
   assert.equal(heVariant.act.targetId, "npc2");
 });
 
 test("pseudo interpreter: vote declaration wins over the selected-NPC question fallback", async () => {
-  const { act } = await interpret(game(), "Chikaに投票する", { targetNpcId: "npc1" });
+  const { act } = await interpret(game(), "冴島大河に投票する", { targetNpcId: "npc1" });
   assert.equal(act.type, "vote_declaration");
   assert.equal(act.targetId, "npc3");
 });
 
 test("pseudo interpreter: ordinary input keeps the previous fallback behavior", async () => {
-  const question = await interpret(game(), "Aoiは人狼ですか", { targetNpcId: "npc1" });
+  const question = await interpret(game(), "桐生一馬は人狼ですか", { targetNpcId: "npc1" });
   assert.equal(question.act.type, "question");
   assert.equal(question.act.targetId, "npc1");
   assert.equal(question.act.topic, "opinion");
-  assert.deepEqual(question.act.sourceSpan, { start: 0, end: [..."Aoiは人狼ですか"].length });
+  assert.deepEqual(question.act.sourceSpan, { start: 0, end: [..."桐生一馬は人狼ですか"].length });
 
   const noTarget = await interpret(game(), "こんにちは", { targetNpcId: "missing" });
   assert.equal(noTarget.act.type, "non_game_statement");
 });
 
 test("pseudo interpreter: deliberation about voting is not a declaration", async () => {
-  const { act } = await interpret(game(), "Aoiに投票するかどうか迷っている", { targetNpcId: "npc1" });
+  const { act } = await interpret(game(), "桐生一馬に投票するかどうか迷っている", { targetNpcId: "npc1" });
   assert.equal(act.type, "question");
   assert.equal(act.targetId, "npc1");
 
-  // Suspecting the person who votes for Aoi is not itself a vote for Aoi:
+  // Suspecting the person who votes for 桐生一馬 is not itself a vote for 桐生一馬:
   // the phrase does not close the sentence.
-  const attributive = await interpret(game(), "私はAoiに投票する人を疑う", { targetNpcId: "npc2" });
+  const attributive = await interpret(game(), "私は桐生一馬に投票する人を疑う", { targetNpcId: "npc2" });
   assert.equal(attributive.act.type, "question");
   assert.equal(attributive.act.targetId, "npc2");
 
   // A negated intention is not a declaration either.
-  const negated = await interpret(game(), "Aoiに投票するつもりはない", { targetNpcId: "npc1" });
+  const negated = await interpret(game(), "桐生一馬に投票するつもりはない", { targetNpcId: "npc1" });
   assert.equal(negated.act.type, "question");
   assert.equal(negated.act.targetId, "npc1");
 
-  const withParticle = await interpret(game(), "Aoiに投票するよ", { targetNpcId: "npc2" });
+  const withParticle = await interpret(game(), "桐生一馬に投票するよ", { targetNpcId: "npc2" });
   assert.equal(withParticle.act.type, "vote_declaration");
   assert.equal(withParticle.act.targetId, "npc1");
 });
 
 test("pseudo interpreter: two named members are ambiguous and fall back", async () => {
-  const { act } = await interpret(game(), "Aoiに投票する。Beniに投票する", { targetNpcId: "npc1" });
+  const { act } = await interpret(game(), "桐生一馬に投票する。真島吾朗に投票する", { targetNpcId: "npc1" });
   assert.equal(act.type, "question");
   assert.equal(act.targetId, "npc1");
 });
@@ -89,7 +89,7 @@ test("pseudo interpreter: two named members are ambiguous and fall back", async 
 test("pseudo interpreter: a dead target is not declared and falls back", async () => {
   const instance = game();
   instance.state.players.find((player) => player.id === "npc1").alive = false;
-  const { act } = await interpret(instance, "Aoiに投票する", { targetNpcId: "npc2" });
+  const { act } = await interpret(instance, "桐生一馬に投票する", { targetNpcId: "npc2" });
   assert.equal(act.type, "question");
   assert.equal(act.targetId, "npc2");
 });
@@ -103,14 +103,14 @@ test("pseudo interpreter: naming the player is not a vote declaration", async ()
 test("pseudo interpreter: vote declaration validates end to end in the vote phase only", async () => {
   const voteGame = game();
   voteGame.state.phase = "vote";
-  const { binding, result } = await interpret(voteGame, "Aoiに投票する");
+  const { binding, result } = await interpret(voteGame, "桐生一馬に投票する");
   const validated = validatePhase3Response(envelope(binding, result), binding, voteGame.state);
   assert.equal(validated.category, "validated");
   assert.equal(validated.reasonCode, "candidate_valid");
   assert.equal(validated.selectedAlternative.speechActs[0].type, "vote_declaration");
 
   const discussionGame = game();
-  const discussion = await interpret(discussionGame, "Aoiに投票する");
+  const discussion = await interpret(discussionGame, "桐生一馬に投票する");
   const rejected = validatePhase3Response(envelope(discussion.binding, discussion.result), discussion.binding, discussionGame.state);
   assert.equal(rejected.category, "rejected");
   assert.equal(rejected.reasonCode, "candidate_not_allowed");

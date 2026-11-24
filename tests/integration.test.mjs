@@ -50,7 +50,7 @@ test("Integration: Client disconnect propagates abort to provider", async () => 
     req.on("error", () => {});
 
     const body = JSON.stringify({
-        npc: { id: "npc1", name: "Aoi", personality: "P", speechStyle: "S", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
+        npc: { id: "npc1", name: "桐生一馬", personality: "P", speechStyle: "S", conversationPolicy: { truthfulness: "t", roleClaim: "r", allowedTactics: [], forbidden: [] } },
         playerInput: "Hello",
         context: { day: 1, phase: "day", publicEvidence: [], shareableKnownEvidence: [], privateStanceEvidence: [], publicClaims: [], intent: { asksWerewolfIdentity: false, asksRoleOrClaim: false, asksVoteReason: false }, topSuspect: null },
         policyDecision: { publicClaimAllowed: false, publicClaim: null, disclosedHiddenInfo: false },

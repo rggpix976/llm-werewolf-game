@@ -46,17 +46,17 @@ test("a claimed medium publishes a fresh result when asked for the result direct
   const claims = game.getPlayer("npc4").publicClaims;
   assert.equal(claims.length, 2);
   assert.deepEqual(claims[1].results, [{ targetId: "npc8", result: "not_werewolf" }]);
-  assert.ok(game.state.playerLog.some((entry) => entry.message.includes("Hanaは人狼ではありませんでした")));
+  assert.ok(game.state.playerLog.some((entry) => entry.message.includes("向田紗栄子は人狼ではありませんでした")));
 });
 
 test("a claimed knight publishes new guard history when asked for the GJ target directly", async () => {
   const game = village9();
   const knight = game.getPlayer("npc5");
-  guard(knight, 1, "npc8", "Hana");
+  guard(knight, 1, "npc8", "向田紗栄子");
   await game.dispatchPlayerAction({ type: "ask_npc", target: "npc5", input: "騎士COしてください" });
   assert.equal(knight.publicClaims.length, 1);
 
-  guard(knight, 2, "npc1", "Aoi");
+  guard(knight, 2, "npc1", "桐生一馬");
   await game.dispatchPlayerAction({ type: "ask_npc", target: "npc5", input: "GJ先教えて" });
   assert.equal(knight.publicClaims.length, 2);
   assert.equal(knight.publicClaims[1].results.length, 2);
@@ -73,11 +73,11 @@ test("an unclaimed medium does not claim on a direct result question", async () 
 test("a claimed seer with nothing fresh answers a result question normally", async () => {
   const game = village9();
   const seer = game.getPlayer("npc3");
-  seer.knownInfo.push({ day: 1, type: "seer_result", visibility: "private", shareable: false, targetId: "npc7", targetName: "Gaku", result: "not_werewolf", text: "占い結果: Gakuは人狼ではない。" });
+  seer.knownInfo.push({ day: 1, type: "seer_result", visibility: "private", shareable: false, targetId: "npc7", targetName: "足立宏一", result: "not_werewolf", text: "占い結果: 足立宏一は人狼ではない。" });
   await game.dispatchPlayerAction({ type: "ask_npc", target: "npc3", input: "占い師COありますか？" });
   assert.equal(seer.publicClaims.length, 1);
 
-  const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc3", input: "Gakuの結果についてどう思う？" });
+  const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc3", input: "足立宏一の結果についてどう思う？" });
   assert.doesNotMatch(response.result.text, /役職COを急ぎません/);
   assert.equal(seer.publicClaims.length, 1);
 });

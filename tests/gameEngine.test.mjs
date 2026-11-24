@@ -97,7 +97,7 @@ test("accusatory player questions raise living NPC suspicion for mentioned targe
   await game.dispatchPlayerAction({
     type: "ask_npc",
     target: "npc2",
-    input: "What do you think about Chika?"
+    input: "What do you think about 冴島大河?"
   });
 
   for (const player of game.state.players) {
@@ -112,7 +112,7 @@ test("accusatory player questions raise living NPC suspicion for mentioned targe
   await game.dispatchPlayerAction({
     type: "ask_npc",
     target: "npc2",
-    input: "I suspect Chika is a werewolf"
+    input: "I suspect 冴島大河 is a werewolf"
   });
 
   for (const player of game.state.players) {
@@ -634,7 +634,7 @@ test("developer log correctly maps NPCs for various log kinds", async () => {
 
   const logs = game.state.developerLog;
 
-  // Aoi (npc1) should be found in: initial_roles, initial_player_states, npc_response_generated, vote_resolved, seer_action
+  // 桐生一馬 (npc1) should be found in: initial_roles, initial_player_states, npc_response_generated, vote_resolved, seer_action
   const aoiLogs = logs.filter(e => {
     const d = e.detail || {};
     if (d.npcId === "npc1") return true;

@@ -1,3 +1,4 @@
+import { selectCast } from "./cast.mjs";
 import { chooseTopSuspect, SWAY_MARGIN } from "./personalityStrategy.mjs";
 import { assertionFor, persuasionShiftFor } from "./persuasion.mjs";
 import { buildBoardAssessmentDecisionRequest, buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
@@ -10,7 +11,7 @@ import {
 } from "./responseProvider.mjs";
 import { PHASES, ROLES, TEAMS, publicRoleName, publicTeamName, teamForRole } from "./constants.mjs";
 import { SeededRandom } from "./seededRandom.mjs";
-import { containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
+import { compareNames, containsAny, extractMentionedPlayerIds } from "./textUtils.mjs";
 import { createPhase3Binding, validatePhase3Response } from "./interpreterValidation.mjs";
 import { canonicalJson, sha256Fingerprint } from "./conversation/ids.mjs";
 import { ID_PATTERN, SHA256_PATTERN } from "./conversation/domain.mjs";
@@ -34,65 +35,6 @@ import {
   NpcStructuredReactionAuthorityPortInvariantError,
   validateNpcStructuredReactionAuthoritySnapshot
 } from "./npcStructuredReactionAuthorityPort.mjs";
-
-const DEFAULT_PLAYERS = [
-  {
-    id: "npc1",
-    name: "Aoi",
-    aliases: ["A", "青井", "アオイ"],
-    personality: "冷静で観察好き",
-    speechStyle: "calm",
-    strategyLean: "neutral"
-  },
-  {
-    id: "npc2",
-    name: "Beni",
-    aliases: ["B", "紅", "ベニ"],
-    personality: "素直でやや不安がり",
-    speechStyle: "soft",
-    strategyLean: "roller"
-  },
-  {
-    id: "npc3",
-    name: "Chika",
-    aliases: ["C", "千佳", "チカ"],
-    personality: "押しが強く話題転換がうまい",
-    speechStyle: "direct",
-    strategyLean: "gray"
-  },
-  {
-    id: "npc4",
-    name: "Daichi",
-    aliases: ["D", "大地", "ダイチ"],
-    personality: "慎重で投票理由にこだわる",
-    speechStyle: "cautious",
-    strategyLean: "roller"
-  },
-  {
-    id: "npc5",
-    name: "Ema",
-    aliases: ["E", "絵真", "エマ"],
-    personality: "論理重視で発言を整理する",
-    speechStyle: "logical",
-    strategyLean: "roller"
-  },
-  {
-    id: "npc6", name: "Fumi", aliases: ["F", "文", "フミ"],
-    personality: "世話焼きで面倒見がいい", speechStyle: "soft", strategyLean: "neutral"
-  },
-  {
-    id: "npc7", name: "Gaku", aliases: ["G", "岳", "ガク"],
-    personality: "無口だが観察が鋭い", speechStyle: "calm", strategyLean: "gray"
-  },
-  {
-    id: "npc8", name: "Hana", aliases: ["H", "花", "ハナ"],
-    personality: "明るく話題を回すのがうまい", speechStyle: "direct", strategyLean: "gray"
-  },
-  {
-    id: "npc9", name: "Itsuki", aliases: ["I", "樹", "イツキ"],
-    personality: "皮肉屋だが頭の回転が速い", speechStyle: "logical", strategyLean: "gray"
-  }
-];
 
 const SAMPLE_ROLE_BY_ID = {
   npc1: ROLES.SEER,
@@ -175,8 +117,8 @@ export class WerewolfGame {
   static create(options = {}) {
     const createId = options.createId ?? (() => globalThis.crypto.randomUUID());
     const rng = new SeededRandom(options.seed ?? Date.now());
-    const roles = assignRoles({ rng, shuffleRoles: options.shuffleRoles ?? true, scenario: options.scenario });
-    const playerTemplates = options.scenario === "village9" ? DEFAULT_PLAYERS : DEFAULT_PLAYERS.slice(0, 5);
+    const playerTemplates = selectCast({ scenario: options.scenario, castIds: options.castIds, pinnedIds: options.pinnedCastIds, rng: () => rng.next() });
+    const roles = assignRoles({ rng, shuffleRoles: options.shuffleRoles ?? true, scenario: options.scenario, playerTemplates });
     const players = playerTemplates.map((template) => {
       const role = roles[template.id];
       return createPlayerState(template, role, options.scenario);
@@ -1394,7 +1336,7 @@ export class WerewolfGame {
         return sum + (voter.suspicionScores[id] ?? 0);
       }, 0);
       return { id, total };
-    }).sort((a, b) => b.total - a.total || this.getPlayer(a.id).name.localeCompare(this.getPlayer(b.id).name));
+    }).sort((a, b) => b.total - a.total || compareNames(a.name, b.name));
 
     return {
       executedId: aggregateSuspicion[0].id,
@@ -1571,7 +1513,7 @@ export class WerewolfGame {
           const death = player.privateMemory.find((item) => item.type === "death");
           return !death || death.day > night || (death.day === night && death.cause === "werewolf_attack");
         });
-        target = eligible.sort((a, b) => (claimant.suspicionScores[a.id] ?? 0) - (claimant.suspicionScores[b.id] ?? 0) || a.name.localeCompare(b.name))[0];
+        target = eligible.sort((a, b) => (claimant.suspicionScores[a.id] ?? 0) - (claimant.suspicionScores[b.id] ?? 0) || compareNames(a.name, b.name))[0];
       }
       if (!target || target.id === previousTargetId) return null;
       results.push({ night, targetId: target.id, result: "guarded" }); previousTargetId = target.id;
@@ -1713,7 +1655,7 @@ export class WerewolfGame {
     let newestResult;
     if (options.uncontested) {
       newestTarget = aliveOthers.filter((player) => player.role !== ROLES.WEREWOLF)
-        .sort((a, b) => (claimant.suspicionScores[b.id] ?? 0) - (claimant.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0];
+        .sort((a, b) => (claimant.suspicionScores[b.id] ?? 0) - (claimant.suspicionScores[a.id] ?? 0) || compareNames(a.name, b.name))[0];
       newestResult = newestTarget ? "werewolf" : null;
     } else if (!newest) {
       return null;
@@ -1734,7 +1676,7 @@ export class WerewolfGame {
       } else if (isFollowUp) {
         newestTarget = aliveOthers
           .filter((player) => player.id !== accuser?.id && !priorTargets.has(player.id))
-          .sort((a, b) => a.name.localeCompare(b.name))[0];
+          .sort((a, b) => compareNames(a.name, b.name))[0];
         newestResult = newestTarget ? "not_werewolf" : null;
       } else if (accuser) {
         fillerExcludedIds.add(accuser.id);
@@ -1742,16 +1684,16 @@ export class WerewolfGame {
     } else {
       const eligible = (player) => player.id !== newest.targetId && (!options.werewolf || player.role !== ROLES.WEREWOLF);
       newestTarget = aliveOthers.filter((player) => eligible(player) && !priorTargets.has(player.id))
-        .sort((a, b) => (claimant.suspicionScores[b.id] ?? 0) - (claimant.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0]
+        .sort((a, b) => (claimant.suspicionScores[b.id] ?? 0) - (claimant.suspicionScores[a.id] ?? 0) || compareNames(a.name, b.name))[0]
         ?? aliveOthers.filter(eligible)
-          .sort((a, b) => (claimant.suspicionScores[b.id] ?? 0) - (claimant.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0];
+          .sort((a, b) => (claimant.suspicionScores[b.id] ?? 0) - (claimant.suspicionScores[a.id] ?? 0) || compareNames(a.name, b.name))[0];
       newestResult = "werewolf";
     }
     const results = newestTarget?.alive ? [{ targetId: newestTarget.id, result: newestResult }] : [];
     if (!isFollowUp) {
       const needed = Math.max(0, this.state.day - 1 - results.length);
       const used = new Set(results.map(({ targetId }) => targetId));
-      results.unshift(...aliveOthers.filter((player) => !used.has(player.id) && !fillerExcludedIds.has(player.id)).sort((a, b) => a.name.localeCompare(b.name)).slice(0, needed)
+      results.unshift(...aliveOthers.filter((player) => !used.has(player.id) && !fillerExcludedIds.has(player.id)).sort((a, b) => compareNames(a.name, b.name)).slice(0, needed)
         .map((player) => ({ targetId: player.id, result: "not_werewolf" })));
     }
     if (results.length === 0) return null;
@@ -2055,7 +1997,7 @@ export class WerewolfGame {
         candidate,
         score: seer.suspicionScores[candidate.id] ?? 0
       }))
-      .sort((a, b) => b.score - a.score || a.candidate.name.localeCompare(b.candidate.name))[0].candidate;
+      .sort((a, b) => b.score - a.score || compareNames(a.candidate.name, b.candidate.name))[0].candidate;
 
     const result = target.role === ROLES.WEREWOLF ? "werewolf" : "not_werewolf";
     seer.knownInfo.push({
@@ -2107,7 +2049,7 @@ export class WerewolfGame {
       .find((player) => player?.alive && player.id !== knight.id);
     const ordered = candidates
       .map((candidate) => ({ candidate, score: knight.suspicionScores[candidate.id] ?? 0 }))
-      .sort((a, b) => a.score - b.score || a.candidate.name.localeCompare(b.candidate.name))
+      .sort((a, b) => a.score - b.score || compareNames(a.candidate.name, b.candidate.name))
       .map(({ candidate }) => candidate);
     if (publicSeer) {
       ordered.splice(ordered.indexOf(publicSeer), 1);
@@ -2194,7 +2136,7 @@ export class WerewolfGame {
           candidate,
           score: werewolf.suspicionScores[candidate.id] ?? 0
         }))
-        .sort((a, b) => a.score - b.score || a.candidate.name.localeCompare(b.candidate.name))[0].candidate);
+        .sort((a, b) => a.score - b.score || compareNames(a.candidate.name, b.candidate.name))[0].candidate);
 
     if (target.id === guardedTargetId) {
       this.addPlayerLog("夜が明けました。昨夜の犠牲者はいませんでした。");
@@ -2859,7 +2801,7 @@ function assertNpcAuthorityPlainData(value, code, active = new Set()) {
 function assertNpcAuthorityId(value, code) { if (typeof value !== "string" || !ID_PATTERN.test(value)) throw npcAuthorityInvariant(code); }
 function npcAuthorityInvariant(code) { return new NpcStructuredReactionAuthorityPortInvariantError(code); }
 
-function assignRoles({ rng, shuffleRoles, scenario }) {
+function assignRoles({ rng, shuffleRoles, scenario, playerTemplates }) {
   if (scenario === "sample") {
     return { ...SAMPLE_ROLE_BY_ID };
   }
@@ -2867,14 +2809,14 @@ function assignRoles({ rng, shuffleRoles, scenario }) {
   if (scenario === "village9") {
     const roles = [ROLES.WEREWOLF, ROLES.WEREWOLF, ROLES.SEER, ROLES.MEDIUM, ROLES.KNIGHT, ROLES.MADMAN, ROLES.CITIZEN, ROLES.CITIZEN, ROLES.CITIZEN];
     const assigned = shuffleRoles ? rng.shuffle(roles) : roles;
-    return Object.fromEntries(DEFAULT_PLAYERS.map((player, index) => [player.id, assigned[index]]));
+    return Object.fromEntries(playerTemplates.map((player, index) => [player.id, assigned[index]]));
   }
 
   const roles = [ROLES.WEREWOLF, ROLES.SEER, ROLES.CITIZEN, ROLES.CITIZEN, ROLES.CITIZEN];
   const assignedRoles = shuffleRoles ? rng.shuffle(roles) : roles;
   const result = {};
 
-  DEFAULT_PLAYERS.forEach((player, index) => {
+  playerTemplates.forEach((player, index) => {
     result[player.id] = assignedRoles[index];
   });
 
@@ -3059,7 +3001,7 @@ function initializeSuspicion(players, rng, scenario) {
 
 function addInitialImpression(player, players) {
   const top = Object.entries(player.suspicionScores)
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+    .sort((a, b) => b[1] - a[1] || compareNames(a[0], b[0]))[0];
 
   if (!top || top[1] <= 0) {
     return;

@@ -58,7 +58,7 @@ test("pre-publication fault injection leaves no structured or legacy partial wri
 });
 
 test("four-act conversion is one atomic increment with gap-free Unicode display coverage", async () => {
-  const raw = "私は占い師。😀Aoi?";
+  const raw = "私は占い師。😀桐生一馬?";
   const acts = [
     { type: "role_claim", claimedRole: "seer", sourceSpan: { start: 0, end: 5 } },
     { type: "non_game_statement", sourceSpan: { start: 5, end: 7 } },
@@ -88,7 +88,7 @@ test("every preparation fault stage rolls back counters, registries, display, an
 
 test("NPC publication failure rolls back only reaction and leaves player commit at N+1", async () => {
   const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { phase4FaultInjector(stage) { if (stage === "npc_final_state_replacement") throw new Error("npc rollback"); } });
-  await assert.rejects(instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }), /npc rollback/); assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: response"), false);
+  await assert.rejects(instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }), /npc rollback/); assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "桐生一馬: response"), false);
 });
 
 test("destroy aborts pending NPC provider and discards a late successful response at N+1", async () => {
@@ -96,7 +96,7 @@ test("destroy aborts pending NPC provider and discards a late successful respons
   const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { responseProvider: { async generateResponse(_request, options) { providerSignal = options.signal; enteredProvider(); await waiting; return { text: "late response", providerName: "test", model: "test", usage: null, notes: [] }; } } });
   const pending = instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); await entered; assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.phase, "player_question");
   instance.destroy(); assert.equal(providerSignal.aborted, true); resolveProvider(); await assert.rejects(pending, (error) => error.code === "stale_reaction");
-  assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.conversation.playerLegacyDisplayCompatibilityRecords.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: late response"), false); assert.equal(instance.activeNpcReaction, null);
+  assert.equal(instance.state.stateVersion, 1); assert.equal(instance.state.conversation.commitResults.length, 1); assert.equal(instance.state.conversation.playerLegacyDisplayCompatibilityRecords.length, 1); assert.equal(instance.state.playerLog.some((entry) => entry.message === "桐生一馬: late response"), false); assert.equal(instance.activeNpcReaction, null);
 });
 
 test("late NPC reaction CAS rejects every live binding dimension without publishing effects", async () => {
@@ -112,7 +112,7 @@ test("late NPC reaction CAS rejects every live binding dimension without publish
     let resolveProvider, enteredProvider; const entered = new Promise((resolve) => { enteredProvider = resolve; }), waiting = new Promise((resolve) => { resolveProvider = resolve; });
     const instance = game([{ type: "non_game_statement", sourceSpan: { start: 0, end: 5 } }], { responseProvider: { async generateResponse() { enteredProvider(); await waiting; return { text: "late response", providerName: "test", model: "test", usage: null, notes: [] }; } } });
     const pending = instance.dispatchPlayerAction({ type: "ask_npc", targetId: "npc1", input: "hello" }); await entered; mutate(instance); resolveProvider(); await assert.rejects(pending, (error) => error.code === "stale_reaction");
-    assert.equal(instance.state.playerLog.some((entry) => entry.message === "Aoi: late response"), false);
+    assert.equal(instance.state.playerLog.some((entry) => entry.message === "桐生一馬: late response"), false);
   }
 });
 

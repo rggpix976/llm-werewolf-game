@@ -593,8 +593,8 @@ function candidateRequestFixture() {
         day: 1,
         phase: "player_question",
         participants: [
-          { participantId: "npc1", displayName: "Aoi", publicStatus: "alive" },
-          { participantId: "npc2", displayName: "Beni", publicStatus: "alive" },
+          { participantId: "npc1", displayName: "桐生一馬", publicStatus: "alive" },
+          { participantId: "npc2", displayName: "真島吾朗", publicStatus: "alive" },
           { participantId: "player", displayName: "Player", publicStatus: "alive" }
         ],
         events: [{
@@ -606,7 +606,7 @@ function candidateRequestFixture() {
         triggeringInput: {
           schemaVersion: 1, inputRecordId: "acceptance-input-1", requestId: "acceptance-player-request-1",
           correlationId: "acceptance-player-correlation-1", turnId: "acceptance-turn-1", capturedStateVersion: 1,
-          actorId: "player", rawText: "Aoi, what is your result?", locale: "en"
+          actorId: "player", rawText: "桐生一馬, what is your result?", locale: "en"
         }
       },
       actorPrivate: {

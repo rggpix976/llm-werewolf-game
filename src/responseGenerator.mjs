@@ -1,8 +1,9 @@
+import { addressFormsFor } from "./cast.mjs";
 import { chooseTopSuspect, strategyProposalFor, strategyReply } from "./personalityStrategy.mjs";
 import { assertionFor } from "./persuasion.mjs";
 import { boardDigestFor, contestedClaimGroups } from "./boardAssessment.mjs";
 import { ROLES, publicRoleName } from "./constants.mjs";
-import { containsAny, extractMentionedPlayerIds, formatList } from "./textUtils.mjs";
+import { compareNames, containsAny, extractMentionedPlayerIds, formatList } from "./textUtils.mjs";
 
 export function buildNpcResponseRequest(npc, gameState, playerInput) {
   if (!npc.alive) {
@@ -144,6 +145,9 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
     npc: {
       id: npc.id,
       name: npc.name,
+      voiceProfile: npc.voiceProfile ?? null,
+      callName: npc.callName ?? npc.name,
+      addressForms: addressFormsFor(npc, gameState.players),
       personality: npc.personality,
       speechStyle: npc.speechStyle,
       conversationPolicy: npc.conversationPolicy
@@ -686,7 +690,7 @@ function buildFakeKnightExtension(npc, gameState) {
         const death = player.privateMemory.find((item) => item.type === "death");
         return !death || death.day > night || (death.day === night && death.cause === "werewolf_attack");
       });
-      target = eligible.sort((a, b) => (npc.suspicionScores[a.id] ?? 0) - (npc.suspicionScores[b.id] ?? 0) || a.name.localeCompare(b.name))[0] ?? null;
+      target = eligible.sort((a, b) => (npc.suspicionScores[a.id] ?? 0) - (npc.suspicionScores[b.id] ?? 0) || compareNames(a.name, b.name))[0] ?? null;
     }
     if (!target || target.id === previousTargetId) {
       return null;
@@ -752,14 +756,14 @@ function buildFakeSeerExtension(npc, gameState) {
     // naming neither the accuser nor the claimant.
     newestTarget = aliveOthers
       .filter((player) => player.id !== trigger.actorId && !priorTargets.has(player.id))
-      .sort((a, b) => a.name.localeCompare(b.name))[0] ?? null;
+      .sort((a, b) => compareNames(a.name, b.name))[0] ?? null;
     newestResult = newestTarget ? "not_werewolf" : null;
   } else {
     const eligible = (player) => player.id !== trigger.targetId && (npc.role !== ROLES.WEREWOLF || player.role !== ROLES.WEREWOLF);
     newestTarget = aliveOthers.filter((player) => eligible(player) && !priorTargets.has(player.id))
-      .sort((a, b) => (npc.suspicionScores[b.id] ?? 0) - (npc.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0]
+      .sort((a, b) => (npc.suspicionScores[b.id] ?? 0) - (npc.suspicionScores[a.id] ?? 0) || compareNames(a.name, b.name))[0]
       ?? aliveOthers.filter(eligible)
-        .sort((a, b) => (npc.suspicionScores[b.id] ?? 0) - (npc.suspicionScores[a.id] ?? 0) || a.name.localeCompare(b.name))[0]
+        .sort((a, b) => (npc.suspicionScores[b.id] ?? 0) - (npc.suspicionScores[a.id] ?? 0) || compareNames(a.name, b.name))[0]
       ?? null;
     newestResult = "werewolf";
   }

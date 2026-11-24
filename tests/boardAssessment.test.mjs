@@ -42,7 +42,7 @@ test("public medium digest counts distinct blacks, executions, and remaining wol
   assert.equal(black.wolvesRemainingIfGenuine, 1);
   assert.equal(white.wolvesRemainingIfGenuine, 2);
   assert.equal(black.unpublishedExecutions, 1);
-  assert.deepEqual(black.publishedResults[0], { targetId: "npc5", targetName: "Ema", result: "werewolf", targetStatus: "executed", day: 1 });
+  assert.deepEqual(black.publishedResults[0], { targetId: "npc5", targetName: "春日一番", result: "werewolf", targetStatus: "executed", day: 1 });
   const before = boardDigestFor(game.state, group);
   for (const p of game.state.players) { p.role = "werewolf"; p.knownInfo = []; p.privateMemory = []; }
   assert.deepEqual(boardDigestFor(game.state, group), before);
@@ -62,11 +62,11 @@ test("board reply names the assessed black claimant and declares the same vote",
   const { game } = setup();
   const { result } = await ask(game);
   assert.equal(result.declaredVoteTargetId, "npc2");
-  assert.match(result.text, /Beniは結果を出し終えている。真でも村は保てるので、先にBeniに投票したいです。/);
+  assert.match(result.text, /真島吾朗は結果を出し終えている。真でも村は保てるので、先に真島吾朗に投票したいです。/);
   const npc = game.getPlayer("npc1");
   assert.match(buildNpcResponseRequest(npc, game.state, "グレーから詰めよう").request.responsePlan.baseText, /グレーから詰める方針/);
-  await ask(game, "npc1", "Beniは確白");
-  assert.match(buildNpcResponseRequest(npc, game.state, "Beniは確白").request.responsePlan.baseText, /それでも私はBeni/);
+  await ask(game, "npc1", "真島吾朗は確白");
+  assert.match(buildNpcResponseRequest(npc, game.state, "真島吾朗は確白").request.responsePlan.baseText, /それでも私は真島吾朗/);
 });
 
 test("white choice and stale assessment use ordinary replies", async () => {

@@ -28,8 +28,8 @@ function projection() {
       day: 1,
       phase: "player_question",
       participants: [
-        { participantId: "npc-aoi", displayName: "Aoi", publicStatus: "alive" },
-        { participantId: "npc-beni", displayName: "Beni", publicStatus: "alive" },
+        { participantId: "npc-aoi", displayName: "桐生一馬", publicStatus: "alive" },
+        { participantId: "npc-beni", displayName: "真島吾朗", publicStatus: "alive" },
         { participantId: "player", displayName: "Player", publicStatus: "alive" }
       ],
       events: [{
@@ -40,7 +40,7 @@ function projection() {
       triggeringInput: {
         schemaVersion: 1, inputRecordId: "input-1", requestId: "player-request-1",
         correlationId: "player-correlation-1", turnId: "turn-1", capturedStateVersion: 1,
-        actorId: "player", rawText: "Aoi, what is your result?", locale: "en"
+        actorId: "player", rawText: "桐生一馬, what is your result?", locale: "en"
       }
     },
     actorPrivate: {

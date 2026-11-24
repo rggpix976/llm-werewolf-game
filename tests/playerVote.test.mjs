@@ -37,7 +37,7 @@ test("the player's vote is counted alongside the NPC votes", async () => {
   // The NPC tally is untouched: everyone else still executed npc7.
   assert.equal(round.executedId, "npc7");
   assert.equal(
-    game.state.playerLog.some((entry) => entry.message.includes("あなた->Hana")),
+    game.state.playerLog.some((entry) => entry.message.includes("あなた->向田紗栄子")),
     true
   );
 });

@@ -1,8 +1,17 @@
 # Development Status
 
+## Yakuza cast and voice materials — Slice 1 (2026-11-24)
+
+D-034 Slice 1 is implemented and in review. The twelve-member roster supports explicit ordered selection, pinned members plus seeded random fill, and roster-order defaults. Selected slots receive the existing role sequence; sample role and suspicion tables remain per-id. Utterance requests and OpenAI materials now carry voice profiles, standard appellations and per-pair addresses, including dead participants. Decision requests and the public snapshot shape are unchanged.
+
+The new lean assignment is npc1 neutral, npc2 gray, npc3 roller, npc4 neutral, npc5 neutral, npc6 gray, npc7 gray, npc8 gray, npc9 neutral, npc10 roller, npc11 roller, npc12 roller. No strategy, claim, persuasion or board-assessment logic changed. The browser UI is untouched: the web game's default cast is the first nine / first five roster members until Slice 2 adds selection UI.
+
+Fifteen new tests cover roster integrity, addresses, validation, seeded selection, slot roles, sample per-id roles, request materials, provider defaults, snapshot privacy, and the pinned ja-JP name-tiebreak order. Existing fixtures were migrated by slot, with name-order ties and source spans adjusted to preserve their original assertions. Name tiebreaks use `compareNames` (pinned "ja-JP" collation) so results do not depend on the runtime's default locale. Validation: npm test 1020/1020 PASS on Linux and Windows; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
+
 ## Board assessment for contested claim groups (2026-11-22)
 
-D-033 is implemented and in review. Living observers of conflicting seer/medium claim groups now decide an execution order from an engine-computed public board digest. Assessments persist in game state with a per-observer/role/day cap, run before direct/broadcast replies and vote casts (including rescue re-casts), and safely fall back to no preference. Shared vote/reply selection switches only within the four-point margin after strategy lean; matching black-result choices receive the approved reply and vote declaration. Public snapshots exclude assessments, and pseudo preferences and suspicion scores remain unchanged. D-032 was merged in PR #104.
+D-033 was merged in PR #105. Living observers of conflicting seer/medium claim groups now decide an execution order from an engine-computed public board digest. Assessments persist in game state with a per-observer/role/day cap, run before direct/broadcast replies and vote casts (including rescue re-casts), and safely fall back to no preference. Shared vote/reply selection switches only within the four-point margin after strategy lean; matching black-result choices receive the approved reply and vote declaration. Public snapshots exclude assessments, and pseudo preferences and suspicion scores remain unchanged. D-032 was merged in PR #104.
 
 Twenty new tests cover public-only digests and death status, distinct blacks, playtest-22 margins, reply/strategy/persuasion precedence, both scenarios, three claimants, exclusion and daily caps, frozen request privacy, failures, pseudo invariance, structured interpreter working-copy persistence, strategy-adjustment order, and both rescue re-vote paths. The existing village9 progression test now awaits asynchronous runVote instead of asserting before it settles. Validation: npm.cmd test 1005/1005 PASS; npm.cmd run sample all six audit checks PASS; git diff --check clean. npm.cmd is used because PowerShell blocks npm.ps1. No live API calls or commits.
 

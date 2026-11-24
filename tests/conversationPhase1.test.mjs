@@ -9,12 +9,12 @@ import { validateAcceptedActCoverage, validateCommitCompleteness, validateFinali
 import { validateAuxiliaryProjection, validateClaimProjection, validateClarificationOutcome, validateErrorEnvelope, validateInterpreterHttpResponse, validateInterpreterProviderResult, validateInterpreterRequest, validatePendingConversationRequest, validateProviderDiagnostics, validatePublicEventProjection, validateRendererCorrelationChain, validateRendererHttpResponse, validateRendererModelOutput, validateRendererProviderResult, validateRendererRequest } from "../src/conversation/contracts.mjs";
 
 const fingerprint = "a".repeat(64);
-const input = { schemaVersion: 1, inputRecordId: "input-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", capturedStateVersion: 0, actorId: "player", rawText: "😀占い師です。Beniが怪しい。", locale: "ja-JP", createdOrder: 0 };
+const input = { schemaVersion: 1, inputRecordId: "input-1", requestId: "request-1", correlationId: "corr-1", turnId: "turn-1", capturedStateVersion: 0, actorId: "player", rawText: "😀占い師です。真島吾朗が怪しい。", locale: "ja-JP", createdOrder: 0 };
 const playerSource = { sourceType: "player_accepted_act", acceptedSpeechActIds: ["act-1"], inputRecordId: "input-1", requestId: "request-1" };
 const claim = { schemaVersion: 1, claimId: "claim-1", claimRevision: 1, actorId: "player", source: playerSource, idempotencyKey: playerClaimIdempotencyKey({ requestId: "request-1", acceptedSpeechActIds: ["act-1"], actorId: "player", claimKind: "role_claim" }), createdTurnId: "turn-1", createdStateVersion: 1, repeatsClaimId: null, contradictsClaimIds: [], status: "asserted", type: "role_claim", claimedRole: "seer" };
 const actBase = { schemaVersion: 1, speechActId: "act-1", requestId: "request-1", acceptedTurnId: "turn-1", acceptedStateVersion: 0, acceptedPhase: "day_discussion", inputRecordId: "input-1", actorId: "player", causationId: "cause-1", correlationId: "corr-1", idempotencyKey: "idem-1", sourceSpan: { start: 1, end: 7 } };
 const roleAct = { ...actBase, type: "accepted_role_claim", claimedRole: "seer" };
-const publicParticipantsById = Object.freeze({ player: Object.freeze({ participantId: "player", displayName: "Player" }), "npc-1": Object.freeze({ participantId: "npc-1", displayName: "Aoi" }), "npc-2": Object.freeze({ participantId: "npc-2", displayName: "Beni" }) });
+const publicParticipantsById = Object.freeze({ player: Object.freeze({ participantId: "player", displayName: "Player" }), "npc-1": Object.freeze({ participantId: "npc-1", displayName: "桐生一馬" }), "npc-2": Object.freeze({ participantId: "npc-2", displayName: "真島吾朗" }) });
 const renderingContext = Object.freeze({ locale: "en", publicParticipantsById });
 const playerEventSource = { sourceType: "player_accepted_act", acceptedSpeechActId: "act-1", inputRecordId: "input-1", requestId: "request-1" };
 const eventBase = { schemaVersion: 1, requestId: "request-1", turnId: "turn-1", actorId: "player", causationId: "cause-1", correlationId: "corr-1", idempotencyKey: "idem-1", source: playerEventSource, stateVersion: 1, occurredPhase: "day_discussion", createdOrder: 0 };
@@ -143,7 +143,7 @@ test("canonical JSON rejects ambiguous values and detects payload conflicts", ()
 test("canonical renderers validate schemas and resolve safe display names", () => {
   assert.equal(renderCanonicalClaim(claim, renderingContext), "Player claimed to be a seer.");
   const source = { sourceType: "npc_reaction", reactionPlanId: "plan-1", descriptorId: "desc-1", originatingInputRecordId: "input-1", reactionCommitRequestId: "reaction-request-1" }, vote = { ...eventBase, eventId: "vote-1", actorId: "npc-1", eventType: "vote_declared", targetId: "npc-2", source };
-  assert.equal(renderCanonicalVote(vote, { locale: "ja", publicParticipantsById }), "AoiはBeniへの投票を宣言しました。"); assert.equal(renderCanonicalSuspicion({ ...vote, eventId: "suspicion-1", eventType: "suspicion_expressed" }, { locale: "en-US", publicParticipantsById }), "Aoi expressed suspicion of Beni.");
+  assert.equal(renderCanonicalVote(vote, { locale: "ja", publicParticipantsById }), "桐生一馬は真島吾朗への投票を宣言しました。"); assert.equal(renderCanonicalSuspicion({ ...vote, eventId: "suspicion-1", eventType: "suspicion_expressed" }, { locale: "en-US", publicParticipantsById }), "桐生一馬 expressed suspicion of 真島吾朗.");
   assert.throws(() => renderCanonicalClaim({ ...claim, actorId: "unknown" }, renderingContext)); assert.throws(() => renderCanonicalClaim({ ...claim, claimedRole: "fox" }, renderingContext)); assert.throws(() => renderCanonicalClaim(claim, { locale: "en", publicParticipantsById: { ...publicParticipantsById, player: { participantId: "player", displayName: "<b>Player</b>" } } })); assert.equal(publicParticipantsById.player.displayName, "Player");
 });
 
@@ -515,7 +515,7 @@ const publicEventProjections = [
   { schemaVersion: 1, projectionType: "result_claim_event", eventId: "event-6", actorId: "player", claimId: "claim-public-result", turnId: "turn-1", occurredPhase: "day_discussion" }
 ];
 const publicClaimProjections = [{ schemaVersion: 1, projectionType: "role_claim", claimId: "claim-public-role", actorId: "player", claimedRole: "seer" }, { schemaVersion: 1, projectionType: "result_claim", claimId: "claim-public-result", actorId: "player", targetId: "npc-1", result: "werewolf" }];
-const publicRoster = [{ playerId: "player", displayName: "Player", publicStatus: "alive" }, { playerId: "npc-1", displayName: "Aoi", publicStatus: "alive" }];
+const publicRoster = [{ playerId: "player", displayName: "Player", publicStatus: "alive" }, { playerId: "npc-1", displayName: "桐生一馬", publicStatus: "alive" }];
 const diagnostics = { providerName: "provider", model: "model-1", attemptCount: 1, elapsedMs: 10 };
 
 function rendererRequestFixture() { return { schemaVersion: 1, requestId: "renderer-request-1", correlationId: "corr-1", reactionPlanId: "plan-1", turnId: "turn-1", resultingStateVersion: 2, npcId: "npc-1", locale: "ja-JP", renderMode: "controlled_commentary", commentaryPlan: { intent: "acknowledge", allowedPublicReferenceIds: ["event-1"] }, publicEvents: [publicEventProjections[0]], publicClaims: [], publicVotes: [], executions: [], attackDeaths: [], allowedPublicReferenceIds: ["event-1"], allowedVariants: [{ schemaVersion: 1, variantId: "variant-1", variantVersion: 1, locale: "ja-JP", intent: "acknowledge", toneTags: ["brief"] }] }; }

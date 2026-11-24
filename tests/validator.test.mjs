@@ -5,7 +5,7 @@ import { validateNpcResponseRequest } from "../src/validator.mjs";
 const validRequest = {
   npc: {
     id: "npc1",
-    name: "Aoi",
+    name: "桐生一馬",
     personality: "P",
     speechStyle: "S",
     conversationPolicy: {
