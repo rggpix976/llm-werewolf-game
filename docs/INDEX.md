@@ -29,7 +29,7 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Fabricated claim night cap | merged | 2026-11-22 | PR #103; DECISIONS.md D-031; DEVELOPMENT_STATUS.md |
 | Persuasion: player assertions and NPC declarations | merged | 2026-11-22 | PR #104; DECISIONS.md D-032; DEVELOPMENT_STATUS.md |
 | Board assessment for contested claim groups | merged | 2026-11-24 | PR #105; DECISIONS.md D-033; DEVELOPMENT_STATUS.md |
-| Yakuza cast selection and voice/address materials (Slice 1) | in review | 2026-11-24 | DECISIONS.md D-034; DEVELOPMENT_STATUS.md |
+| Yakuza cast selection and voice/address materials (Slice 1) | merged | 2026-11-25 | PR #106; DECISIONS.md D-034; DEVELOPMENT_STATUS.md |
 
 Maintenance: update a row in the same pull request that starts, changes, or
 merges the slice (see AGENTS.md, "Project Memory and Recording").

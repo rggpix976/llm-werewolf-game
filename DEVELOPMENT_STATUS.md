@@ -1,8 +1,12 @@
 # Development Status
 
+## Voice instruction strengthening (2026-11-25)
+
+Follow-up to D-034 Slice 1 (merged in PR #106). A first real-AI game on the cast build showed Day-1 utterances staying near-verbatim to the generic base text: the voice material reached the model, but the single closing instruction was too weak against the stance instruction. The OpenAI fixed instructions now take only stance and facts from baseText and explicitly forbid inheriting its wording/register, and a new VOICE rule placed second makes voiceProfile the top-priority speaking guide (above personality and speechStyle), including its first person, sentence endings and catchphrases. Each roster voiceProfile also carries one short example line in the character's register. No engine logic, materials shape, or snapshot shape changed.
+
 ## Yakuza cast and voice materials — Slice 1 (2026-11-24)
 
-D-034 Slice 1 is implemented and in review. The twelve-member roster supports explicit ordered selection, pinned members plus seeded random fill, and roster-order defaults. Selected slots receive the existing role sequence; sample role and suspicion tables remain per-id. Utterance requests and OpenAI materials now carry voice profiles, standard appellations and per-pair addresses, including dead participants. Decision requests and the public snapshot shape are unchanged.
+D-034 Slice 1 was merged in PR #106. The twelve-member roster supports explicit ordered selection, pinned members plus seeded random fill, and roster-order defaults. Selected slots receive the existing role sequence; sample role and suspicion tables remain per-id. Utterance requests and OpenAI materials now carry voice profiles, standard appellations and per-pair addresses, including dead participants. Decision requests and the public snapshot shape are unchanged.
 
 The new lean assignment is npc1 neutral, npc2 gray, npc3 roller, npc4 neutral, npc5 neutral, npc6 gray, npc7 gray, npc8 gray, npc9 neutral, npc10 roller, npc11 roller, npc12 roller. No strategy, claim, persuasion or board-assessment logic changed. The browser UI is untouched: the web game's default cast is the first nine / first five roster members until Slice 2 adds selection UI.
 

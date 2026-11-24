@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-25 — Voice instruction strengthening (D-034 follow-up)
+
+- Reworked the OpenAI provider's fixed instructions after a real-AI game showed cast utterances clinging to the generic base text: baseText now contributes stance and facts only, its wording and register must not be inherited, and a new VOICE rule (second, ahead of grounding) makes voiceProfile the top-priority speaking guide over personality and speechStyle, covering first person, sentence endings and catchphrases. Address forms became their own rule; no instruction content was removed.
+- Added one short example line in each character's register to all twelve voiceProfiles.
+- Recorded D-034 as merged in PR #106 (docs/INDEX.md).
+- Validation: npm test 1020/1020 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
 ## 2026-11-24 — Yakuza cast and voice/address materials (D-034 Slice 1)
 
 - Replaced the generic cast with twelve characters and added explicit ordered selection or pinned plus seeded random fill at game creation, retaining five/nine-player sizes and sample per-id tables.
