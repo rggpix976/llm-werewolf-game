@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-25 — Dialect pinning for the cast (D-034 follow-up)
+
+- Real-AI play after PR #107 showed register borrowing: 趙天佑 reused 足立宏一's exact phrasing and rough register, and 難波悠 drifted into Kansai-ben although his voice profile specified no dialect. Each voiceProfile now pins its dialect explicitly （標準語 for ten members — 難波's pin states 関西弁ではない and 趙's adds 軽く飄々と（粗い男言葉にしない）; 関西弁 remains specified only for 真島吾朗 and 冴島大河）.
+- The VOICE instruction now also forbids matching other participants' or the player's dialect, register, or phrasing, and states that only members whose voiceProfile specifies Kansai-ben speak it.
+- Tests: the roster integrity test now requires every voiceProfile to name its dialect; the instruction test asserts the anti-matching rule.
+- Validation: npm test 1020/1020 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
 ## 2026-11-25 — Voice instruction strengthening (D-034 follow-up)
 
 - Reworked the OpenAI provider's fixed instructions after a real-AI game showed cast utterances clinging to the generic base text: baseText now contributes stance and facts only, its wording and register must not be inherited, and a new VOICE rule (second, ahead of grounding) makes voiceProfile the top-priority speaking guide over personality and speechStyle, covering first person, sentence endings and catchphrases. Address forms became their own rule; no instruction content was removed.

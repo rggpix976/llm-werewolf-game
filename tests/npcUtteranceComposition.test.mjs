@@ -56,6 +56,8 @@ test("openai instructions: the model composes from stance and materials instead 
   assert.ok(body.instructions.includes("VOICE"));
   assert.ok(body.instructions.includes("最優先"));
   assert.ok(body.instructions.includes("引き継がず"));
+  // Dialect/register must not be borrowed from other speakers or the player.
+  assert.ok(body.instructions.includes("合わせてはいけません"));
 
   // The model still receives the stance and the allowed materials.
   const sent = JSON.parse(body.input[0].content[0].text);
