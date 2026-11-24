@@ -51,6 +51,11 @@ test("openai instructions: the model composes from stance and materials instead 
   assert.ok(body.instructions.includes("立場"));
   assert.ok(body.instructions.includes("捏造"));
   assert.ok(body.instructions.includes("publicClaimAllowed"));
+  // The character voice outranks the base text's wording: stance and facts
+  // are taken from baseText, its style is explicitly not inherited.
+  assert.ok(body.instructions.includes("VOICE"));
+  assert.ok(body.instructions.includes("最優先"));
+  assert.ok(body.instructions.includes("引き継がず"));
 
   // The model still receives the stance and the allowed materials.
   const sent = JSON.parse(body.input[0].content[0].text);
