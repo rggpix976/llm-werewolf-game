@@ -21,6 +21,10 @@ test("roster has twelve ordered, unique characters and balanced leans", () => {
   for (const member of CAST_ROSTER) {
     assert.equal(castMemberById(member.id), member);
     assert.ok(member.voiceProfile.length > 0);
+    // Every voice pins its dialect/register, so the model cannot fill the
+    // gap with another speaker's dialect (Kansai-ben belongs to its two
+    // specified members only).
+    assert.match(member.voiceProfile, /方言|関西弁/);
     assert.ok(member.aliases.includes(member.name));
     for (const target of Object.keys(member.addressExceptions)) {
       assert.ok(castMemberById(target));

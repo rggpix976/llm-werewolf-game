@@ -1,5 +1,9 @@
 # Development Status
 
+## Dialect pinning for the cast (2026-11-25)
+
+Follow-up to the voice instruction strengthening (PR #107). In real-AI play, members whose voiceProfiles named no dialect borrowed the room's register: 趙天佑 copied 足立宏一's phrasing and rough tone, and 難波悠 spoke Kansai-ben. Every voiceProfile now pins its dialect （標準語 for ten members, with explicit negative pins for 難波 and 趙； 関西弁 only for 真島吾朗 and 冴島大河）, and the VOICE instruction forbids matching other participants' or the player's dialect, register, or phrasing. No engine logic or materials shape changed.
+
 ## Voice instruction strengthening (2026-11-25)
 
 Follow-up to D-034 Slice 1 (merged in PR #106). A first real-AI game on the cast build showed Day-1 utterances staying near-verbatim to the generic base text: the voice material reached the model, but the single closing instruction was too weak against the stance instruction. The OpenAI fixed instructions now take only stance and facts from baseText and explicitly forbid inheriting its wording/register, and a new VOICE rule placed second makes voiceProfile the top-priority speaking guide (above personality and speechStyle), including its first person, sentence endings and catchphrases. Each roster voiceProfile also carries one short example line in the character's register. No engine logic, materials shape, or snapshot shape changed.
