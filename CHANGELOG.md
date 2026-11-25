@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-25 — Claim announcements in per-character set phrases (D-035)
+
+- Real-AI play showed two different characters publishing word-for-word identical seer claims: claim announcements are engine-published texts and never reach provider composition. Each roster member now carries `claimVoice` set phrases (an opening per role, a follow-up lead for seer/medium, and a closing for an initial seer claim), and every claim-text builder — proactive, rescue, ask-path genuine, fabricated, and restatements — assembles set phrase + canonical result lines. NPCs without claimVoice data keep the previous canonical texts.
+- Two instruction fixes from the same playtest (OpenAI provider): names written inside baseText or topSuspect must be replaced with the addressForms form when speaking (suspect mentions were copying the written name, bypassing the address table), and the direction of a decided stance must not be softened or flipped (an agreeing strategy reply was composed as a hedged refusal).
+- The result lines' sentence ending also follows the character (`claimVoice.resultEnding`: だ / や / だな / だよ / だね; です kept for ハン・ジュンギ and 峯義孝; 難波悠's だな was specified by the user). Nothing in the engine parses claim text — contradictions and suspicion all read the structured results — so the ending is presentation-only.
+- Added `tests/claimVoices.test.mjs` (5 tests): roster claimVoice completeness and distinct seer openings, two characters announcing the same result in their own phrases with canonical result lines, the canonical fallback for NPCs without claimVoice, and the new instruction wording.
+- Validation: npm test 1028/1028 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
 ## 2026-11-25 — Fix: voice/address materials were stripped before reaching the provider
 
 - Root cause of the flat cast voices in real web play: the web server allowlist-reconstructs every utterance request (`src/validator.mjs`), and `validateNpc` rebuilt the npc object with only the five legacy fields. `voiceProfile`, `callName`, and `addressForms` were silently stripped, so the OpenAI provider received `voiceProfile: null` and the VOICE instruction pointed at material that was never there. The instruction strengthening (PR #107) and dialect pins (PR #108) were therefore inert in web play; unit tests stayed green because they bypass the validator.

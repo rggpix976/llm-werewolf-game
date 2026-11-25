@@ -124,7 +124,7 @@ test("medium about to be executed rescue-claims with the privately known result"
   assert.equal(claims[0].claim.role, ROLES.MEDIUM);
   assert.deepEqual(claims[0].claim.results, [{ targetId: "npc1", result: "werewolf" }]);
   assert.equal(
-    game.state.playerLog.some((entry) => entry.message.includes("堂島大吾: 霊媒師COします。桐生一馬は人狼でした。")),
+    game.state.playerLog.some((entry) => entry.message.includes("堂島大吾: 俺が霊媒師だ。結果を公表する。桐生一馬は人狼でした。")),
     true
   );
   assert.equal(game.getPlayer("npc4").alive, true);

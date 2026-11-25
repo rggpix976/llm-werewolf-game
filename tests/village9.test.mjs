@@ -49,7 +49,7 @@ test("execution privately gives the living medium a result and direct questions 
 
   const claim = await game.handlePlayerQuestion(medium.id, "あなたの役職は霊媒師ですか？ COしてください");
   assert.equal(claim.publicClaim.role, ROLES.MEDIUM);
-  assert.match(claim.text, /霊媒師COします.*桐生一馬は人狼でした/);
+  assert.match(claim.text, /俺が霊媒師だ。結果を公表する。桐生一馬は人狼でした/);
   const duplicate = await game.handlePlayerQuestion(medium.id, "役職をCOしてください");
   assert.equal(duplicate.publicClaim, null);
   assert.equal(medium.publicClaims.length, 1);

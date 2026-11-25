@@ -52,7 +52,7 @@ test("a fake knight publishes a fabricated entry for a fresh night when asked di
   assert.equal(results[0].targetId, "npc3");
   assert.notEqual(results[1].targetId, "npc7");
   assert.notEqual(results[1].targetId, "npc3");
-  assert.ok(game.state.playerLog.some((entry) => entry.message.includes("騎士COします")));
+  assert.ok(game.state.playerLog.some((entry) => entry.message.includes("俺が騎士だ。護衛の記録を出す")));
 });
 
 test("a fake knight names the real attack target for a guarded fresh night", async () => {
@@ -78,7 +78,7 @@ test("a fake knight with nothing fresh restates the published history and regist
 
   const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "騎士さん、護衛履歴を全部教えて" });
   assert.doesNotMatch(response.result.text, DEFLECTION);
-  assert.match(response.result.text, /騎士COします/);
+  assert.match(response.result.text, /俺が騎士だ。護衛の記録を出す/);
   assert.match(response.result.text, /冴島大河/);
   assert.equal(wolf.publicClaims.length, 1);
 });
@@ -109,7 +109,7 @@ test("a fake seer extends its claim when asked after the genuine seer publishes 
 
   const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc6", input: "占い師さん、最新の占い結果を教えて" });
   assert.doesNotMatch(response.result.text, DEFLECTION);
-  assert.match(response.result.text, /占い結果を追加で公開します/);
+  assert.match(response.result.text, /占いの結果、もう一つあるんだ/);
   assert.equal(madman.publicClaims.length, 2);
   assert.deepEqual(madman.publicClaims[1].results, [{ targetId: "npc9", result: "not_werewolf" }]);
   assert.ok(madman.publicClaims.every((claim) => (claim.results ?? []).every((result) => result.targetId !== "npc6")));
@@ -122,7 +122,7 @@ test("a fake seer with nothing new to engage restates its published results", as
 
   const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc6", input: "占い師さん、占い結果を全部教えて" });
   assert.doesNotMatch(response.result.text, DEFLECTION);
-  assert.match(response.result.text, /占い師COします/);
+  assert.match(response.result.text, /俺が占い師だよ。結果を言うよ/);
   assert.match(response.result.text, /向田紗栄子/);
   assert.equal(madman.publicClaims.length, 1);
 });
@@ -137,7 +137,7 @@ test("a fake medium extends after a new execution and the one-black cap still ho
 
   const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc1", input: "霊媒師さん、向田紗栄子の霊媒結果を教えて" });
   assert.doesNotMatch(response.result.text, DEFLECTION);
-  assert.match(response.result.text, /霊媒結果を追加で公開します/);
+  assert.match(response.result.text, /霊媒の結果をもう一つ言う/);
   assert.equal(wolf.publicClaims.length, 2);
   // 向田紗栄子 was a citizen, so inverting the truth would give a second
   // black; the cap turns it white because the first black stands.

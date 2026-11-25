@@ -1,5 +1,10 @@
 # Development Status
 
+## Claim announcements in per-character set phrases (2026-11-25)
+
+D-035 is in review. Claim announcement texts were the one speech surface the cast voices never touched: they are built by engine/response builders and published verbatim, so a werewolf's fabricated seer claim and the genuine seer's claim read identically apart from the names. Each roster member now owns `claimVoice` set phrases (openings per role, follow-up leads, an initial-seer closing, and a per-character sentence ending for the result lines), and all claim builders — proactive, rescue, ask-path genuine, fabricated on both the engine and ask paths, and restatements — compose set phrase + canonical result lines, keeping results unambiguous. NPCs without claimVoice data fall back to the previous canonical texts. The same change pins two provider instructions from the same playtest: replace names written in baseText/topSuspect with the addressForms form when speaking, and never soften or flip the direction of a decided stance.
+
+
 ## Voice materials validator pass-through fix (2026-11-25)
 
 The cast voices never reached the model in web play: `validateNpc` in `src/validator.mjs` allowlist-reconstructs the npc object and dropped `voiceProfile`, `callName`, and `addressForms`, so the provider composed from name, personality, and speechStyle alone. This made the PR #107 instruction strengthening and the PR #108 dialect pins inert on the real path (their tests bypass the validator). The validator now passes the three optional fields through with bounds, and a new chained test (request → validation → provider material) guards the path. With this fix, the voice instructions and dialect pins apply in web play for the first time.
