@@ -1,5 +1,9 @@
 # Development Status
 
+## Voice materials validator pass-through fix (2026-11-25)
+
+The cast voices never reached the model in web play: `validateNpc` in `src/validator.mjs` allowlist-reconstructs the npc object and dropped `voiceProfile`, `callName`, and `addressForms`, so the provider composed from name, personality, and speechStyle alone. This made the PR #107 instruction strengthening and the PR #108 dialect pins inert on the real path (their tests bypass the validator). The validator now passes the three optional fields through with bounds, and a new chained test (request → validation → provider material) guards the path. With this fix, the voice instructions and dialect pins apply in web play for the first time.
+
 ## Dialect pinning for the cast (2026-11-25)
 
 Follow-up to the voice instruction strengthening (PR #107). In real-AI play, members whose voiceProfiles named no dialect borrowed the room's register: 趙天佑 copied 足立宏一's phrasing and rough tone, and 難波悠 spoke Kansai-ben. Every voiceProfile now pins its dialect （標準語 for ten members, with explicit negative pins for 難波 and 趙； 関西弁 only for 真島吾朗 and 冴島大河）, and the VOICE instruction forbids matching other participants' or the player's dialect, register, or phrasing. No engine logic or materials shape changed.
