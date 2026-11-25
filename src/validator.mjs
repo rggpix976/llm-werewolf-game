@@ -22,13 +22,38 @@ export function validateNpcResponseRequest(input) {
 
 function validateNpc(npc) {
   if (!npc || typeof npc !== "object" || Array.isArray(npc)) throw createValidationError("Missing or invalid npc");
-  return {
+  const validated = {
     id: validateString(npc.id, "npc.id", 1, 50),
     name: validateString(npc.name, "npc.name", 1, 50),
     personality: validateString(npc.personality, "npc.personality", 0, 500),
     speechStyle: validateString(npc.speechStyle, "npc.speechStyle", 1, 50),
     conversationPolicy: validateConversationPolicy(npc.conversationPolicy)
   };
+  // D-034 voice/address materials are optional: utterance requests carry
+  // them, decision requests and legacy NPCs do not. They must be passed
+  // through explicitly — the allowlist reconstruction otherwise strips
+  // them and the provider never sees the character's voice.
+  if (npc.voiceProfile !== undefined && npc.voiceProfile !== null) {
+    validated.voiceProfile = validateString(npc.voiceProfile, "npc.voiceProfile", 0, 1000);
+  }
+  if (npc.callName !== undefined && npc.callName !== null) {
+    validated.callName = validateString(npc.callName, "npc.callName", 1, 50);
+  }
+  if (npc.addressForms !== undefined && npc.addressForms !== null) {
+    validated.addressForms = validateAddressForms(npc.addressForms);
+  }
+  return validated;
+}
+
+function validateAddressForms(forms) {
+  if (!forms || typeof forms !== "object" || Array.isArray(forms)) throw createValidationError("npc.addressForms must be an object");
+  const entries = Object.entries(forms);
+  if (entries.length > 20) throw createValidationError("npc.addressForms too many entries");
+  const validated = {};
+  for (const [key, value] of entries) {
+    validated[validateString(key, "npc.addressForms key", 1, 50)] = validateString(value, `npc.addressForms.${key}`, 1, 50);
+  }
+  return validated;
 }
 
 function validateConversationPolicy(policy) {

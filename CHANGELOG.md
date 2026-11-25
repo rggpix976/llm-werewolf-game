@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-25 — Fix: voice/address materials were stripped before reaching the provider
+
+- Root cause of the flat cast voices in real web play: the web server allowlist-reconstructs every utterance request (`src/validator.mjs`), and `validateNpc` rebuilt the npc object with only the five legacy fields. `voiceProfile`, `callName`, and `addressForms` were silently stripped, so the OpenAI provider received `voiceProfile: null` and the VOICE instruction pointed at material that was never there. The instruction strengthening (PR #107) and dialect pins (PR #108) were therefore inert in web play; unit tests stayed green because they bypass the validator.
+- Fix: `validateNpc` now passes the three fields through when present (voiceProfile ≤ 1000 chars, callName ≤ 50, addressForms a bounded string map), still treating them as optional so decision requests and legacy NPCs validate unchanged.
+- Added `tests/validatorVoicePassThrough.test.mjs` (3 tests): a real request chained through validation into the provider material, the no-fields legacy shape, and null/malformed handling.
+- Validation: npm test 1023/1023 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
 ## 2026-11-25 — Dialect pinning for the cast (D-034 follow-up)
 
 - Real-AI play after PR #107 showed register borrowing: 趙天佑 reused 足立宏一's exact phrasing and rough register, and 難波悠 drifted into Kansai-ben although his voice profile specified no dialect. Each voiceProfile now pins its dialect explicitly （標準語 for ten members — 難波's pin states 関西弁ではない and 趙's adds 軽く飄々と（粗い男言葉にしない）; 関西弁 remains specified only for 真島吾朗 and 冴島大河）.
