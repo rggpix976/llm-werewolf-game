@@ -25,7 +25,7 @@ export const CAST_ROSTER = [
     personality: "丁寧で理知的。全体を見て判断する", speechStyle: "cautious", strategyLean: "neutral",
     voiceProfile: "一人称は『俺』。方言は標準語。丁寧めで落ち着いた、立場のある話し方。全体を見て判断し、感情で流されない。口癖は『〜だな』『すまない』『俺はそう思う』。対立する主張は両方見比べる。口調の例：『すまない、今の段階では断定できない。俺はもう少し全体を見たい。』",
     claimVoice: { openings: { seer: "俺が占い師だ。結果を公表する。", medium: "俺が霊媒師だ。結果を公表する。", knight: "俺が騎士だ。護衛記録を公表する。" }, more: { seer: "占い結果を追加で公表する。", medium: "霊媒結果を追加で公表する。" }, closing: "すまないが、この結果を軸に考えてほしい。", resultEnding: "だ" },
-    addressDefault: "plain", addressNote: "目上の相手には基準名に『さん』を付ける", addressExceptions: {}
+    addressDefault: "plain", addressNote: "目上の相手には基準名に『さん』を付ける", addressExceptions: { npc1: "桐生さん", npc2: "真島さん", npc3: "冴島さん" }
   },
   {
     id: "npc5", name: "春日一番", callName: "春日", aliases: ["春日一番", "春日", "いっちゃん", "カスガ"],

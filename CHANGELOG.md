@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-25 — Ask-path claim delivery, fabricated medium grammar, Daigo addresses (D-036)
+
+- Bug (playtest 26): a claim prepared on the ask path registered even when the provider-composed answer never announced it — the genuine medium's medium claim took effect (suspicion, contradiction notice, dashboard marker, other NPCs' materials) while her spoken answer listed only the other claimants. A prepared ask-path claim announcement is now delivered verbatim as engine-published text (the claimant's set phrases) without provider composition, so registration and announcement can never diverge; restatements still compose normally.
+- Fix: fabricated medium lines take the character's sentence ending only after the noun form (「…は人狼だ。」); after the negated form the ending broke the grammar (「…は人狼ではないだ。」 → 「…は人狼ではない。」).
+- Data: 堂島大吾's address exceptions now name his superiors （桐生さん / 真島さん / 冴島さん), matching his address note; the empty table had resolved his forms to plain names.
+- Added `tests/askClaimDelivery.test.mjs` (3 tests): an ask-path claim delivered verbatim with a provider that would answer unrelated text (and is never consulted), the fabricated-medium suffix grammar for white and black results, and Daigo's superior address forms.
+- Validation: npm test 1031/1031 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
 ## 2026-11-25 — Claim announcements in per-character set phrases (D-035)
 
 - Real-AI play showed two different characters publishing word-for-word identical seer claims: claim announcements are engine-published texts and never reach provider composition. Each roster member now carries `claimVoice` set phrases (an opening per role, a follow-up lead for seer/medium, and a closing for an initial seer claim), and every claim-text builder — proactive, rescue, ask-path genuine, fabricated, and restatements — assembles set phrase + canonical result lines. NPCs without claimVoice data keep the previous canonical texts.
