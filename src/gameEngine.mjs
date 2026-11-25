@@ -3,7 +3,7 @@ import { chooseTopSuspect, SWAY_MARGIN } from "./personalityStrategy.mjs";
 import { assertionFor, persuasionShiftFor } from "./persuasion.mjs";
 import { buildBoardAssessmentDecisionRequest, buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
 import { contestedClaimGroups } from "./boardAssessment.mjs";
-import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim, claimOpeningFor, claimResultEndingFor, seerClaimClosingFor } from "./responseGenerator.mjs";
+import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim, claimOpeningFor, claimResultEndingFor, fabricatedMediumSuffixFor, seerClaimClosingFor } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
@@ -872,11 +872,23 @@ export class WerewolfGame {
     let providerResult;
 
     try {
-      if (typeof this.responseProvider?.generateResponse !== "function") {
+      if (prepared.publicClaim) {
+        // D-036: a prepared claim announcement is engine-published text
+        // (the claimant's set phrases), exactly like the day-start and
+        // rescue claims. It is delivered verbatim and never routed
+        // through provider composition, so a claim can never register
+        // without being announced in the conversation (playtest 26:
+        // the genuine medium's claim registered behind an answer that
+        // never mentioned it, while the dashboard, the contradiction
+        // model and the other NPCs' materials all treated her as
+        // claimed).
+        providerResult = validateProviderResponse({ text: prepared.claimText, providerName: "engine-claim-announcement" }, providerName);
+      } else if (typeof this.responseProvider?.generateResponse !== "function") {
         throw new TypeError("Response provider must implement generateResponse(request)");
+      } else {
+        const rawProviderResult = await this.responseProvider.generateResponse(prepared.request, { signal: options.signal });
+        providerResult = validateProviderResponse(rawProviderResult, providerName);
       }
-      const rawProviderResult = await this.responseProvider.generateResponse(prepared.request, { signal: options.signal });
-      providerResult = validateProviderResponse(rawProviderResult, providerName);
     } catch (error) {
       this.addPlayerLog(`${npc.name}から回答を得られませんでした。`);
       this.addPublicInfo({
@@ -1622,7 +1634,7 @@ export class WerewolfGame {
     const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
     const followUp = oldResults.length > 0;
     const lines = results.map(({ targetId, result }) => `${this.getPlayer(targetId).name}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
-    const text = `${claimOpeningFor(claimant, ROLES.MEDIUM, followUp)}${lines.join("、")}${claimResultEndingFor(claimant)}。`;
+    const text = `${claimOpeningFor(claimant, ROLES.MEDIUM, followUp)}${lines.join("、")}${fabricatedMediumSuffixFor(claimant, lines.join("、"))}`;
     const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.MEDIUM, results };
     this.addPlayerLog(`${claimant.name}: ${text}`);
     this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });

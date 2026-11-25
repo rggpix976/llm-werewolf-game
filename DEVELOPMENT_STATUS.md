@@ -1,5 +1,9 @@
 # Development Status
 
+## Ask-path claim delivery and playtest-26 fixes (2026-11-25)
+
+D-036 is in review. Playtest 26 (the first real-AI game on the D-035 build) exposed a divergence: a claim prepared on the ask path registered behind a composed answer that never announced it, so the dashboard, the contradiction model and the other NPCs' materials treated the genuine medium as claimed while the conversation showed no claim. Prepared ask-path claim announcements are now delivered verbatim (set phrases, no provider composition), exactly like the day-start and rescue paths. The same change fixes the fabricated-medium suffix grammar (no sentence ending after 「ではない」) and fills in 堂島大吾's superior address exceptions （桐生さん / 真島さん / 冴島さん）.
+
 ## Claim announcements in per-character set phrases (2026-11-25)
 
 D-035 is in review. Claim announcement texts were the one speech surface the cast voices never touched: they are built by engine/response builders and published verbatim, so a werewolf's fabricated seer claim and the genuine seer's claim read identically apart from the names. Each roster member now owns `claimVoice` set phrases (openings per role, follow-up leads, an initial-seer closing, and a per-character sentence ending for the result lines), and all claim builders — proactive, rescue, ask-path genuine, fabricated on both the engine and ask paths, and restatements — compose set phrase + canonical result lines, keeping results unambiguous. NPCs without claimVoice data fall back to the previous canonical texts. The same change pins two provider instructions from the same playtest: replace names written in baseText/topSuspect with the addressForms form when speaking, and never soften or flip the direction of a decided stance.

@@ -188,6 +188,7 @@ export function buildNpcResponseRequest(npc, gameState, playerInput) {
     evidenceUsed: [...evidenceUsed],
     promptPreview,
     publicClaim,
+    claimText: publicClaim ? text : null,
     disclosedHiddenInfo
   };
 }
@@ -294,6 +295,15 @@ export function seerClaimClosingFor(npc) {
 
 export function claimResultEndingFor(npc) {
   return npc?.claimVoice?.resultEnding ?? "です";
+}
+
+export function fabricatedMediumSuffixFor(npc, joinedLines) {
+  // The fabricated medium lines end in a noun for a black result
+  // ("…は人狼") but in a negated predicate for a white one
+  // ("…は人狼ではない"). The character's sentence ending attaches only
+  // to the noun form; after "ではない" it breaks the grammar
+  // ("ではないだ").
+  return joinedLines.endsWith("人狼") ? `${claimResultEndingFor(npc)}。` : "。";
 }
 
 export function buildProactiveSeerClaim(npc, gameState) {
@@ -829,7 +839,7 @@ function buildFakeMediumExtension(npc, gameState) {
   const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
   const lines = results.map(({ targetId, result }) => `${gameState.players.find((player) => player.id === targetId)?.name ?? targetId}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
   return {
-    text: `${claimOpeningFor(npc, ROLES.MEDIUM, true)}${lines.join("、")}${claimResultEndingFor(npc)}。`,
+    text: `${claimOpeningFor(npc, ROLES.MEDIUM, true)}${lines.join("、")}${fabricatedMediumSuffixFor(npc, lines.join("、"))}`,
     publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.MEDIUM, results },
     evidenceUsed: ["conversationPolicy: fabricated medium claim maintained on the ask path", ...results.map(({ targetId }) => `fabricated:medium_result:${targetId}`)]
   };
