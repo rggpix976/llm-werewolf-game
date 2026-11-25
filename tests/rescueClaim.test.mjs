@@ -240,6 +240,9 @@ test("a proactive seer claim shifts other NPCs' suspicion toward the published r
   // only the madman's white result on npc1 cancels part of the pressure.
   assert.equal(claimsBy(game, "npc6").length, 1);
   assert.equal(claimsBy(game, "npc1").length, 1);
-  assert.equal(observer.suspicionScores.npc1, beforeWolf + 4 + 2 + 2 - 2);
-  assert.equal(observer.suspicionScores.npc3, beforeSeer - 3 + 2 + 2 + 2);
+  // D-037: the observer (npc9) is skeptical, so the genuine black lands
+  // at +2, the madman's contested white at -1, and the wolf's contested
+  // black on the seer at +1; the claimant/rival charges stay uniform.
+  assert.equal(observer.suspicionScores.npc1, beforeWolf + 2 + 2 + 2 - 1);
+  assert.equal(observer.suspicionScores.npc3, beforeSeer - 3 + 2 + 2 + 1);
 });

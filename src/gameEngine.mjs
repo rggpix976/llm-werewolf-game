@@ -1,5 +1,5 @@
 import { selectCast } from "./cast.mjs";
-import { chooseTopSuspect, SWAY_MARGIN } from "./personalityStrategy.mjs";
+import { chooseTopSuspect, claimResultStrengthFor, claimResultStrengthTable, SWAY_MARGIN } from "./personalityStrategy.mjs";
 import { assertionFor, persuasionShiftFor } from "./persuasion.mjs";
 import { buildBoardAssessmentDecisionRequest, buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
 import { contestedClaimGroups } from "./boardAssessment.mjs";
@@ -1803,7 +1803,10 @@ export class WerewolfGame {
         if (targetId === npc.id) {
           continue;
         }
-        const delta = result === "werewolf" ? resultStrength : -resultStrength;
+        // D-037: the result's weight depends on the observer's trust
+        // in seer results; every other claim effect stays uniform.
+        const strength = claimResultStrengthFor(npc, contested);
+        const delta = result === "werewolf" ? strength : -strength;
         applyDelta(npc, targetId, delta);
       }
     }
@@ -1813,7 +1816,8 @@ export class WerewolfGame {
       role: claim.role,
       contested,
       claimantDelta,
-      resultStrength
+      resultStrength,
+      trustStrengths: claimResultStrengthTable(contested)
     });
 
     this.applyClaimContradictions(claim);

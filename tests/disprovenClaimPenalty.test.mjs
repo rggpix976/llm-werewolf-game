@@ -15,7 +15,7 @@ test("medium-seer contradiction charges both claimants once without reversing th
   claim(g, "npc3", "seer", "npc7", "werewolf");
   claim(g, "npc4", "medium", "npc7", "not_werewolf");
   assert.equal(score(g, "npc5", "npc3"), baseSeer + 1); // -3 credibility +4 dispute
-  assert.equal(score(g, "npc5", "npc7"), baseTarget + 4); // original black remains
+  assert.equal(score(g, "npc5", "npc7"), baseTarget + 6); // original black remains (D-037: npc5 is a trusting observer, so the black lands at +6)
   assert.equal(score(g, "npc5", "npc4"), baseMedium + 1); // baseline 0, -3 +4
   claim(g, "npc4", "medium", "npc7", "not_werewolf");
   assert.equal(score(g, "npc5", "npc3"), baseSeer + 1);
