@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-25 — Per-observer seer-result trust (D-037)
+
+- Playtest 27 showed the convergence limit of uniform claim effects: one genuine black result moved every observer by the same +4, the target's scores lined up at 6–8 village-wide, and the vote piled up 7-to-1. Each roster member now carries `claimTrust` (trusting / standard / skeptical, 4/4/4), and a published seer result shifts an observer's suspicion by 6 / 4 / 2 (halved to 3 / 2 / 1 when contested). Only the result shifts scale — the claimant bonus/charge, rival charges and contradiction charges stay uniform, and NPCs without roster data stay "standard" (previous behaviour).
+- Added `tests/claimTrust.test.mjs` (4 tests): roster assignment and accessor defaults, uncontested black and white results landing at 6/4/2 and −6/−4/−2 by observer, and contested results halving to 3/2/1. Two existing assertions updated to the intended new weights (a trusting observer in the contradiction test; a skeptical observer in the proactive-claim test).
+- Validation: npm test 1035/1035 PASS; npm run sample all six audit checks PASS; git diff --check clean. No live LLM API calls.
+
 ## 2026-11-25 — Ask-path claim delivery, fabricated medium grammar, Daigo addresses (D-036)
 
 - Bug (playtest 26): a claim prepared on the ask path registered even when the provider-composed answer never announced it — the genuine medium's medium claim took effect (suspicion, contradiction notice, dashboard marker, other NPCs' materials) while her spoken answer listed only the other claimants. A prepared ask-path claim announcement is now delivered verbatim as engine-published text (the claimant's set phrases) without provider composition, so registration and announcement can never diverge; restatements still compose normally.

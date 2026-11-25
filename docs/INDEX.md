@@ -31,7 +31,8 @@ States: `planned` / `in progress` / `in review` / `merged` / `on hold`
 | Board assessment for contested claim groups | merged | 2026-11-24 | PR #105; DECISIONS.md D-033; DEVELOPMENT_STATUS.md |
 | Yakuza cast selection and voice/address materials (Slice 1) | merged | 2026-11-25 | PR #106; DECISIONS.md D-034; DEVELOPMENT_STATUS.md |
 | Claim announcements in per-character set phrases | merged | 2026-11-25 | DECISIONS.md D-035; DEVELOPMENT_STATUS.md |
-| Ask-path claim announcements delivered verbatim (D-036) | in review | 2026-11-25 | DECISIONS.md D-036; DEVELOPMENT_STATUS.md |
+| Ask-path claim announcements delivered verbatim (D-036) | merged | 2026-11-25 | DECISIONS.md D-036; DEVELOPMENT_STATUS.md |
+| Per-observer seer-result trust (claim trust) | in review | 2026-11-25 | DECISIONS.md D-037; DEVELOPMENT_STATUS.md |
 
 Maintenance: update a row in the same pull request that starts, changes, or
 merges the slice (see AGENTS.md, "Project Memory and Recording").

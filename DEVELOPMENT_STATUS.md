@@ -1,5 +1,9 @@
 # Development Status
 
+## Per-observer seer-result trust — claim trust (2026-11-25)
+
+D-037 is in review. Seer results were the last uniform input to suspicion: one black result moved every observer by +4, so score tables converged and votes piled onto a single target. Roster members now carry `claimTrust` (trusting / standard / skeptical), and `applyClaimToSuspicion` weights each published seer result per observer (6/4/2, halved when contested). Claimant, rival and contradiction effects stay uniform; speech is untouched — the trait lives in the scores until real play shows whether it needs to surface in words.
+
 ## Ask-path claim delivery and playtest-26 fixes (2026-11-25)
 
 D-036 is in review. Playtest 26 (the first real-AI game on the D-035 build) exposed a divergence: a claim prepared on the ask path registered behind a composed answer that never announced it, so the dashboard, the contradiction model and the other NPCs' materials treated the genuine medium as claimed while the conversation showed no claim. Prepared ask-path claim announcements are now delivered verbatim (set phrases, no provider composition), exactly like the day-start and rescue paths. The same change fixes the fabricated-medium suffix grammar (no sentence ending after 「ではない」) and fills in 堂島大吾's superior address exceptions （桐生さん / 真島さん / 冴島さん）.

@@ -8,6 +8,26 @@ export function strategyLeanFor(npc) {
   return npc.strategyLean ?? "neutral";
 }
 
+// D-037: how much an NPC credits published seer results — the one
+// claim effect that moves suspicion scores directly. The trait is
+// confined to these accessors, mirroring strategyLeanFor; NPCs
+// without roster data stay "standard", the pre-D-037 behaviour.
+const CLAIM_RESULT_STRENGTH = { trusting: 6, standard: 4, skeptical: 2 };
+
+export function claimTrustFor(npc) {
+  return npc.claimTrust ?? "standard";
+}
+
+export function claimResultStrengthTable(contested = false) {
+  return Object.fromEntries(
+    Object.entries(CLAIM_RESULT_STRENGTH).map(([tier, value]) => [tier, contested ? value / 2 : value])
+  );
+}
+
+export function claimResultStrengthFor(npc, contested = false) {
+  return claimResultStrengthTable(contested)[claimTrustFor(npc)] ?? CLAIM_RESULT_STRENGTH.standard;
+}
+
 export function strategySideFor(player, gameState) {
   if (player.publicClaims.length > 0) return "roller";
   const blacked = gameState.players.some((claimant) => claimant.publicClaims.some((claim) =>
