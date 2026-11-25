@@ -3,7 +3,7 @@ import { chooseTopSuspect, SWAY_MARGIN } from "./personalityStrategy.mjs";
 import { assertionFor, persuasionShiftFor } from "./persuasion.mjs";
 import { buildBoardAssessmentDecisionRequest, buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
 import { contestedClaimGroups } from "./boardAssessment.mjs";
-import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim, claimOpeningFor, seerClaimClosingFor } from "./responseGenerator.mjs";
+import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim, claimOpeningFor, claimResultEndingFor, seerClaimClosingFor } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
@@ -1622,7 +1622,7 @@ export class WerewolfGame {
     const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
     const followUp = oldResults.length > 0;
     const lines = results.map(({ targetId, result }) => `${this.getPlayer(targetId).name}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
-    const text = `${claimOpeningFor(claimant, ROLES.MEDIUM, followUp)}${lines.join("、")}です。`;
+    const text = `${claimOpeningFor(claimant, ROLES.MEDIUM, followUp)}${lines.join("、")}${claimResultEndingFor(claimant)}。`;
     const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.MEDIUM, results };
     this.addPlayerLog(`${claimant.name}: ${text}`);
     this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });
@@ -1699,8 +1699,8 @@ export class WerewolfGame {
     if (results.length === 0) return null;
     const resultLines = results.map(({ targetId, result }) => `${this.getPlayer(targetId).name}は${result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
     const text = isFollowUp
-      ? `${claimOpeningFor(claimant, ROLES.SEER, true)}${resultLines.join("、")}です。`
-      : `${claimOpeningFor(claimant, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(claimant)}`;
+      ? `${claimOpeningFor(claimant, ROLES.SEER, true)}${resultLines.join("、")}${claimResultEndingFor(claimant)}。`
+      : `${claimOpeningFor(claimant, ROLES.SEER)}${resultLines.join("、")}${claimResultEndingFor(claimant)}。${seerClaimClosingFor(claimant)}`;
     const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.SEER, results };
     this.addPlayerLog(`${claimant.name}: ${text}`);
     this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });

@@ -292,6 +292,10 @@ export function seerClaimClosingFor(npc) {
   return npc?.claimVoice?.closing ?? CANONICAL_SEER_CLAIM_CLOSING;
 }
 
+export function claimResultEndingFor(npc) {
+  return npc?.claimVoice?.resultEnding ?? "です";
+}
+
 export function buildProactiveSeerClaim(npc, gameState) {
   if (npc.role !== ROLES.SEER) {
     return null;
@@ -327,8 +331,8 @@ export function buildProactiveSeerClaim(npc, gameState) {
 
   const isFirstClaim = npc.publicClaims.length === 0;
   const text = isFirstClaim
-    ? `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(npc)}`
-    : `${claimOpeningFor(npc, ROLES.SEER, true)}${resultLines.join("、")}です。`;
+    ? `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}${claimResultEndingFor(npc)}。${seerClaimClosingFor(npc)}`
+    : `${claimOpeningFor(npc, ROLES.SEER, true)}${resultLines.join("、")}${claimResultEndingFor(npc)}。`;
 
   return {
     text,
@@ -444,7 +448,7 @@ export function buildRescueClaim(npc, gameState) {
       ? `${claimOpeningFor(npc, ROLES.SEER)}まだ占い結果はありません。`
       : `${claimOpeningFor(npc, ROLES.MEDIUM)}まだ結果はありません。`;
   } else if (isSeer) {
-    text = `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(npc)}`;
+    text = `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}${claimResultEndingFor(npc)}。${seerClaimClosingFor(npc)}`;
   } else {
     text = `${claimOpeningFor(npc, ROLES.MEDIUM)}${resultLines.join("、")}。`;
   }
@@ -634,7 +638,7 @@ function maybeCreateRoleClaim(npc, gameState) {
   });
 
   const text = isSeer
-    ? `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(npc)}`
+    ? `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}${claimResultEndingFor(npc)}。${seerClaimClosingFor(npc)}`
     : `${claimOpeningFor(npc, ROLES.MEDIUM)}${resultLines.join("、")}。`;
 
   return {
@@ -793,7 +797,7 @@ function buildFakeSeerExtension(npc, gameState) {
   const results = [{ targetId: newestTarget.id, result: newestResult }];
   const resultLines = results.map(({ targetId, result }) => `${gameState.players.find((player) => player.id === targetId)?.name ?? targetId}は${result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
   return {
-    text: `${claimOpeningFor(npc, ROLES.SEER, true)}${resultLines.join("、")}です。`,
+    text: `${claimOpeningFor(npc, ROLES.SEER, true)}${resultLines.join("、")}${claimResultEndingFor(npc)}。`,
     publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.SEER, results },
     evidenceUsed: ["conversationPolicy: fabricated seer claim maintained on the ask path", ...results.map(({ targetId }) => `fabricated:seer_result:${targetId}`)]
   };
@@ -825,7 +829,7 @@ function buildFakeMediumExtension(npc, gameState) {
   const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
   const lines = results.map(({ targetId, result }) => `${gameState.players.find((player) => player.id === targetId)?.name ?? targetId}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
   return {
-    text: `${claimOpeningFor(npc, ROLES.MEDIUM, true)}${lines.join("、")}です。`,
+    text: `${claimOpeningFor(npc, ROLES.MEDIUM, true)}${lines.join("、")}${claimResultEndingFor(npc)}。`,
     publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.MEDIUM, results },
     evidenceUsed: ["conversationPolicy: fabricated medium claim maintained on the ask path", ...results.map(({ targetId }) => `fabricated:medium_result:${targetId}`)]
   };
@@ -867,7 +871,7 @@ function buildClaimRestatement(npc, gameState) {
     }
     if (role === ROLES.SEER) {
       const lines = results.map((result) => `${nameOf(result.targetId)}は${result.result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
-      return { text: `${claimOpeningFor(npc, ROLES.SEER)}${lines.join("、")}です。${seerClaimClosingFor(npc)}`, evidenceUsed: ["publicClaim: restated published seer results"] };
+      return { text: `${claimOpeningFor(npc, ROLES.SEER)}${lines.join("、")}${claimResultEndingFor(npc)}。${seerClaimClosingFor(npc)}`, evidenceUsed: ["publicClaim: restated published seer results"] };
     }
     const lines = results.map((result) => `${nameOf(result.targetId)}は${result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした"}`);
     return { text: `${claimOpeningFor(npc, role)}${lines.join("、")}。`, evidenceUsed: ["publicClaim: restated published medium results"] };

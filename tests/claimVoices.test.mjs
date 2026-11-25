@@ -42,6 +42,8 @@ test("claim voices: every roster member carries a full claimVoice set", () => {
     }
     assert.equal(typeof member.claimVoice.closing, "string", `${member.id} closing`);
     assert.ok(member.claimVoice.closing.length > 0);
+    assert.equal(typeof member.claimVoice.resultEnding, "string", `${member.id} resultEnding`);
+    assert.ok(member.claimVoice.resultEnding.length > 0);
   }
   const seerOpenings = CAST_ROSTER.map((member) => member.claimVoice.openings.seer);
   assert.equal(new Set(seerOpenings).size, CAST_ROSTER.length, "seer openings are distinct per character");
@@ -60,11 +62,19 @@ test("claim voices: two characters announce the same seer result in their own ph
   assert.notEqual(saejimaClaim.text, majimaClaim.text);
   assert.ok(saejimaClaim.text.startsWith(saejima.claimVoice.openings.seer), saejimaClaim.text);
   assert.ok(majimaClaim.text.startsWith(majima.claimVoice.openings.seer), majimaClaim.text);
-  // The result line itself stays canonical and unambiguous in both.
-  assert.ok(saejimaClaim.text.includes("春日一番は人狼判定です。"));
-  assert.ok(majimaClaim.text.includes("春日一番は人狼判定です。"));
+  // The result wording itself stays canonical and unambiguous in both;
+  // only the sentence ending follows the character.
+  assert.ok(saejimaClaim.text.includes("春日一番は人狼判定や。"));
+  assert.ok(majimaClaim.text.includes("春日一番は人狼判定や。"));
   assert.ok(saejimaClaim.text.endsWith(saejima.claimVoice.closing));
   assert.ok(majimaClaim.text.endsWith(majima.claimVoice.closing));
+});
+
+test("claim voices: Nanba's result ending is だな (user-specified)", () => {
+  const nanba = CAST_ROSTER.find((member) => member.id === "npc6");
+  assert.equal(nanba.claimVoice.resultEnding, "だな");
+  const claim = buildProactiveSeerClaim(seerFromCast(nanba, { id: "npc6" }), state());
+  assert.ok(claim.text.includes("春日一番は人狼判定だな。"), claim.text);
 });
 
 test("claim voices: an NPC without claimVoice data keeps the canonical claim text", () => {
