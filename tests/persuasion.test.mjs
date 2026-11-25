@@ -201,7 +201,7 @@ test("claim maintenance and strategy replies take priority over acknowledgments"
   const npc = game.getPlayer("npc1");
   npc.publicClaims.push({ day: 1, actorId: npc.id, role: "seer", results: [] });
   const { result } = await ask(game, "冴島大河は確白、COある？", "npc1");
-  assert.match(result.text, /占い師COします/);
+  assert.match(result.text, /俺が占い師だ。結果を言う/);
   assert.equal(result.declaredVoteTargetId, null);
   const strategy = await ask(game, "冴島大河は確白、グレーから詰めよう", "npc4");
   assert.match(strategy.result.text, /グレーから詰める方針/);

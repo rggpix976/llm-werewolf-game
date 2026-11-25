@@ -49,7 +49,7 @@ test("a white result on a seer-blacked executee is published proactively", async
   assert.equal(claim.role, "medium");
   assert.deepEqual(claim.results, [{ targetId: "npc7", result: "not_werewolf" }]);
   assert.equal(game.getPlayer("npc4").publicClaims.length, 1);
-  const line = game.state.playerLog.find((entry) => entry.message.startsWith("堂島大吾: 霊媒師CO"))?.message ?? "";
+  const line = game.state.playerLog.find((entry) => entry.message.startsWith("堂島大吾: 俺が霊媒師だ"))?.message ?? "";
   assert.match(line, /足立宏一は人狼ではありませんでした/);
   assert.equal(decisions(game)[0].detail.choiceId, "claim_medium");
   assert.equal(decisions(game)[0].detail.fallbackReason, null);
@@ -62,7 +62,7 @@ test("a black result corroborating the seer claim is published proactively", asy
   game.state.day = 2;
   const claim = await game.resolveMediumClaimDecision();
   assert.deepEqual(claim.results, [{ targetId: "npc1", result: "werewolf" }]);
-  const line = game.state.playerLog.find((entry) => entry.message.startsWith("堂島大吾: 霊媒師CO"))?.message ?? "";
+  const line = game.state.playerLog.find((entry) => entry.message.startsWith("堂島大吾: 俺が霊媒師だ"))?.message ?? "";
   assert.match(line, /桐生一馬は人狼でした/);
 });
 

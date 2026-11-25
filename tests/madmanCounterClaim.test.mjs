@@ -24,7 +24,7 @@ test("pseudo choice registers a private-engine fabricated counter claim", async 
   const claim = madman.publicClaims[0];
   assert.deepEqual(claim.results, [{ targetId: "npc1", result: "not_werewolf" }]);
   assert.equal(game.state.publicInfo.some((info) => info.type === "public_claim" && info.actorId === madman.id && info.claim.role === "seer"), true);
-  assert.match(game.state.playerLog.find((entry) => entry.message.startsWith("難波悠: 占い師CO"))?.message ?? "", /桐生一馬は人狼ではない判定/);
+  assert.match(game.state.playerLog.find((entry) => entry.message.startsWith("難波悠: 俺が占い師だよ"))?.message ?? "", /桐生一馬は人狼ではない判定/);
   assert.equal(madman.privateMemory.at(-1).type, "fabricated_seer_claim");
   assert.equal(JSON.stringify(game.getPublicSnapshot()).includes("fabricated"), false);
 });

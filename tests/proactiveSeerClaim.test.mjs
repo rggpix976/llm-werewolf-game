@@ -108,7 +108,7 @@ test("engine: the seer claims proactively at the start of day 2", async () => {
 
   const lines = claimLines(game);
   assert.equal(lines.length, 1);
-  assert.ok(lines[0].startsWith("真島吾朗: 占い師COします。"));
+  assert.ok(lines[0].startsWith("真島吾朗: 占い師は俺や。結果、聞いとけ。"));
   assert.ok(lines[0].includes("春日一番は人狼ではない判定"));
 
   const seer = game.getPlayer("npc2");
@@ -120,7 +120,7 @@ test("engine: the seer claims proactively at the start of day 2", async () => {
 
   const messages = game.state.playerLog.map((entry) => entry.message);
   const dayStartIndex = messages.findIndex((line) => line.includes("2日目の昼"));
-  const claimIndex = messages.findIndex((line) => line.includes("占い師COします"));
+  const claimIndex = messages.findIndex((line) => line.includes("占い師は俺や"));
   assert.ok(dayStartIndex >= 0 && claimIndex > dayStartIndex);
 });
 
@@ -136,7 +136,7 @@ test("engine: a follow-up result is announced once, then silence", async () => {
   assert.deepEqual(claim.results, [{ targetId: "npc4", result: "werewolf" }]);
   const lines = claimLines(game);
   assert.equal(lines.length, 2);
-  assert.ok(lines[1].includes("追加で公開します"));
+  assert.ok(lines[1].includes("占いの結果、もう一個あるで"));
   assert.ok(lines[1].includes("堂島大吾は人狼判定"));
 
   assert.equal(game.emitProactiveSeerClaim(), null);

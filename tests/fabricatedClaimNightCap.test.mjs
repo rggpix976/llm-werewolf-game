@@ -44,8 +44,8 @@ test("ask path: a fake seer at the night budget restates instead of minting a se
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc6", input: "占い師さん、最新の占い結果を教えて" });
     assert.doesNotMatch(response.result.text, DEFLECTION);
-    assert.doesNotMatch(response.result.text, /追加で公開します/);
-    assert.match(response.result.text, /占い師COします/);
+    assert.doesNotMatch(response.result.text, /もう一つあるんだ/);
+    assert.match(response.result.text, /俺が占い師だよ。結果を言うよ/);
     assert.equal(madman.publicClaims.length, 1);
     assert.equal(publishedResults(madman, "seer").length, 1);
   }
@@ -61,7 +61,7 @@ test("ask path: the budget grows by one per night, then caps again", async () =>
   game.state.day = 3;
   registerClaim(game, game.getPlayer("npc3"), "seer", [{ targetId: "npc8", result: "werewolf" }], 3);
   const extended = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc6", input: "占い師さん、最新の占い結果を教えて" });
-  assert.match(extended.result.text, /追加で公開します/);
+  assert.match(extended.result.text, /占いの結果、もう一つあるんだ/);
   assert.equal(madman.publicClaims.length, 2);
   assert.deepEqual(publishedResults(madman, "seer"), [
     { targetId: "npc7", result: "not_werewolf" },
@@ -70,7 +70,7 @@ test("ask path: the budget grows by one per night, then caps again", async () =>
 
   registerClaim(game, game.getPlayer("npc3"), "seer", [{ targetId: "npc5", result: "werewolf" }], 3);
   const capped = await game.dispatchPlayerAction({ type: "ask_npc", target: "npc6", input: "占い師さん、最新の占い結果を教えて" });
-  assert.doesNotMatch(capped.result.text, /追加で公開します/);
+  assert.doesNotMatch(capped.result.text, /もう一つあるんだ/);
   assert.equal(madman.publicClaims.length, 2);
   assert.equal(publishedResults(madman, "seer").length, 2);
 });

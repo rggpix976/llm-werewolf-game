@@ -3,7 +3,7 @@ import { chooseTopSuspect, SWAY_MARGIN } from "./personalityStrategy.mjs";
 import { assertionFor, persuasionShiftFor } from "./persuasion.mjs";
 import { buildBoardAssessmentDecisionRequest, buildPersuasionDecisionRequest } from "./responseGenerator.mjs";
 import { contestedClaimGroups } from "./boardAssessment.mjs";
-import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim } from "./responseGenerator.mjs";
+import { buildNpcDecisionRequest, buildNpcResponseRequest, buildProactiveMediumClaim, buildProactiveSeerClaim, buildRescueClaim, claimOpeningFor, seerClaimClosingFor } from "./responseGenerator.mjs";
 import {
   getProviderName,
   PseudoResponseProvider,
@@ -1519,7 +1519,7 @@ export class WerewolfGame {
       results.push({ night, targetId: target.id, result: "guarded" }); previousTargetId = target.id;
     }
     if (results.length !== Math.max(0, this.state.day - 1)) return null;
-    const text = `騎士COします。${results.map(({ night, targetId }) => `${night}日目の夜は${this.getPlayer(targetId).name}を護衛`).join("、")}しました。`;
+    const text = `${claimOpeningFor(claimant, ROLES.KNIGHT)}${results.map(({ night, targetId }) => `${night}日目の夜は${this.getPlayer(targetId).name}を護衛`).join("、")}しました。`;
     const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.KNIGHT, results };
     this.addPlayerLog(`${claimant.name}: ${text}`); this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });
     claimant.publicClaims.push(claim); this.addPublicInfo({ type: "public_claim", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}が${publicRoleName(ROLES.KNIGHT)}COをした。`, claim });
@@ -1622,7 +1622,7 @@ export class WerewolfGame {
     const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
     const followUp = oldResults.length > 0;
     const lines = results.map(({ targetId, result }) => `${this.getPlayer(targetId).name}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
-    const text = `${followUp ? "霊媒結果を追加で公開します。" : "霊媒師COします。"}${lines.join("、")}です。`;
+    const text = `${claimOpeningFor(claimant, ROLES.MEDIUM, followUp)}${lines.join("、")}です。`;
     const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.MEDIUM, results };
     this.addPlayerLog(`${claimant.name}: ${text}`);
     this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });
@@ -1699,8 +1699,8 @@ export class WerewolfGame {
     if (results.length === 0) return null;
     const resultLines = results.map(({ targetId, result }) => `${this.getPlayer(targetId).name}は${result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
     const text = isFollowUp
-      ? `占い結果を追加で公開します。${resultLines.join("、")}です。`
-      : `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`;
+      ? `${claimOpeningFor(claimant, ROLES.SEER, true)}${resultLines.join("、")}です。`
+      : `${claimOpeningFor(claimant, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(claimant)}`;
     const claim = { day: this.state.day, actorId: claimant.id, actorName: claimant.name, role: ROLES.SEER, results };
     this.addPlayerLog(`${claimant.name}: ${text}`);
     this.addPublicInfo({ type: "npc_response", actorId: claimant.id, actorName: claimant.name, text: `${claimant.name}: ${text}` });

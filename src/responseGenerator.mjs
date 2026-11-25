@@ -272,6 +272,26 @@ export function buildNpcDecisionRequest(npc, gameState, triggeringClaim, candida
   }));
 }
 
+// D-035: claim announcements use the claimant's own set phrases
+// (cast claimVoice) for the opening and the seer closing, while the
+// result lines stay in the canonical wording so they remain
+// unambiguous. NPCs without claimVoice data keep the canonical texts.
+const CANONICAL_CLAIM_OPENINGS = { seer: "占い師COします。", medium: "霊媒師COします。", knight: "騎士COします。" };
+const CANONICAL_CLAIM_MORE = { seer: "占い結果を追加で公開します。", medium: "霊媒結果を追加で公開します。" };
+const CANONICAL_SEER_CLAIM_CLOSING = "公開する以上、この結果を軸に考えてください。";
+
+export function claimOpeningFor(npc, role, followUp = false) {
+  const voice = npc?.claimVoice ?? null;
+  if (followUp) {
+    return voice?.more?.[role] ?? CANONICAL_CLAIM_MORE[role] ?? CANONICAL_CLAIM_OPENINGS[role];
+  }
+  return voice?.openings?.[role] ?? CANONICAL_CLAIM_OPENINGS[role];
+}
+
+export function seerClaimClosingFor(npc) {
+  return npc?.claimVoice?.closing ?? CANONICAL_SEER_CLAIM_CLOSING;
+}
+
 export function buildProactiveSeerClaim(npc, gameState) {
   if (npc.role !== ROLES.SEER) {
     return null;
@@ -307,8 +327,8 @@ export function buildProactiveSeerClaim(npc, gameState) {
 
   const isFirstClaim = npc.publicClaims.length === 0;
   const text = isFirstClaim
-    ? `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`
-    : `占い結果を追加で公開します。${resultLines.join("、")}です。`;
+    ? `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(npc)}`
+    : `${claimOpeningFor(npc, ROLES.SEER, true)}${resultLines.join("、")}です。`;
 
   return {
     text,
@@ -359,7 +379,7 @@ export function buildProactiveMediumClaim(npc, gameState) {
   });
 
   return {
-    text: `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`,
+    text: `${claimOpeningFor(npc, ROLES.MEDIUM)}${resultLines.join("、")}。`,
     publicClaim: {
       day: gameState.day,
       actorId: npc.id,
@@ -392,7 +412,7 @@ export function buildRescueClaim(npc, gameState) {
   if (npc.role === ROLES.KNIGHT) {
     const results = knightGuardResults(npc);
     return {
-      text: knightClaimText(results),
+      text: knightClaimText(npc, results),
       publicClaim: {
         day: gameState.day,
         actorId: npc.id,
@@ -421,12 +441,12 @@ export function buildRescueClaim(npc, gameState) {
   let text;
   if (resultLines.length === 0) {
     text = isSeer
-      ? "占い師COします。まだ占い結果はありません。"
-      : `${publicRoleName(npc.role)}COします。まだ結果はありません。`;
+      ? `${claimOpeningFor(npc, ROLES.SEER)}まだ占い結果はありません。`
+      : `${claimOpeningFor(npc, ROLES.MEDIUM)}まだ結果はありません。`;
   } else if (isSeer) {
-    text = `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`;
+    text = `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(npc)}`;
   } else {
-    text = `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`;
+    text = `${claimOpeningFor(npc, ROLES.MEDIUM)}${resultLines.join("、")}。`;
   }
 
   return {
@@ -573,7 +593,7 @@ function maybeCreateRoleClaim(npc, gameState) {
     const freshResults = results.filter((result) => !publishedNights.has(result.night));
     if (freshResults.length === 0) return null;
     return {
-      text: knightClaimText(results),
+      text: knightClaimText(npc, results),
       publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.KNIGHT, results },
       evidenceUsed: ["hiddenInfo:self_role intentionally disclosed by CO", ...results.map(({ night }) => `knownInfo:knight_guard:${night}`)]
     };
@@ -614,8 +634,8 @@ function maybeCreateRoleClaim(npc, gameState) {
   });
 
   const text = isSeer
-    ? `占い師COします。${resultLines.join("、")}です。公開する以上、この結果を軸に考えてください。`
-    : `${publicRoleName(npc.role)}COします。${resultLines.join("、")}。`;
+    ? `${claimOpeningFor(npc, ROLES.SEER)}${resultLines.join("、")}です。${seerClaimClosingFor(npc)}`
+    : `${claimOpeningFor(npc, ROLES.MEDIUM)}${resultLines.join("、")}。`;
 
   return {
     text,
@@ -707,7 +727,7 @@ function buildFakeKnightExtension(npc, gameState) {
     targetName: gameState.players.find((player) => player.id === result.targetId)?.name
   }));
   return {
-    text: knightClaimText(namedResults),
+    text: knightClaimText(npc, namedResults),
     publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.KNIGHT, results: namedResults },
     evidenceUsed: ["conversationPolicy: fabricated knight claim maintained on the ask path", ...namedResults.map(({ night }) => `fabricated:knight_guard:${night}`)]
   };
@@ -773,7 +793,7 @@ function buildFakeSeerExtension(npc, gameState) {
   const results = [{ targetId: newestTarget.id, result: newestResult }];
   const resultLines = results.map(({ targetId, result }) => `${gameState.players.find((player) => player.id === targetId)?.name ?? targetId}は${result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
   return {
-    text: `占い結果を追加で公開します。${resultLines.join("、")}です。`,
+    text: `${claimOpeningFor(npc, ROLES.SEER, true)}${resultLines.join("、")}です。`,
     publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.SEER, results },
     evidenceUsed: ["conversationPolicy: fabricated seer claim maintained on the ask path", ...results.map(({ targetId }) => `fabricated:seer_result:${targetId}`)]
   };
@@ -805,7 +825,7 @@ function buildFakeMediumExtension(npc, gameState) {
   const results = candidates.sort((a, b) => a.order - b.order).map(({ targetId, result }) => ({ targetId, result }));
   const lines = results.map(({ targetId, result }) => `${gameState.players.find((player) => player.id === targetId)?.name ?? targetId}は${result === "werewolf" ? "人狼" : "人狼ではない"}`);
   return {
-    text: `霊媒結果を追加で公開します。${lines.join("、")}です。`,
+    text: `${claimOpeningFor(npc, ROLES.MEDIUM, true)}${lines.join("、")}です。`,
     publicClaim: { day: gameState.day, actorId: npc.id, actorName: npc.name, role: ROLES.MEDIUM, results },
     evidenceUsed: ["conversationPolicy: fabricated medium claim maintained on the ask path", ...results.map(({ targetId }) => `fabricated:medium_result:${targetId}`)]
   };
@@ -831,7 +851,7 @@ function buildClaimRestatement(npc, gameState) {
     }
     const results = [...byNight.values()].sort((a, b) => a.night - b.night)
       .map((result) => ({ night: result.night, targetId: result.targetId, targetName: result.targetName ?? nameOf(result.targetId), result: "guarded" }));
-    return { text: knightClaimText(results), evidenceUsed: ["publicClaim: restated published knight results"] };
+    return { text: knightClaimText(npc, results), evidenceUsed: ["publicClaim: restated published knight results"] };
   }
   if (role === ROLES.SEER || role === ROLES.MEDIUM) {
     const byTarget = new Map();
@@ -843,14 +863,14 @@ function buildClaimRestatement(npc, gameState) {
     }
     const results = [...byTarget.values()];
     if (!results.length) {
-      return { text: `${publicRoleName(role)}COします。まだ結果はありません。`, evidenceUsed: ["publicClaim: restated published claim without results"] };
+      return { text: `${claimOpeningFor(npc, role)}まだ結果はありません。`, evidenceUsed: ["publicClaim: restated published claim without results"] };
     }
     if (role === ROLES.SEER) {
       const lines = results.map((result) => `${nameOf(result.targetId)}は${result.result === "werewolf" ? "人狼判定" : "人狼ではない判定"}`);
-      return { text: `占い師COします。${lines.join("、")}です。公開する以上、この結果を軸に考えてください。`, evidenceUsed: ["publicClaim: restated published seer results"] };
+      return { text: `${claimOpeningFor(npc, ROLES.SEER)}${lines.join("、")}です。${seerClaimClosingFor(npc)}`, evidenceUsed: ["publicClaim: restated published seer results"] };
     }
     const lines = results.map((result) => `${nameOf(result.targetId)}は${result.result === "werewolf" ? "人狼でした" : "人狼ではありませんでした"}`);
-    return { text: `${publicRoleName(role)}COします。${lines.join("、")}。`, evidenceUsed: ["publicClaim: restated published medium results"] };
+    return { text: `${claimOpeningFor(npc, role)}${lines.join("、")}。`, evidenceUsed: ["publicClaim: restated published medium results"] };
   }
   return null;
 }
@@ -861,9 +881,9 @@ function knightGuardResults(npc) {
     .map((info) => ({ night: info.day, targetId: info.targetId, targetName: info.targetName, result: "guarded" }));
 }
 
-function knightClaimText(results) {
-  if (results.length === 0) return "騎士COします。まだ護衛記録はありません。";
-  return `騎士COします。${results.map(({ night, targetId, targetName }) => `${night}日目の夜は${targetName ?? targetId}を護衛`).join("、")}しました。`;
+function knightClaimText(npc, results) {
+  if (results.length === 0) return `${claimOpeningFor(npc, ROLES.KNIGHT)}まだ護衛記録はありません。`;
+  return `${claimOpeningFor(npc, ROLES.KNIGHT)}${results.map(({ night, targetId, targetName }) => `${night}日目の夜は${targetName ?? targetId}を護衛`).join("、")}しました。`;
 }
 
 function applySpeechStyle(npc, text) {
